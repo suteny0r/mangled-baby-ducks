@@ -69,6 +69,7 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.protobuf.kotlin.lite)
     implementation(libs.maplibre.sdk)
+    implementation(libs.zxing.core)
     implementation(libs.kotlinx.coroutines.android)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

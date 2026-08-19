@@ -19,6 +19,9 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import org.meshtastic.proto.AdminProtos
+import org.meshtastic.proto.AppOnlyProtos
+import org.meshtastic.proto.ChannelProtos
+import org.meshtastic.proto.ConfigProtos
 import org.meshtastic.proto.MeshProtos
 import org.meshtastic.proto.Portnums
 import kotlin.random.Random
@@ -275,6 +278,77 @@ class RadioManager(
         return runCatching {
             send { it.setPacket(packet) }
         }.isSuccess
+    }
+
+    private suspend fun sendAdmin(build: (AdminProtos.AdminMessage.Builder) -> AdminProtos.AdminMessage.Builder): Boolean {
+        val myNum = _myNodeNum.value
+        if (myNum == 0L) return false
+        val admin = build(AdminProtos.AdminMessage.newBuilder()).build()
+        val data = MeshProtos.Data.newBuilder()
+            .setPortnum(Portnums.PortNum.ADMIN_APP)
+            .setPayload(admin.toByteString())
+            .build()
+        val packet = MeshProtos.MeshPacket.newBuilder()
+            .setId(Random.nextLong(255L, 0xFFFFFFFFL).toInt())
+            .setTo(myNum.toInt())
+            .setDecoded(data)
+            .build()
+        return runCatching { send { it.setPacket(packet) } }.isSuccess
+    }
+
+    /**
+     * Write one LocalConfig section wrapped in an edit transaction (the radio defers
+     * its save-and-reboot until commit). The radio typically reboots afterwards;
+     * auto-reconnect and the REBOOTED handler pick things back up.
+     */
+    suspend fun setConfig(config: ConfigProtos.Config): Boolean {
+        if (!sendAdmin { it.setBeginEditSettings(true) }) return false
+        if (!sendAdmin { it.setSetConfig(config) }) return false
+        return sendAdmin { it.setCommitEditSettings(true) }
+    }
+
+    /** Replace the channel table and LoRa config from a shared ChannelSet URL. */
+    suspend fun applyChannelSet(set: AppOnlyProtos.ChannelSet): Boolean {
+        if (!sendAdmin { it.setBeginEditSettings(true) }) return false
+        set.settingsList.forEachIndexed { index, settings ->
+            val channel = ChannelProtos.Channel.newBuilder()
+                .setIndex(index)
+                .setSettings(settings)
+                .setRole(
+                    if (index == 0) ChannelProtos.Channel.Role.PRIMARY
+                    else ChannelProtos.Channel.Role.SECONDARY
+                )
+                .build()
+            if (!sendAdmin { it.setSetChannel(channel) }) return false
+        }
+        if (set.hasLoraConfig()) {
+            val config = ConfigProtos.Config.newBuilder().setLora(set.loraConfig).build()
+            if (!sendAdmin { it.setSetConfig(config) }) return false
+        }
+        return sendAdmin { it.setCommitEditSettings(true) }
+    }
+
+    /** Broadcast the phone's GPS fix as this node's position. */
+    suspend fun sendPhonePosition(latitudeI: Int, longitudeI: Int, altitude: Int): Boolean {
+        val myNum = _myNodeNum.value
+        if (myNum == 0L) return false
+        val position = MeshProtos.Position.newBuilder()
+            .setLatitudeI(latitudeI)
+            .setLongitudeI(longitudeI)
+            .setAltitude(altitude)
+            .setTime((System.currentTimeMillis() / 1000).toInt())
+            .setLocationSource(MeshProtos.Position.LocSource.LOC_EXTERNAL)
+            .build()
+        val data = MeshProtos.Data.newBuilder()
+            .setPortnum(Portnums.PortNum.POSITION_APP)
+            .setPayload(position.toByteString())
+            .build()
+        val packet = MeshProtos.MeshPacket.newBuilder()
+            .setId(Random.nextLong(255L, 0xFFFFFFFFL).toInt())
+            .setTo(MeshProtocol.BROADCAST_NUM.toInt())
+            .setDecoded(data)
+            .build()
+        return runCatching { send { it.setPacket(packet) } }.isSuccess
     }
 
     /** Start a traceroute to a node; the reply lands via TRACEROUTE_APP ingest. */

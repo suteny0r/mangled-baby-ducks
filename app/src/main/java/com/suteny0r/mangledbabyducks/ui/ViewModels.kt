@@ -11,6 +11,7 @@ import com.suteny0r.mangledbabyducks.db.MessageEntity
 import com.suteny0r.mangledbabyducks.db.MyInfoEntity
 import com.suteny0r.mangledbabyducks.db.NodeWithUser
 import com.suteny0r.mangledbabyducks.db.UserEntity
+import com.suteny0r.mangledbabyducks.radio.ChannelCodec
 import com.suteny0r.mangledbabyducks.radio.DiscoveredDevice
 import com.suteny0r.mangledbabyducks.radio.RadioService
 import com.suteny0r.mangledbabyducks.radio.RadioState
@@ -21,11 +22,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import org.meshtastic.proto.AppOnlyProtos
 import org.meshtastic.proto.ConfigProtos
 
 class ConnectViewModel(app: Application) : AndroidViewModel(app) {
@@ -205,6 +208,51 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setOwner(longName: String, shortName: String) {
         viewModelScope.launch { container.radioManager.setOwner(longName, shortName) }
+    }
+
+    val shareLocation: StateFlow<Boolean> = container.prefs.data
+        .map { it[PrefKeys.SHARE_LOCATION] ?: false }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    fun setShareLocation(enabled: Boolean) {
+        viewModelScope.launch {
+            container.prefs.edit { it[PrefKeys.SHARE_LOCATION] = enabled }
+        }
+    }
+
+    /** Build the meshtastic.org share URL for the radio's current channels + LoRa config. */
+    suspend fun channelExportUrl(): String? {
+        val channels = container.database.channelDao().activeChannels().first()
+        if (channels.isEmpty()) return null
+        return ChannelCodec.toUrl(channels, loraConfig.value)
+    }
+
+    fun parseChannelUrl(url: String): AppOnlyProtos.ChannelSet? = ChannelCodec.fromUrl(url)
+
+    private val _applyResult = MutableStateFlow<Boolean?>(null)
+    val applyResult: StateFlow<Boolean?> = _applyResult.asStateFlow()
+
+    fun applyChannelSet(set: AppOnlyProtos.ChannelSet) {
+        viewModelScope.launch {
+            _applyResult.value = container.radioManager.applyChannelSet(set)
+        }
+    }
+
+    /** Write an edited LoRa config; the radio saves and usually reboots. */
+    fun writeLoraConfig(lora: ConfigProtos.Config.LoRaConfig) {
+        viewModelScope.launch {
+            container.radioManager.setConfig(
+                ConfigProtos.Config.newBuilder().setLora(lora).build()
+            )
+        }
+    }
+
+    fun writeDeviceConfig(device: ConfigProtos.Config.DeviceConfig) {
+        viewModelScope.launch {
+            container.radioManager.setConfig(
+                ConfigProtos.Config.newBuilder().setDevice(device).build()
+            )
+        }
     }
 
     private val _broadcastResult = MutableStateFlow<Boolean?>(null)

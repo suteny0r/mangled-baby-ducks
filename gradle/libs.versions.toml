@@ -33,6 +33,7 @@ androidx-room-compiler = { group = "androidx.room", name = "room-compiler", vers
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 protobuf-kotlin-lite = { group = "com.google.protobuf", name = "protobuf-kotlin-lite", version.ref = "protobuf" }
 maplibre-sdk = { group = "org.maplibre.gl", name = "android-sdk", version.ref = "maplibre" }
+zxing-core = { group = "com.google.zxing", name = "core", version = "3.5.3" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 
 [plugins]
