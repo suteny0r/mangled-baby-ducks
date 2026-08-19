@@ -4,6 +4,7 @@ import android.util.Log
 import com.google.protobuf.ByteString
 import com.suteny0r.mangledbabyducks.db.MeshDatabase
 import com.suteny0r.mangledbabyducks.db.MessageEntity
+import com.suteny0r.mangledbabyducks.db.TracerouteEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -216,6 +217,8 @@ class RadioManager(
             Portnums.PortNum.POSITION_APP -> ingest.positionPacket(packet)
             Portnums.PortNum.TELEMETRY_APP -> ingest.telemetryPacket(packet)
             Portnums.PortNum.ROUTING_APP -> ingest.routing(packet, myNum)
+            Portnums.PortNum.TRACEROUTE_APP -> ingest.traceroute(packet)
+            Portnums.PortNum.WAYPOINT_APP -> ingest.waypointPacket(packet)
             else -> Log.d(TAG, "Unhandled port ${packet.decoded.portnum}")
         }
     }
@@ -272,6 +275,72 @@ class RadioManager(
         return runCatching {
             send { it.setPacket(packet) }
         }.isSuccess
+    }
+
+    /** Start a traceroute to a node; the reply lands via TRACEROUTE_APP ingest. */
+    suspend fun sendTraceroute(destNum: Long): Boolean {
+        if (_myNodeNum.value == 0L) return false
+        db.tracerouteDao().insert(
+            TracerouteEntity(toNum = destNum, time = System.currentTimeMillis())
+        )
+        val data = MeshProtos.Data.newBuilder()
+            .setPortnum(Portnums.PortNum.TRACEROUTE_APP)
+            .setPayload(MeshProtos.RouteDiscovery.getDefaultInstance().toByteString())
+            .setWantResponse(true)
+            .build()
+        val packet = MeshProtos.MeshPacket.newBuilder()
+            .setId(Random.nextLong(255L, 0xFFFFFFFFL).toInt())
+            .setTo(destNum.toInt())
+            .setWantAck(true)
+            .setDecoded(data)
+            .build()
+        return runCatching { send { it.setPacket(packet) } }.isSuccess
+    }
+
+    /** Create or update a waypoint and share it on the given channel. */
+    suspend fun sendWaypoint(
+        name: String,
+        description: String,
+        latitudeI: Int,
+        longitudeI: Int,
+        channel: Int,
+    ): Boolean {
+        val myNum = _myNodeNum.value
+        if (myNum == 0L) return false
+        val id = Random.nextLong(255L, 0xFFFFFFFFL)
+        val waypoint = MeshProtos.Waypoint.newBuilder()
+            .setId(id.toInt())
+            .setName(name.take(30))
+            .setDescription(description.take(100))
+            .setLatitudeI(latitudeI)
+            .setLongitudeI(longitudeI)
+            .build()
+        db.waypointDao().upsert(
+            com.suteny0r.mangledbabyducks.db.WaypointEntity(
+                id = id,
+                name = waypoint.name,
+                description = waypoint.description,
+                icon = 0,
+                latitudeI = latitudeI,
+                longitudeI = longitudeI,
+                expire = 0,
+                lockedTo = 0,
+                createdBy = myNum,
+                updated = System.currentTimeMillis(),
+            )
+        )
+        val data = MeshProtos.Data.newBuilder()
+            .setPortnum(Portnums.PortNum.WAYPOINT_APP)
+            .setPayload(waypoint.toByteString())
+            .build()
+        val packet = MeshProtos.MeshPacket.newBuilder()
+            .setId(Random.nextLong(255L, 0xFFFFFFFFL).toInt())
+            .setTo(MeshProtocol.BROADCAST_NUM.toInt())
+            .setChannel(channel)
+            .setWantAck(true)
+            .setDecoded(data)
+            .build()
+        return runCatching { send { it.setPacket(packet) } }.isSuccess
     }
 
     /**

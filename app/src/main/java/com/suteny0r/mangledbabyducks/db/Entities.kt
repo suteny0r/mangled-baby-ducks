@@ -142,6 +142,40 @@ data class ConfigEntity(
     val updated: Long,
 )
 
+/** One traceroute run and its result (port of TraceRouteEntity, flattened). */
+@Entity(tableName = "traceroutes", indices = [Index("toNum")])
+data class TracerouteEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val toNum: Long,
+    val time: Long,
+    /** Whether a reply arrived; the route fields are empty until then. */
+    val response: Boolean = false,
+    /** Node nums visited towards the destination, comma-separated. */
+    val routeTowards: String = "",
+    /** SNR per hop towards (dB, scaled by 4 on the wire), comma-separated. */
+    val snrTowards: String = "",
+    val routeBack: String = "",
+    val snrBack: String = "",
+)
+
+/** A mesh waypoint (port of WaypointEntity, core fields). */
+@Entity(tableName = "waypoints")
+data class WaypointEntity(
+    @PrimaryKey val id: Long,
+    val name: String,
+    val description: String,
+    val icon: Int,
+    val latitudeI: Int,
+    val longitudeI: Int,
+    val expire: Long,
+    val lockedTo: Long,
+    val createdBy: Long,
+    val updated: Long,
+) {
+    val latitude: Double get() = latitudeI / 1e7
+    val longitude: Double get() = longitudeI / 1e7
+}
+
 /** Node joined with its user identity and latest position — the list-row shape. */
 data class NodeWithUser(
     @Embedded val node: NodeEntity,

@@ -20,6 +20,10 @@ interface NodeDao {
     @Query("SELECT * FROM nodes ORDER BY favorite DESC, lastHeard DESC")
     fun nodesWithUsers(): Flow<List<NodeWithUser>>
 
+    @Transaction
+    @Query("SELECT * FROM nodes WHERE num = :num")
+    fun nodeWithUserFlow(num: Long): Flow<NodeWithUser?>
+
     @Query("SELECT COUNT(*) FROM nodes")
     fun count(): Flow<Int>
 
@@ -139,6 +143,9 @@ interface PositionDao {
     @Query("SELECT * FROM positions WHERE nodeNum = :nodeNum AND latest = 1 LIMIT 1")
     suspend fun latest(nodeNum: Long): PositionEntity?
 
+    @Query("SELECT * FROM positions WHERE nodeNum = :nodeNum AND latest = 1 LIMIT 1")
+    fun latestFlow(nodeNum: Long): Flow<PositionEntity?>
+
     @Query("SELECT * FROM positions WHERE latest = 1")
     fun latestPositions(): Flow<List<PositionEntity>>
 
@@ -175,4 +182,46 @@ interface TelemetryDao {
 
     @Query("SELECT * FROM telemetry WHERE nodeNum = :nodeNum AND metricsType = 0 ORDER BY time DESC LIMIT 1")
     fun latestDeviceMetrics(nodeNum: Long): Flow<TelemetryEntity?>
+
+    @Query(
+        "SELECT * FROM telemetry WHERE nodeNum = :nodeNum AND metricsType = :type " +
+            "AND time > :since ORDER BY time ASC"
+    )
+    fun history(nodeNum: Long, type: Int, since: Long): Flow<List<TelemetryEntity>>
+}
+
+@Dao
+interface TracerouteDao {
+    @Insert
+    suspend fun insert(traceroute: TracerouteEntity): Long
+
+    @Query(
+        "UPDATE traceroutes SET response = 1, routeTowards = :routeTowards, snrTowards = :snrTowards, " +
+            "routeBack = :routeBack, snrBack = :snrBack WHERE id = :id"
+    )
+    suspend fun applyResponse(
+        id: Long,
+        routeTowards: String,
+        snrTowards: String,
+        routeBack: String,
+        snrBack: String,
+    )
+
+    @Query("SELECT * FROM traceroutes WHERE toNum = :toNum ORDER BY time DESC LIMIT 10")
+    fun forNode(toNum: Long): Flow<List<TracerouteEntity>>
+
+    @Query("SELECT * FROM traceroutes WHERE toNum = :toNum AND response = 0 ORDER BY time DESC LIMIT 1")
+    suspend fun latestPending(toNum: Long): TracerouteEntity?
+}
+
+@Dao
+interface WaypointDao {
+    @Upsert
+    suspend fun upsert(waypoint: WaypointEntity)
+
+    @Query("SELECT * FROM waypoints WHERE expire = 0 OR expire > :nowSec")
+    fun active(nowSec: Long): Flow<List<WaypointEntity>>
+
+    @Query("DELETE FROM waypoints WHERE id = :id")
+    suspend fun delete(id: Long)
 }

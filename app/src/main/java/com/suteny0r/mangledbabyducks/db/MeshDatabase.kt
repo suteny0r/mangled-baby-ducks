@@ -15,8 +15,10 @@ import androidx.room.RoomDatabase
         PositionEntity::class,
         TelemetryEntity::class,
         ConfigEntity::class,
+        TracerouteEntity::class,
+        WaypointEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class MeshDatabase : RoomDatabase() {
@@ -28,6 +30,8 @@ abstract class MeshDatabase : RoomDatabase() {
     abstract fun positionDao(): PositionDao
     abstract fun telemetryDao(): TelemetryDao
     abstract fun configDao(): ConfigDao
+    abstract fun tracerouteDao(): TracerouteDao
+    abstract fun waypointDao(): WaypointDao
 
     companion object {
         fun build(context: Context): MeshDatabase =

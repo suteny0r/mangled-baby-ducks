@@ -1,6 +1,7 @@
 package com.suteny0r.mangledbabyducks.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,6 +21,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -32,6 +36,22 @@ import com.suteny0r.mangledbabyducks.db.NodeWithUser
 fun NodesScreen(vm: NodesViewModel = viewModel()) {
     val nodes by vm.nodes.collectAsState()
     val myNum by vm.myNodeNum.collectAsState()
+    val router = LocalContext.current.container.router
+    var detailNode by rememberSaveable { mutableStateOf<Long?>(null) }
+
+    detailNode?.let { num ->
+        NodeDetailScreen(
+            nodeNum = num,
+            onBack = { detailNode = null },
+            onMessage = {
+                val entry = nodes.find { it.node.num == num }
+                router.openThread(
+                    ThreadTarget.Direct(num, entry?.user?.longName ?: "Node $num")
+                )
+            },
+        )
+        return
+    }
 
     if (nodes.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -39,12 +59,12 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
         }
         return
     }
-    val router = LocalContext.current.container.router
     LazyColumn(Modifier.fillMaxSize()) {
         items(nodes, key = { it.node.num }) { entry ->
             NodeRow(
                 entry = entry,
                 isSelf = entry.node.num == myNum,
+                onOpen = { detailNode = entry.node.num },
                 onToggleFavorite = { vm.toggleFavorite(entry.node.num, !entry.node.favorite) },
                 onMessage = {
                     router.openThread(
@@ -63,12 +83,14 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
 private fun NodeRow(
     entry: NodeWithUser,
     isSelf: Boolean,
+    onOpen: () -> Unit,
     onToggleFavorite: () -> Unit,
     onMessage: () -> Unit,
 ) {
     val user = entry.user
     val node = entry.node
     ListItem(
+        modifier = Modifier.clickable(onClick = onOpen),
         headlineContent = {
             Text((user?.longName ?: "Node ${node.num}") + if (isSelf) "  (this radio)" else "")
         },

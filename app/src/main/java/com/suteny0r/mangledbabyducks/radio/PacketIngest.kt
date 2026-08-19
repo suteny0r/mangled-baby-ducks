@@ -10,6 +10,7 @@ import com.suteny0r.mangledbabyducks.db.NodeEntity
 import com.suteny0r.mangledbabyducks.db.PositionEntity
 import com.suteny0r.mangledbabyducks.db.TelemetryEntity
 import com.suteny0r.mangledbabyducks.db.UserEntity
+import com.suteny0r.mangledbabyducks.db.WaypointEntity
 import org.meshtastic.proto.ChannelProtos
 import org.meshtastic.proto.ConfigProtos
 import org.meshtastic.proto.MeshProtos
@@ -254,6 +255,47 @@ class PacketIngest(private val db: MeshDatabase) {
                 precisionBits = minOf(pos.precisionBits, 32),
                 time = timeSec * 1000,
                 latest = true,
+            )
+        )
+    }
+
+    /** TRACEROUTE_APP: a RouteDiscovery reply for a traceroute we sent. */
+    suspend fun traceroute(packet: MeshProtos.MeshPacket) {
+        val discovery = runCatching {
+            MeshProtos.RouteDiscovery.parseFrom(packet.decoded.payload)
+        }.getOrNull() ?: return
+        val fromNum = packet.from.uint()
+        val pending = db.tracerouteDao().latestPending(fromNum) ?: return
+        db.tracerouteDao().applyResponse(
+            id = pending.id,
+            routeTowards = discovery.routeList.joinToString(",") { it.uint().toString() },
+            snrTowards = discovery.snrTowardsList.joinToString(","),
+            routeBack = discovery.routeBackList.joinToString(",") { it.uint().toString() },
+            snrBack = discovery.snrBackList.joinToString(","),
+        )
+    }
+
+    /** WAYPOINT_APP: shared map markers; a deleted waypoint arrives with empty name. */
+    suspend fun waypointPacket(packet: MeshProtos.MeshPacket) {
+        val wp = runCatching {
+            MeshProtos.Waypoint.parseFrom(packet.decoded.payload)
+        }.getOrNull() ?: return
+        if (wp.name.isEmpty()) {
+            db.waypointDao().delete(wp.id.uint())
+            return
+        }
+        db.waypointDao().upsert(
+            WaypointEntity(
+                id = wp.id.uint(),
+                name = wp.name,
+                description = wp.description,
+                icon = wp.icon,
+                latitudeI = wp.latitudeI,
+                longitudeI = wp.longitudeI,
+                expire = wp.expire.uint(),
+                lockedTo = wp.lockedTo.uint(),
+                createdBy = packet.from.uint(),
+                updated = System.currentTimeMillis(),
             )
         )
     }
