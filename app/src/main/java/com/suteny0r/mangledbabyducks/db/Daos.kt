@@ -138,6 +138,13 @@ interface PositionDao {
 
     @Query("SELECT * FROM positions WHERE latest = 1")
     fun latestPositions(): Flow<List<PositionEntity>>
+
+    @Query(
+        "SELECT p.nodeNum AS nodeNum, p.latitudeI AS latitudeI, p.longitudeI AS longitudeI, " +
+            "p.time AS time, u.shortName AS shortName, u.longName AS longName " +
+            "FROM positions p LEFT JOIN users u ON u.num = p.nodeNum WHERE p.latest = 1"
+    )
+    fun mapNodes(): Flow<List<MapNode>>
 }
 
 @Dao

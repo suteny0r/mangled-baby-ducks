@@ -11,6 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Message
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SettingsRemote
@@ -29,6 +30,7 @@ import com.suteny0r.mangledbabyducks.radio.RadioService
 import com.suteny0r.mangledbabyducks.radio.RadioState
 import com.suteny0r.mangledbabyducks.radio.TcpConnection
 import com.suteny0r.mangledbabyducks.ui.ConnectScreen
+import com.suteny0r.mangledbabyducks.ui.MapScreen
 import com.suteny0r.mangledbabyducks.ui.MessagesScreen
 import com.suteny0r.mangledbabyducks.ui.NodesScreen
 import com.suteny0r.mangledbabyducks.ui.SettingsScreen
@@ -56,6 +58,7 @@ class MainActivity : ComponentActivity() {
                 val tabs = listOf(
                     Tab("Connect", Icons.Default.SettingsRemote),
                     Tab("Nodes", Icons.Default.Router),
+                    Tab("Map", Icons.Default.Map),
                     Tab("Messages", Icons.AutoMirrored.Filled.Message),
                     Tab("Settings", Icons.Default.Settings),
                 )
@@ -78,7 +81,8 @@ class MainActivity : ComponentActivity() {
                         when (selected) {
                             0 -> ConnectScreen()
                             1 -> NodesScreen()
-                            2 -> MessagesScreen()
+                            2 -> MapScreen()
+                            3 -> MessagesScreen()
                             else -> SettingsScreen()
                         }
                     }

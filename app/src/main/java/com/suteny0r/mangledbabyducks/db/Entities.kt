@@ -136,3 +136,16 @@ data class NodeWithUser(
     @Relation(parentColumn = "num", entityColumn = "num")
     val user: UserEntity?,
 )
+
+/** Latest position joined with user names — the map-marker shape. */
+data class MapNode(
+    val nodeNum: Long,
+    val latitudeI: Int,
+    val longitudeI: Int,
+    val time: Long,
+    val shortName: String?,
+    val longName: String?,
+) {
+    val latitude: Double get() = latitudeI / 1e7
+    val longitude: Double get() = longitudeI / 1e7
+}
