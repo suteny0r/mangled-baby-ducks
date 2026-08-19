@@ -79,7 +79,9 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
         }
 
         LazyColumn(Modifier.weight(1f)) {
-            items(devices.values.sortedByDescending { it.rssi }, key = { it.id }) { device ->
+            // Stable sort: RSSI updates every advertisement and reordering rows while
+            // the user is aiming at a Connect button causes mis-taps.
+            items(devices.values.sortedBy { it.name + it.id }, key = { it.id }) { device ->
                 ListItem(
                     headlineContent = { Text(device.name) },
                     supportingContent = { Text("${device.id}  •  ${device.rssi} dBm") },

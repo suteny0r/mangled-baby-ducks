@@ -63,6 +63,7 @@ class RadioManager(
     private var heartbeatJob: Job? = null
     private var reconnectJob: Job? = null
     private var nodeCount = 0
+    @Volatile private var lastRxMs = 0L
 
     // Kept so a dropped link can be re-established with a fresh connection object.
     private var connectionFactory: (() -> RadioConnection)? = null
@@ -75,7 +76,22 @@ class RadioManager(
         disconnect()
         connectionFactory = factory
         lastName = name
-        establish(factory(), name)
+        // Initial-connect retry, mirroring the iOS pipeline's maxRetries = 2 with a
+        // 2 s delay — transient GATT 133 style failures self-heal instead of
+        // surfacing to the user.
+        repeat(CONNECT_ATTEMPTS) { attempt ->
+            if (attempt > 0) {
+                _state.value = RadioState.Reconnecting(attempt)
+                delay(RECONNECT_DELAY_MS)
+            }
+            try {
+                establish(factory(), name)
+                return
+            } catch (e: Exception) {
+                Log.w(TAG, "Connect attempt ${attempt + 1}/$CONNECT_ATTEMPTS failed: ${e.message}")
+            }
+        }
+        // state is already Failed from the last establish()
     }
 
     private suspend fun establish(conn: RadioConnection, name: String?) {
@@ -137,6 +153,7 @@ class RadioManager(
     }
 
     private suspend fun handleEvent(event: ConnectionEvent) {
+        lastRxMs = System.currentTimeMillis()
         when (event) {
             is ConnectionEvent.Data -> processFromRadio(event.fromRadio)
             is ConnectionEvent.LogMessage -> Log.d(TAG, "radio: ${event.message}")
@@ -338,10 +355,19 @@ class RadioManager(
 
     private fun startPeriodicHeartbeat() {
         heartbeatJob?.cancel()
+        lastRxMs = System.currentTimeMillis()
         heartbeatJob = scope.launch {
             while (true) {
                 delay(MeshProtocol.HEARTBEAT_INTERVAL_MS)
                 runCatching { sendHeartbeat() }
+                // Watchdog: a healthy radio answers heartbeats (QueueStatus) and
+                // streams packets; total silence means the link is dead even if
+                // the socket looks open.
+                if (System.currentTimeMillis() - lastRxMs > HEARTBEAT_TIMEOUT_MS) {
+                    Log.w(TAG, "No traffic for ${HEARTBEAT_TIMEOUT_MS / 1000}s; reconnecting")
+                    scheduleReconnect("Heartbeat timeout")
+                    return@launch
+                }
             }
         }
     }
@@ -353,7 +379,9 @@ class RadioManager(
 
     companion object {
         private const val TAG = "RadioManager"
+        private const val CONNECT_ATTEMPTS = 3
         private const val MAX_RECONNECT_ATTEMPTS = 10
         private const val RECONNECT_DELAY_MS = 2_000L
+        private const val HEARTBEAT_TIMEOUT_MS = 3 * MeshProtocol.HEARTBEAT_INTERVAL_MS
     }
 }

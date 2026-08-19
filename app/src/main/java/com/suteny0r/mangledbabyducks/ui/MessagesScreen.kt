@@ -1,9 +1,12 @@
 package com.suteny0r.mangledbabyducks.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,16 +19,20 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -35,58 +42,78 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.suteny0r.mangledbabyducks.container
 import com.suteny0r.mangledbabyducks.db.MessageEntity
 import com.suteny0r.mangledbabyducks.radio.MeshProtocol
 import kotlinx.coroutines.flow.Flow
 
-private sealed interface Thread {
-    data class Channel(val index: Int, val name: String) : Thread
-    data class Direct(val peerNum: Long, val name: String) : Thread
-}
+/** Canonical tapback set from the iOS MessagingEnums; arbitrary emoji also arrive fine. */
+private val TAPBACKS = listOf("👋", "❤️", "👍", "👎", "🤣", "‼️", "❓", "💩")
+
+private val ThreadSaver = Saver<ThreadTarget?, String>(
+    save = {
+        when (it) {
+            null -> ""
+            is ThreadTarget.Channel -> "c:${it.index}:${it.name}"
+            is ThreadTarget.Direct -> "d:${it.peerNum}:${it.name}"
+        }
+    },
+    restore = {
+        val parts = it.split(":", limit = 3)
+        when (parts.getOrNull(0)) {
+            "c" -> ThreadTarget.Channel(parts[1].toInt(), parts[2])
+            "d" -> ThreadTarget.Direct(parts[1].toLong(), parts[2])
+            else -> null
+        }
+    },
+)
 
 @Composable
 fun MessagesScreen(vm: MessagesViewModel = viewModel()) {
-    var openThread by rememberSaveable(
-        stateSaver = androidx.compose.runtime.saveable.Saver(
-            save = {
-                when (it) {
-                    null -> ""
-                    is Thread.Channel -> "c:${it.index}:${it.name}"
-                    is Thread.Direct -> "d:${it.peerNum}:${it.name}"
-                }
-            },
-            restore = {
-                val parts = it.split(":", limit = 3)
-                when (parts.getOrNull(0)) {
-                    "c" -> Thread.Channel(parts[1].toInt(), parts[2])
-                    "d" -> Thread.Direct(parts[1].toLong(), parts[2])
-                    else -> null
-                }
-            },
-        )
-    ) { mutableStateOf<Thread?>(null) }
+    val router = LocalContext.current.container.router
+    var openThread by rememberSaveable(stateSaver = ThreadSaver) {
+        mutableStateOf<ThreadTarget?>(null)
+    }
+
+    // Consume cross-tab navigation (node list "message" button, notification taps)
+    // exactly once.
+    val pending by router.pendingThread.collectAsState()
+    LaunchedEffect(pending) {
+        pending?.let {
+            openThread = it
+            router.pendingThread.value = null
+        }
+    }
 
     when (val thread = openThread) {
         null -> ThreadList(vm, onOpen = { openThread = it })
-        is Thread.Channel -> ThreadView(
+        is ThreadTarget.Channel -> ThreadView(
             title = "#${thread.name}",
             messages = vm.channelMessages(thread.index),
+            tapbacks = vm.channelTapbacks(thread.index),
             vm = vm,
-            onSend = { vm.sendToChannel(it, thread.index) },
+            onSend = { text, replyId, isEmoji ->
+                vm.sendToChannel(text, thread.index, replyId, isEmoji)
+            },
             onOpened = { vm.markChannelRead(thread.index) },
             onBack = { openThread = null },
         )
-        is Thread.Direct -> ThreadView(
+        is ThreadTarget.Direct -> ThreadView(
             title = thread.name,
             messages = vm.directMessages(thread.peerNum),
+            tapbacks = vm.directTapbacks(thread.peerNum),
             vm = vm,
-            onSend = { vm.sendDirect(it, thread.peerNum) },
+            onSend = { text, replyId, isEmoji ->
+                vm.sendDirect(text, thread.peerNum, replyId, isEmoji)
+            },
             onOpened = { vm.markDmRead(thread.peerNum) },
             onBack = { openThread = null },
         )
@@ -94,7 +121,7 @@ fun MessagesScreen(vm: MessagesViewModel = viewModel()) {
 }
 
 @Composable
-private fun ThreadList(vm: MessagesViewModel, onOpen: (Thread) -> Unit) {
+private fun ThreadList(vm: MessagesViewModel, onOpen: (ThreadTarget) -> Unit) {
     val channels by vm.channels.collectAsState()
     val contacts by vm.dmContacts.collectAsState()
 
@@ -107,13 +134,12 @@ private fun ThreadList(vm: MessagesViewModel, onOpen: (Thread) -> Unit) {
             )
         }
         items(channels, key = { "c${it.index}" }) { channel ->
+            val name = channel.name?.ifEmpty { "Primary" } ?: "Primary"
             ListItem(
-                headlineContent = { Text(channel.name?.ifEmpty { "Primary" } ?: "Primary") },
+                headlineContent = { Text(name) },
                 leadingContent = { Icon(Icons.Default.Tag, contentDescription = null) },
                 supportingContent = { Text("Channel ${channel.index}") },
-                modifier = Modifier.clickableListItem {
-                    onOpen(Thread.Channel(channel.index, channel.name?.ifEmpty { "Primary" } ?: "Primary"))
-                },
+                modifier = Modifier.clickable { onOpen(ThreadTarget.Channel(channel.index, name)) },
             )
         }
         item {
@@ -126,43 +152,45 @@ private fun ThreadList(vm: MessagesViewModel, onOpen: (Thread) -> Unit) {
         if (contacts.isEmpty()) {
             item {
                 Text(
-                    "No conversations yet",
+                    "No conversations yet — start one from the Nodes tab",
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
             }
         }
         items(contacts, key = { "u${it.num}" }) { user ->
+            val name = user.longName ?: "Node ${user.num}"
             ListItem(
-                headlineContent = { Text(user.longName ?: "Node ${user.num}") },
+                headlineContent = { Text(name) },
                 leadingContent = { Icon(Icons.Default.Person, contentDescription = null) },
-                supportingContent = {
-                    user.lastMessage?.let { Text(relativeTime(it)) }
-                },
-                modifier = Modifier.clickableListItem {
-                    onOpen(Thread.Direct(user.num, user.longName ?: "Node ${user.num}"))
-                },
+                supportingContent = { user.lastMessage?.let { Text(relativeTime(it)) } },
+                modifier = Modifier.clickable { onOpen(ThreadTarget.Direct(user.num, name)) },
             )
         }
     }
 }
 
-private fun Modifier.clickableListItem(onClick: () -> Unit): Modifier =
-    this.clickable(onClick = onClick)
+private data class ReplyContext(val messageId: Long, val preview: String)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ThreadView(
     title: String,
     messages: Flow<List<MessageEntity>>,
+    tapbacks: Flow<List<MessageEntity>>,
     vm: MessagesViewModel,
-    onSend: (String) -> Unit,
+    onSend: (text: String, replyId: Long, isEmoji: Boolean) -> Unit,
     onOpened: () -> Unit,
     onBack: () -> Unit,
 ) {
     val list by messages.collectAsState(initial = emptyList())
+    val tapbackList by tapbacks.collectAsState(initial = emptyList())
     val myNum by vm.myNodeNum.collectAsState()
     val listState = rememberLazyListState()
+    var replyTo by remember { mutableStateOf<ReplyContext?>(null) }
+
+    val byId = remember(list) { list.associateBy { it.messageId } }
+    val tapbacksByTarget = remember(tapbackList) { tapbackList.groupBy { it.replyId } }
 
     LaunchedEffect(Unit) { onOpened() }
     LaunchedEffect(list.size) {
@@ -181,51 +209,156 @@ private fun ThreadView(
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+            contentPadding = PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             items(list, key = { it.messageId }) { message ->
-                MessageBubble(message, mine = message.fromNum == myNum, vm = vm)
+                MessageBubble(
+                    message = message,
+                    mine = message.fromNum == myNum,
+                    vm = vm,
+                    repliedPreview = if (message.replyId > 0) {
+                        byId[message.replyId]?.payload ?: "(original message unavailable)"
+                    } else null,
+                    tapbacks = tapbacksByTarget[message.messageId].orEmpty(),
+                    onTapback = { emoji -> onSend(emoji, message.messageId, true) },
+                    onReply = {
+                        replyTo = ReplyContext(
+                            message.messageId,
+                            (message.payload ?: "").take(80),
+                        )
+                    },
+                )
             }
         }
-        Composer(onSend)
+        replyTo?.let { ctx ->
+            Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Replying to: ${ctx.preview}",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                    )
+                    IconButton(onClick = { replyTo = null }) {
+                        Icon(Icons.Default.Close, contentDescription = "Cancel reply")
+                    }
+                }
+            }
+        }
+        Composer(onSend = { text ->
+            onSend(text, replyTo?.messageId ?: 0, false)
+            replyTo = null
+        })
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageBubble(message: MessageEntity, mine: Boolean, vm: MessagesViewModel) {
+private fun MessageBubble(
+    message: MessageEntity,
+    mine: Boolean,
+    vm: MessagesViewModel,
+    repliedPreview: String?,
+    tapbacks: List<MessageEntity>,
+    onTapback: (String) -> Unit,
+    onReply: () -> Unit,
+) {
     val senderName by produceState(initialValue = if (mine) "You" else "…", message.fromNum) {
         value = if (mine) "You"
         else vm.userFor(message.fromNum)?.let { it.longName ?: "Node ${it.num}" }
             ?: "Node ${message.fromNum}"
     }
-    Row(
+    var menuOpen by remember { mutableStateOf(false) }
+
+    Column(
         Modifier.fillMaxWidth(),
-        horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
+        horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
     ) {
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = if (mine) MaterialTheme.colorScheme.primaryContainer
-                else MaterialTheme.colorScheme.surfaceVariant,
-            ),
-            modifier = Modifier.widthIn(max = 300.dp),
-        ) {
-            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                if (!mine) {
-                    Text(senderName, style = MaterialTheme.typography.labelSmall)
+        Box {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = if (mine) MaterialTheme.colorScheme.primaryContainer
+                    else MaterialTheme.colorScheme.surfaceVariant,
+                ),
+                modifier = Modifier
+                    .widthIn(max = 300.dp)
+                    .combinedClickable(onClick = {}, onLongClick = { menuOpen = true }),
+            ) {
+                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    if (!mine) {
+                        Text(senderName, style = MaterialTheme.typography.labelSmall)
+                    }
+                    repliedPreview?.let {
+                        Surface(
+                            tonalElevation = 4.dp,
+                            shape = MaterialTheme.shapes.small,
+                        ) {
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 2,
+                                modifier = Modifier.padding(6.dp),
+                            )
+                        }
+                    }
+                    Text(message.payload ?: "", style = MaterialTheme.typography.bodyMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(relativeTime(message.timestamp), style = MaterialTheme.typography.labelSmall)
+                        if (mine) {
+                            Text(
+                                when {
+                                    message.realAck -> "✓✓"
+                                    message.receivedAck -> "✓"
+                                    message.ackError != 0 -> "✗"
+                                    else -> "…"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
                 }
-                Text(message.payload ?: "", style = MaterialTheme.typography.bodyMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(relativeTime(message.timestamp), style = MaterialTheme.typography.labelSmall)
-                    if (mine) {
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                Row(Modifier.padding(horizontal = 8.dp)) {
+                    TAPBACKS.forEach { emoji ->
                         Text(
-                            when {
-                                message.realAck -> "✓✓"
-                                message.receivedAck -> "✓"
-                                message.ackError != 0 -> "✗"
-                                else -> "…"
-                            },
-                            style = MaterialTheme.typography.labelSmall,
+                            emoji,
+                            style = MaterialTheme.typography.titleLarge,
+                            modifier = Modifier
+                                .padding(4.dp)
+                                .clickable {
+                                    menuOpen = false
+                                    onTapback(emoji)
+                                },
+                        )
+                    }
+                }
+                DropdownMenuItem(
+                    text = { Text("Reply") },
+                    onClick = {
+                        menuOpen = false
+                        onReply()
+                    },
+                )
+            }
+        }
+        if (tapbacks.isNotEmpty()) {
+            val grouped = tapbacks.groupBy { it.payload ?: "" }
+            Surface(
+                tonalElevation = 2.dp,
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.padding(top = 2.dp),
+            ) {
+                Row(Modifier.padding(horizontal = 6.dp, vertical = 2.dp)) {
+                    grouped.forEach { (emoji, senders) ->
+                        Text(
+                            if (senders.size > 1) "$emoji${senders.size}" else emoji,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(horizontal = 2.dp),
                         )
                     }
                 }

@@ -1,8 +1,10 @@
 package com.suteny0r.mangledbabyducks.ui
 
 import android.app.Application
+import androidx.datastore.preferences.core.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.suteny0r.mangledbabyducks.PrefKeys
 import com.suteny0r.mangledbabyducks.container
 import com.suteny0r.mangledbabyducks.db.ChannelEntity
 import com.suteny0r.mangledbabyducks.db.MessageEntity
@@ -64,6 +66,7 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
             runCatching {
                 radio.connect(device.name) { container.bleScanner.connection(device.id) }
             }
+            if (radio.isConnected) rememberRadio("ble", device.id, device.name)
         }
     }
 
@@ -73,6 +76,7 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
             runCatching {
                 radio.connect(host) { TcpConnection(host, port) }
             }
+            if (radio.isConnected) rememberRadio("tcp", "$host:$port", host)
         }
     }
 
@@ -80,6 +84,21 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             radio.disconnect()
             RadioService.stop(getApplication())
+            // A deliberate disconnect also forgets the radio so the app stops
+            // reconnecting to it on launch.
+            container.prefs.edit { prefs ->
+                prefs.remove(PrefKeys.RADIO_TYPE)
+                prefs.remove(PrefKeys.RADIO_ADDRESS)
+                prefs.remove(PrefKeys.RADIO_NAME)
+            }
+        }
+    }
+
+    private suspend fun rememberRadio(type: String, address: String, name: String?) {
+        container.prefs.edit { prefs ->
+            prefs[PrefKeys.RADIO_TYPE] = type
+            prefs[PrefKeys.RADIO_ADDRESS] = address
+            name?.let { prefs[PrefKeys.RADIO_NAME] = it }
         }
     }
 }
@@ -114,12 +133,25 @@ class MessagesViewModel(app: Application) : AndroidViewModel(app) {
     fun directMessages(peer: Long) =
         db.messageDao().directMessages(container.radioManager.myNodeNum.value, peer)
 
-    fun sendToChannel(text: String, channel: Int) {
-        viewModelScope.launch { container.radioManager.sendTextMessage(text, channel = channel) }
+    fun channelTapbacks(channel: Int) = db.messageDao().channelTapbacks(channel)
+
+    fun directTapbacks(peer: Long) =
+        db.messageDao().directTapbacks(container.radioManager.myNodeNum.value, peer)
+
+    fun sendToChannel(text: String, channel: Int, replyId: Long = 0, isEmoji: Boolean = false) {
+        viewModelScope.launch {
+            container.radioManager.sendTextMessage(
+                text, channel = channel, replyId = replyId, isEmoji = isEmoji,
+            )
+        }
     }
 
-    fun sendDirect(text: String, toNum: Long) {
-        viewModelScope.launch { container.radioManager.sendTextMessage(text, toNum = toNum) }
+    fun sendDirect(text: String, toNum: Long, replyId: Long = 0, isEmoji: Boolean = false) {
+        viewModelScope.launch {
+            container.radioManager.sendTextMessage(
+                text, toNum = toNum, replyId = replyId, isEmoji = isEmoji,
+            )
+        }
     }
 
     fun markChannelRead(channel: Int) {

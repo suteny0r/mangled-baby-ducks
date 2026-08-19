@@ -60,6 +60,15 @@ interface MessageDao {
     )
     fun directMessages(myNum: Long, peer: Long): Flow<List<MessageEntity>>
 
+    @Query("SELECT * FROM messages WHERE toNum IS NULL AND channel = :channel AND isEmoji = 1")
+    fun channelTapbacks(channel: Int): Flow<List<MessageEntity>>
+
+    @Query(
+        "SELECT * FROM messages WHERE isEmoji = 1 AND ((fromNum = :peer AND toNum = :myNum) " +
+            "OR (fromNum = :myNum AND toNum = :peer))"
+    )
+    fun directTapbacks(myNum: Long, peer: Long): Flow<List<MessageEntity>>
+
     @Query(
         "UPDATE messages SET receivedAck = :receivedAck, realAck = :realAck, ackError = :ackError, " +
             "ackSnr = :ackSnr, ackTimestamp = :ackTimestamp WHERE messageId = :messageId"

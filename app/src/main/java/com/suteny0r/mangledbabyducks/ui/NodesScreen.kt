@@ -2,12 +2,14 @@ package com.suteny0r.mangledbabyducks.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Message
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.Icon
@@ -20,8 +22,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.suteny0r.mangledbabyducks.container
 import com.suteny0r.mangledbabyducks.db.NodeWithUser
 
 @Composable
@@ -35,19 +39,33 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
         }
         return
     }
+    val router = LocalContext.current.container.router
     LazyColumn(Modifier.fillMaxSize()) {
         items(nodes, key = { it.node.num }) { entry ->
             NodeRow(
                 entry = entry,
                 isSelf = entry.node.num == myNum,
                 onToggleFavorite = { vm.toggleFavorite(entry.node.num, !entry.node.favorite) },
+                onMessage = {
+                    router.openThread(
+                        ThreadTarget.Direct(
+                            entry.node.num,
+                            entry.user?.longName ?: "Node ${entry.node.num}",
+                        )
+                    )
+                },
             )
         }
     }
 }
 
 @Composable
-private fun NodeRow(entry: NodeWithUser, isSelf: Boolean, onToggleFavorite: () -> Unit) {
+private fun NodeRow(
+    entry: NodeWithUser,
+    isSelf: Boolean,
+    onToggleFavorite: () -> Unit,
+    onMessage: () -> Unit,
+) {
     val user = entry.user
     val node = entry.node
     ListItem(
@@ -78,13 +96,24 @@ private fun NodeRow(entry: NodeWithUser, isSelf: Boolean, onToggleFavorite: () -
             }
         },
         trailingContent = {
-            IconButton(onClick = onToggleFavorite) {
-                Icon(
-                    if (node.favorite) Icons.Filled.Star else Icons.Outlined.StarOutline,
-                    contentDescription = "Favorite",
-                    tint = if (node.favorite) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            Row {
+                if (!isSelf) {
+                    IconButton(onClick = onMessage) {
+                        Icon(
+                            Icons.AutoMirrored.Outlined.Message,
+                            contentDescription = "Message",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                IconButton(onClick = onToggleFavorite) {
+                    Icon(
+                        if (node.favorite) Icons.Filled.Star else Icons.Outlined.StarOutline,
+                        contentDescription = "Favorite",
+                        tint = if (node.favorite) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         },
     )

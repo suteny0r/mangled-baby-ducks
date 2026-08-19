@@ -59,18 +59,28 @@ class MessageNotifier(
         }
         val sender = db.userDao().get(message.fromNum)?.let { it.longName ?: "Node ${it.num}" }
             ?: "Node ${message.fromNum}"
-        val title = if (message.toNum == null) {
-            val channelName = db.channelDao().get(message.channel)?.name?.ifEmpty { null }
-                ?: if (message.channel == 0) "Primary" else "channel ${message.channel}"
-            "$sender (#$channelName)"
-        } else {
-            sender
-        }
+        val channelName = db.channelDao().get(message.channel)?.name?.ifEmpty { null }
+            ?: if (message.channel == 0) "Primary" else "channel ${message.channel}"
+        val title = if (message.toNum == null) "$sender (#$channelName)" else sender
+
+        // Deep link: tapping the notification opens the exact conversation.
+        val tapIntent = Intent(context, MainActivity::class.java)
+            .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            .putExtra(MainActivity.EXTRA_OPEN_THREAD, true)
+            .apply {
+                if (message.toNum == null) {
+                    putExtra(MainActivity.EXTRA_CHANNEL, message.channel)
+                    putExtra(MainActivity.EXTRA_THREAD_NAME, channelName)
+                } else {
+                    putExtra(MainActivity.EXTRA_DM_PEER, message.fromNum)
+                    putExtra(MainActivity.EXTRA_THREAD_NAME, sender)
+                }
+            }
         val contentIntent = PendingIntent.getActivity(
-            context, 0,
-            Intent(context, MainActivity::class.java)
-                .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_IMMUTABLE,
+            context,
+            (message.messageId and 0x7FFFFFFF).toInt(),
+            tapIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(context, CHANNEL_ID)
