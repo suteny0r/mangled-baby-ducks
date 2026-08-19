@@ -1,6 +1,7 @@
 package com.suteny0r.meshtastic.radio
 
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
@@ -66,6 +67,26 @@ class BleConnection(
     @Volatile private var closed = false
     @Volatile private var needsDrain = false
     @Volatile private var isDraining = false
+
+    // Android invalidates GATT handles silently when the adapter turns off — no
+    // onConnectionStateChange ever fires — so adapter state must be watched directly.
+    private val adapterReceiver = object : BroadcastReceiver() {
+        override fun onReceive(ctx: Context, intent: Intent) {
+            if (intent.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
+            val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1)
+            if (state == BluetoothAdapter.STATE_TURNING_OFF || state == BluetoothAdapter.STATE_OFF) {
+                if (!closed) {
+                    Log.w(TAG, "Bluetooth adapter turned off; dropping link")
+                    failAllPending("Bluetooth turned off")
+                    gatt?.let { runCatching { it.close() } }
+                    gatt = null
+                    eventFlow.tryEmit(
+                        ConnectionEvent.Disconnected(shouldReconnect = true, error = "Bluetooth turned off")
+                    )
+                }
+            }
+        }
+    }
 
     private val bondReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context, intent: Intent) {
@@ -167,6 +188,7 @@ class BleConnection(
 
     override suspend fun connect() {
         context.registerReceiver(bondReceiver, IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED))
+        context.registerReceiver(adapterReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
 
         val connectDeferred = CompletableDeferred<Unit>()
         pendingConnect = connectDeferred
@@ -308,6 +330,7 @@ class BleConnection(
     override suspend fun disconnect() {
         closed = true
         runCatching { context.unregisterReceiver(bondReceiver) }
+        runCatching { context.unregisterReceiver(adapterReceiver) }
         failAllPending("Disconnected by app")
         gatt?.let {
             runCatching { it.disconnect() }

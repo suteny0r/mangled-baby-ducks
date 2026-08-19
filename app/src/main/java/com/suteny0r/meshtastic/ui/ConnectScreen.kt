@@ -56,6 +56,8 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
                         StatusRow("Loading node database (${s.nodeCount} nodes)…")
                     is RadioState.Subscribed ->
                         Text("Connected to ${deviceName ?: "radio"}")
+                    is RadioState.Reconnecting ->
+                        StatusRow("Connection lost, reconnecting (attempt ${s.attempt})…")
                     is RadioState.Failed ->
                         Text("Failed: ${s.reason}", color = MaterialTheme.colorScheme.error)
                 }

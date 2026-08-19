@@ -3,6 +3,7 @@ package com.suteny0r.meshtastic
 import android.content.Context
 import com.suteny0r.meshtastic.db.MeshDatabase
 import com.suteny0r.meshtastic.radio.BleScanner
+import com.suteny0r.meshtastic.radio.MessageNotifier
 import com.suteny0r.meshtastic.radio.PacketIngest
 import com.suteny0r.meshtastic.radio.RadioManager
 
@@ -12,6 +13,7 @@ class AppContainer(context: Context) {
     val ingest = PacketIngest(database)
     val radioManager = RadioManager(database, ingest)
     val bleScanner = BleScanner(context)
+    val messageNotifier = MessageNotifier(context, database, radioManager)
 }
 
 val Context.container: AppContainer

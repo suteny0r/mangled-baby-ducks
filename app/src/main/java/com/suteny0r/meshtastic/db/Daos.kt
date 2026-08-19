@@ -94,6 +94,9 @@ interface ChannelDao {
     @Query("SELECT * FROM channels WHERE role != 0 ORDER BY `index` ASC")
     fun activeChannels(): Flow<List<ChannelEntity>>
 
+    @Query("SELECT * FROM channels WHERE `index` = :index")
+    suspend fun get(index: Int): ChannelEntity?
+
     @Query("DELETE FROM channels")
     suspend fun clear()
 }

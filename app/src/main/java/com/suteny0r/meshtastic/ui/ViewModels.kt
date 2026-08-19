@@ -61,14 +61,18 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
         _scanning.value = false
         viewModelScope.launch {
             RadioService.start(getApplication(), device.name)
-            radio.connect(container.bleScanner.connection(device.id), device.name)
+            runCatching {
+                radio.connect(device.name) { container.bleScanner.connection(device.id) }
+            }
         }
     }
 
     fun connectTcp(host: String, port: Int) {
         viewModelScope.launch {
             RadioService.start(getApplication(), host)
-            radio.connect(TcpConnection(host, port), host)
+            runCatching {
+                radio.connect(host) { TcpConnection(host, port) }
+            }
         }
     }
 

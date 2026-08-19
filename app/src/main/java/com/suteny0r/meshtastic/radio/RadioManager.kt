@@ -29,6 +29,7 @@ sealed interface RadioState {
     data object Communicating : RadioState
     data class RetrievingDatabase(val nodeCount: Int) : RadioState
     data object Subscribed : RadioState
+    data class Reconnecting(val attempt: Int) : RadioState
     data class Failed(val reason: String) : RadioState
 }
 
@@ -60,13 +61,24 @@ class RadioManager(
     private var connection: RadioConnection? = null
     private var eventJob: Job? = null
     private var heartbeatJob: Job? = null
+    private var reconnectJob: Job? = null
     private var nodeCount = 0
+
+    // Kept so a dropped link can be re-established with a fresh connection object.
+    private var connectionFactory: (() -> RadioConnection)? = null
+    private var lastName: String? = null
 
     val isConnected: Boolean
         get() = _state.value is RadioState.Subscribed || _state.value is RadioState.RetrievingDatabase
 
-    suspend fun connect(conn: RadioConnection, name: String?) {
+    suspend fun connect(name: String?, factory: () -> RadioConnection) {
         disconnect()
+        connectionFactory = factory
+        lastName = name
+        establish(factory(), name)
+    }
+
+    private suspend fun establish(conn: RadioConnection, name: String?) {
         _state.value = RadioState.Connecting
         _deviceName.value = name
         connection = conn
@@ -98,8 +110,10 @@ class RadioManager(
         } catch (e: Exception) {
             Log.e(TAG, "Connect failed", e)
             _state.value = RadioState.Failed(e.message ?: "Connection failed")
+            eventJob?.cancel()
             runCatching { conn.disconnect() }
             connection = null
+            throw e
         }
     }
 
@@ -112,6 +126,8 @@ class RadioManager(
     }
 
     suspend fun disconnect() {
+        connectionFactory = null
+        reconnectJob?.cancel()
         heartbeatJob?.cancel()
         eventJob?.cancel()
         connection?.let { runCatching { it.disconnect() } }
@@ -127,7 +143,11 @@ class RadioManager(
             is ConnectionEvent.RssiUpdate -> {}
             is ConnectionEvent.Disconnected -> {
                 Log.w(TAG, "Link lost (reconnect=${event.shouldReconnect}): ${event.error}")
-                _state.value = RadioState.Failed(event.error ?: "Disconnected")
+                if (event.shouldReconnect && connectionFactory != null) {
+                    scheduleReconnect(event.error)
+                } else {
+                    _state.value = RadioState.Failed(event.error ?: "Disconnected")
+                }
             }
         }
     }
@@ -260,6 +280,34 @@ class RadioManager(
             .onFailure { Log.w(TAG, "setTime failed", it) }
     }
 
+    /**
+     * Re-establish a dropped link with a fresh connection object. Mirrors the iOS
+     * reconnect policy: only fired for link-loss causes worth retrying (the transport
+     * decides that), never for a user-initiated disconnect.
+     */
+    private fun scheduleReconnect(reason: String?) {
+        if (reconnectJob?.isActive == true) return
+        val factory = connectionFactory ?: return
+        reconnectJob = scope.launch {
+            heartbeatJob?.cancel()
+            eventJob?.cancel()
+            connection?.let { runCatching { it.disconnect() } }
+            connection = null
+            repeat(MAX_RECONNECT_ATTEMPTS) { attempt ->
+                _state.value = RadioState.Reconnecting(attempt + 1)
+                delay(RECONNECT_DELAY_MS * (attempt + 1))
+                try {
+                    establish(factory(), lastName)
+                    Log.i(TAG, "Reconnected after ${attempt + 1} attempt(s)")
+                    return@launch
+                } catch (e: Exception) {
+                    Log.w(TAG, "Reconnect attempt ${attempt + 1} failed: ${e.message}")
+                }
+            }
+            _state.value = RadioState.Failed(reason ?: "Connection lost")
+        }
+    }
+
     private fun startPeriodicHeartbeat() {
         heartbeatJob?.cancel()
         heartbeatJob = scope.launch {
@@ -277,5 +325,7 @@ class RadioManager(
 
     companion object {
         private const val TAG = "RadioManager"
+        private const val MAX_RECONNECT_ATTEMPTS = 10
+        private const val RECONNECT_DELAY_MS = 2_000L
     }
 }
