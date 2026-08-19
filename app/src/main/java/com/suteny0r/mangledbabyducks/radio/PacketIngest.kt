@@ -23,11 +23,15 @@ class PacketIngest(private val db: MeshDatabase) {
     /** Called when this radio's MyNodeInfo arrives; returns the local node num. */
     suspend fun myInfo(myInfo: MeshProtos.MyNodeInfo, bleName: String?): Long {
         val num = myInfo.myNodeNum.uint()
-        val existing = db.myInfoDao().myInfoOnce()
+        var existing = db.myInfoDao().myInfoOnce()
         if (existing != null && existing.myNodeNum != num) {
             // Different radio than the one this DB belongs to: defensive reset,
-            // mirroring handleMyInfo's cross-device store guard.
+            // mirroring handleMyInfo's cross-device store guard. The my_info row
+            // must go too, or the single-row LIMIT 1 queries keep serving the
+            // old radio's identity.
             db.nodeDao().clear()
+            db.myInfoDao().clear()
+            existing = null
         }
         db.channelDao().clear()
         db.myInfoDao().upsert(

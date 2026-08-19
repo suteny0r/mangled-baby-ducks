@@ -144,4 +144,13 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<RadioState> = container.radioManager.state
     val nodeCount: StateFlow<Int> = container.database.nodeDao().count()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    private val _broadcastResult = MutableStateFlow<Boolean?>(null)
+    val broadcastResult: StateFlow<Boolean?> = _broadcastResult.asStateFlow()
+
+    fun broadcastNodeInfo() {
+        viewModelScope.launch {
+            _broadcastResult.value = container.radioManager.broadcastNodeInfo()
+        }
+    }
 }

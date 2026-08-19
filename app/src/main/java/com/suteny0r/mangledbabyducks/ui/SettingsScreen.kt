@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
@@ -62,6 +63,17 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                     supportingContent = { Text(nodeCount.toString()) },
                 )
             }
+        }
+        val broadcastResult by vm.broadcastResult.collectAsState()
+        Button(
+            onClick = { vm.broadcastNodeInfo() },
+            enabled = state is RadioState.Subscribed,
+        ) { Text("Broadcast node info") }
+        broadcastResult?.let {
+            Text(
+                if (it) "Node info broadcast sent" else "Broadcast failed",
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
         Text(
             "Mangled Baby Ducks, a meshtastic compatible node",

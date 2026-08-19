@@ -253,6 +253,34 @@ class RadioManager(
         }.isSuccess
     }
 
+    /**
+     * Broadcast our own User record (including public key) on NODEINFO_APP so nearby
+     * nodes learn or refresh this radio's identity — the mesh-native key exchange.
+     * Port of the iOS Exchange User Info action, addressed to broadcast.
+     */
+    suspend fun broadcastNodeInfo(): Boolean {
+        val myNum = _myNodeNum.value
+        if (myNum == 0L) return false
+        val me = db.userDao().get(myNum) ?: return false
+        val user = MeshProtos.User.newBuilder()
+            .setId(me.userId ?: "!%08x".format(myNum))
+            .setLongName(me.longName ?: "")
+            .setShortName(me.shortName ?: "")
+            .apply { me.publicKey?.let { setPublicKey(ByteString.copyFrom(it)) } }
+            .build()
+        val data = MeshProtos.Data.newBuilder()
+            .setPortnum(Portnums.PortNum.NODEINFO_APP)
+            .setPayload(user.toByteString())
+            .build()
+        val packet = MeshProtos.MeshPacket.newBuilder()
+            .setId(Random.nextLong(255L, 0xFFFFFFFFL).toInt())
+            .setTo(MeshProtocol.BROADCAST_NUM.toInt())
+            .setChannel(0)
+            .setDecoded(data)
+            .build()
+        return runCatching { send { it.setPacket(packet) } }.isSuccess
+    }
+
     suspend fun sendHeartbeat() {
         // Nonce 1 is special-cased by some firmware; avoid it like the iOS sender does.
         val heartbeat = MeshProtos.Heartbeat.newBuilder()

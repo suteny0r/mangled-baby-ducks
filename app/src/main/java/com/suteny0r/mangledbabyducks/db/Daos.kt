@@ -111,6 +111,9 @@ interface MyInfoDao {
 
     @Query("SELECT * FROM my_info LIMIT 1")
     suspend fun myInfoOnce(): MyInfoEntity?
+
+    @Query("DELETE FROM my_info")
+    suspend fun clear()
 }
 
 @Dao
