@@ -14,8 +14,9 @@ head `0b8cdbe`). All work is committed and pushed; the working tree is clean.
 
 ## Test rig (memory file `mesh-test-radios.md` has the full version)
 - Phone radio: "SOBE GAT562 30s" (📣), BLE `📣_9f4a` = ED:A6:3B:FA:9F:4A,
-  node 255142777 / `!0f352b79`. SAME radio is on PC serial **COM14** — an open serial
-  session kicks the phone's BLE, and it cannot DM itself.
+  node 255142777 / `!0f352b79`. It sits on PC serial COM14, but **COM14 IS NOT TO BE
+  TOUCHED** (user instruction): opening it kicks the phone's BLE session. Reach SOBE
+  only through the app.
 - Test traffic sender: **Spiney Norman on COM3** (🦔_8e18).
   `set PYTHONIOENCODING=utf-8; meshtastic --port COM3 --sendtext ... --dest '!0f352b79' --ack`
 - Spanky Ham (🐷) at 192.168.20.129 (TCP): unreliable LoRa path, don't rely on it.
