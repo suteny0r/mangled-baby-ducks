@@ -64,8 +64,7 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
             }
         }
         Text(
-            "Meshtastic for Android — port of Meshtastic-Apple.\n" +
-                "Radio configuration screens (LoRa, channels, device, position, MQTT…) are not ported yet.",
+            "Mangled Baby Ducks, a meshtastic compatible node",
             style = MaterialTheme.typography.bodySmall,
         )
     }
