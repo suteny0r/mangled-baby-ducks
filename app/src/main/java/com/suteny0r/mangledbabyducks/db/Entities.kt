@@ -130,6 +130,18 @@ data class TelemetryEntity(
     val iaq: Int? = null,
 )
 
+/**
+ * One radio config section, stored as raw proto bytes keyed by section name
+ * ("lora", "device", … / "module.mqtt", …). Screens parse the proto on read, so
+ * the schema never chases firmware fields.
+ */
+@Entity(tableName = "configs")
+data class ConfigEntity(
+    @PrimaryKey val type: String,
+    val bytes: ByteArray,
+    val updated: Long,
+)
+
 /** Node joined with its user identity and latest position — the list-row shape. */
 data class NodeWithUser(
     @Embedded val node: NodeEntity,

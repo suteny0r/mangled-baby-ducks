@@ -15,13 +15,18 @@ import com.suteny0r.mangledbabyducks.radio.DiscoveredDevice
 import com.suteny0r.mangledbabyducks.radio.RadioService
 import com.suteny0r.mangledbabyducks.radio.RadioState
 import com.suteny0r.mangledbabyducks.radio.TcpConnection
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import org.meshtastic.proto.ConfigProtos
 
 class ConnectViewModel(app: Application) : AndroidViewModel(app) {
     private val container = app.container
@@ -167,6 +172,7 @@ class MessagesViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun userFor(num: Long): UserEntity? = db.userDao().get(num)
 }
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     private val container = app.container
 
@@ -176,6 +182,30 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<RadioState> = container.radioManager.state
     val nodeCount: StateFlow<Int> = container.database.nodeDao().count()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    val loraConfig: StateFlow<ConfigProtos.Config.LoRaConfig?> =
+        container.database.configDao().config("config.lora")
+            .map { entity ->
+                entity?.let { runCatching { ConfigProtos.Config.parseFrom(it.bytes).lora }.getOrNull() }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val deviceConfig: StateFlow<ConfigProtos.Config.DeviceConfig?> =
+        container.database.configDao().config("config.device")
+            .map { entity ->
+                entity?.let { runCatching { ConfigProtos.Config.parseFrom(it.bytes).device }.getOrNull() }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val myUser: StateFlow<UserEntity?> = container.radioManager.myNodeNum
+        .flatMapLatest { num ->
+            if (num == 0L) flowOf(null) else container.database.userDao().userFlow(num)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    fun setOwner(longName: String, shortName: String) {
+        viewModelScope.launch { container.radioManager.setOwner(longName, shortName) }
+    }
 
     private val _broadcastResult = MutableStateFlow<Boolean?>(null)
     val broadcastResult: StateFlow<Boolean?> = _broadcastResult.asStateFlow()

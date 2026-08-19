@@ -2,6 +2,7 @@ package com.suteny0r.mangledbabyducks.radio
 
 import android.util.Log
 import com.suteny0r.mangledbabyducks.db.ChannelEntity
+import com.suteny0r.mangledbabyducks.db.ConfigEntity
 import com.suteny0r.mangledbabyducks.db.MeshDatabase
 import com.suteny0r.mangledbabyducks.db.MessageEntity
 import com.suteny0r.mangledbabyducks.db.MyInfoEntity
@@ -10,7 +11,9 @@ import com.suteny0r.mangledbabyducks.db.PositionEntity
 import com.suteny0r.mangledbabyducks.db.TelemetryEntity
 import com.suteny0r.mangledbabyducks.db.UserEntity
 import org.meshtastic.proto.ChannelProtos
+import org.meshtastic.proto.ConfigProtos
 import org.meshtastic.proto.MeshProtos
+import org.meshtastic.proto.ModuleConfigProtos
 import org.meshtastic.proto.Portnums
 import org.meshtastic.proto.TelemetryProtos
 
@@ -44,6 +47,17 @@ class PacketIngest(private val db: MeshDatabase) {
             )
         )
         return num
+    }
+
+    /** Store one LocalConfig section as raw proto bytes, keyed by section name. */
+    suspend fun config(config: ConfigProtos.Config) {
+        val type = "config." + config.payloadVariantCase.name.lowercase()
+        db.configDao().upsert(ConfigEntity(type, config.toByteArray(), System.currentTimeMillis()))
+    }
+
+    suspend fun moduleConfig(moduleConfig: ModuleConfigProtos.ModuleConfig) {
+        val type = "module." + moduleConfig.payloadVariantCase.name.lowercase()
+        db.configDao().upsert(ConfigEntity(type, moduleConfig.toByteArray(), System.currentTimeMillis()))
     }
 
     suspend fun deviceMetadata(metadata: MeshProtos.DeviceMetadata) {

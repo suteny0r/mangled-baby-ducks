@@ -14,8 +14,9 @@ import androidx.room.RoomDatabase
         MyInfoEntity::class,
         PositionEntity::class,
         TelemetryEntity::class,
+        ConfigEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class MeshDatabase : RoomDatabase() {
@@ -26,6 +27,7 @@ abstract class MeshDatabase : RoomDatabase() {
     abstract fun myInfoDao(): MyInfoDao
     abstract fun positionDao(): PositionDao
     abstract fun telemetryDao(): TelemetryDao
+    abstract fun configDao(): ConfigDao
 
     companion object {
         fun build(context: Context): MeshDatabase =

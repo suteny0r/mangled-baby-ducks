@@ -38,6 +38,9 @@ interface UserDao {
     @Query("SELECT * FROM users WHERE num = :num")
     suspend fun get(num: Long): UserEntity?
 
+    @Query("SELECT * FROM users WHERE num = :num")
+    fun userFlow(num: Long): Flow<UserEntity?>
+
     @Query("SELECT * FROM users WHERE lastMessage IS NOT NULL ORDER BY lastMessage DESC")
     fun dmContacts(): Flow<List<UserEntity>>
 
@@ -145,6 +148,18 @@ interface PositionDao {
             "FROM positions p LEFT JOIN users u ON u.num = p.nodeNum WHERE p.latest = 1"
     )
     fun mapNodes(): Flow<List<MapNode>>
+}
+
+@Dao
+interface ConfigDao {
+    @Upsert
+    suspend fun upsert(config: ConfigEntity)
+
+    @Query("SELECT * FROM configs WHERE type = :type")
+    fun config(type: String): Flow<ConfigEntity?>
+
+    @Query("DELETE FROM configs")
+    suspend fun clear()
 }
 
 @Dao

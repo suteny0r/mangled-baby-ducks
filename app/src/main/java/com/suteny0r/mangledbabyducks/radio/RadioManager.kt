@@ -183,6 +183,10 @@ class RadioManager(
             }
             MeshProtos.FromRadio.PayloadVariantCase.CHANNEL ->
                 ingest.channel(fromRadio.channel)
+            MeshProtos.FromRadio.PayloadVariantCase.CONFIG ->
+                ingest.config(fromRadio.config)
+            MeshProtos.FromRadio.PayloadVariantCase.MODULECONFIG ->
+                ingest.moduleConfig(fromRadio.moduleConfig)
             MeshProtos.FromRadio.PayloadVariantCase.METADATA ->
                 ingest.deviceMetadata(fromRadio.metadata)
             MeshProtos.FromRadio.PayloadVariantCase.CONFIG_COMPLETE_ID ->
@@ -296,6 +300,37 @@ class RadioManager(
             .setDecoded(data)
             .build()
         return runCatching { send { it.setPacket(packet) } }.isSuccess
+    }
+
+    /**
+     * Rename this radio's owner via AdminMessage.set_owner, with an optimistic
+     * local user update (the radio re-broadcasts NodeInfo on its own schedule).
+     */
+    suspend fun setOwner(longName: String, shortName: String): Boolean {
+        val myNum = _myNodeNum.value
+        if (myNum == 0L) return false
+        val me = db.userDao().get(myNum)
+        val owner = MeshProtos.User.newBuilder()
+            .setLongName(longName.take(39))
+            .setShortName(shortName.take(4))
+            .build()
+        val admin = AdminProtos.AdminMessage.newBuilder()
+            .setSetOwner(owner)
+            .build()
+        val data = MeshProtos.Data.newBuilder()
+            .setPortnum(Portnums.PortNum.ADMIN_APP)
+            .setPayload(admin.toByteString())
+            .build()
+        val packet = MeshProtos.MeshPacket.newBuilder()
+            .setId(Random.nextLong(255L, 0xFFFFFFFFL).toInt())
+            .setTo(myNum.toInt())
+            .setDecoded(data)
+            .build()
+        val sent = runCatching { send { it.setPacket(packet) } }.isSuccess
+        if (sent && me != null) {
+            db.userDao().upsert(me.copy(longName = longName.take(39), shortName = shortName.take(4)))
+        }
+        return sent
     }
 
     suspend fun sendHeartbeat() {
