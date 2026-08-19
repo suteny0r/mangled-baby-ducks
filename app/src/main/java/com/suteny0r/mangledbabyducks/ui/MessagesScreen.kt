@@ -1,4 +1,4 @@
-package com.suteny0r.meshtastic.ui
+package com.suteny0r.mangledbabyducks.ui
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -41,8 +41,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.suteny0r.meshtastic.db.MessageEntity
-import com.suteny0r.meshtastic.radio.MeshProtocol
+import com.suteny0r.mangledbabyducks.db.MessageEntity
+import com.suteny0r.mangledbabyducks.radio.MeshProtocol
 import kotlinx.coroutines.flow.Flow
 
 private sealed interface Thread {

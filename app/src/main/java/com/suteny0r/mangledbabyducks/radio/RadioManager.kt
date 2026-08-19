@@ -1,9 +1,9 @@
-package com.suteny0r.meshtastic.radio
+package com.suteny0r.mangledbabyducks.radio
 
 import android.util.Log
 import com.google.protobuf.ByteString
-import com.suteny0r.meshtastic.db.MeshDatabase
-import com.suteny0r.meshtastic.db.MessageEntity
+import com.suteny0r.mangledbabyducks.db.MeshDatabase
+import com.suteny0r.mangledbabyducks.db.MessageEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job

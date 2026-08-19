@@ -1,4 +1,4 @@
-package com.suteny0r.meshtastic.radio
+package com.suteny0r.mangledbabyducks.radio
 
 import android.Manifest
 import android.app.Notification
@@ -10,10 +10,10 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
-import com.suteny0r.meshtastic.MainActivity
-import com.suteny0r.meshtastic.R
-import com.suteny0r.meshtastic.db.MeshDatabase
-import com.suteny0r.meshtastic.db.MessageEntity
+import com.suteny0r.mangledbabyducks.MainActivity
+import com.suteny0r.mangledbabyducks.R
+import com.suteny0r.mangledbabyducks.db.MeshDatabase
+import com.suteny0r.mangledbabyducks.db.MessageEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -61,7 +61,7 @@ class MessageNotifier(
             ?: "Node ${message.fromNum}"
         val title = if (message.toNum == null) {
             val channelName = db.channelDao().get(message.channel)?.name?.ifEmpty { null }
-                ?: "channel ${message.channel}"
+                ?: if (message.channel == 0) "Primary" else "channel ${message.channel}"
             "$sender (#$channelName)"
         } else {
             sender

@@ -1,4 +1,4 @@
-package com.suteny0r.meshtastic.ui.theme
+package com.suteny0r.mangledbabyducks.ui.theme
 
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme

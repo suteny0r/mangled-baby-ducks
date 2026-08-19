@@ -1,4 +1,4 @@
-package com.suteny0r.meshtastic.radio
+package com.suteny0r.mangledbabyducks.radio
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothManager

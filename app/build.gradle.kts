@@ -9,11 +9,11 @@ plugins {
 }
 
 android {
-    namespace = "com.suteny0r.meshtastic"
+    namespace = "com.suteny0r.mangledbabyducks"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.suteny0r.meshtastic"
+        applicationId = "com.suteny0r.mangledbabyducks"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

@@ -1,4 +1,4 @@
-package com.suteny0r.meshtastic.radio
+package com.suteny0r.mangledbabyducks.radio
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -9,8 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
-import com.suteny0r.meshtastic.MainActivity
-import com.suteny0r.meshtastic.R
+import com.suteny0r.mangledbabyducks.MainActivity
+import com.suteny0r.mangledbabyducks.R
 
 /**
  * Foreground service that keeps the process alive while a radio session is up —

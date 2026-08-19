@@ -1,4 +1,4 @@
-package com.suteny0r.meshtastic.db
+package com.suteny0r.mangledbabyducks.db
 
 import android.content.Context
 import androidx.room.Database

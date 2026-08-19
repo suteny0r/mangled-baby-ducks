@@ -1,4 +1,4 @@
-package com.suteny0r.meshtastic.radio
+package com.suteny0r.mangledbabyducks.radio
 
 import kotlinx.coroutines.flow.Flow
 import org.meshtastic.proto.MeshProtos

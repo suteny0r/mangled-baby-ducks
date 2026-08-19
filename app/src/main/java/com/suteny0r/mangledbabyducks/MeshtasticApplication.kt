@@ -1,4 +1,4 @@
-package com.suteny0r.meshtastic
+package com.suteny0r.mangledbabyducks
 
 import android.app.Application
 

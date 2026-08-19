@@ -1,14 +1,14 @@
-package com.suteny0r.meshtastic.radio
+package com.suteny0r.mangledbabyducks.radio
 
 import android.util.Log
-import com.suteny0r.meshtastic.db.ChannelEntity
-import com.suteny0r.meshtastic.db.MeshDatabase
-import com.suteny0r.meshtastic.db.MessageEntity
-import com.suteny0r.meshtastic.db.MyInfoEntity
-import com.suteny0r.meshtastic.db.NodeEntity
-import com.suteny0r.meshtastic.db.PositionEntity
-import com.suteny0r.meshtastic.db.TelemetryEntity
-import com.suteny0r.meshtastic.db.UserEntity
+import com.suteny0r.mangledbabyducks.db.ChannelEntity
+import com.suteny0r.mangledbabyducks.db.MeshDatabase
+import com.suteny0r.mangledbabyducks.db.MessageEntity
+import com.suteny0r.mangledbabyducks.db.MyInfoEntity
+import com.suteny0r.mangledbabyducks.db.NodeEntity
+import com.suteny0r.mangledbabyducks.db.PositionEntity
+import com.suteny0r.mangledbabyducks.db.TelemetryEntity
+import com.suteny0r.mangledbabyducks.db.UserEntity
 import org.meshtastic.proto.ChannelProtos
 import org.meshtastic.proto.MeshProtos
 import org.meshtastic.proto.Portnums

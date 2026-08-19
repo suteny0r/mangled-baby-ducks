@@ -1,4 +1,4 @@
-package com.suteny0r.meshtastic.ui
+package com.suteny0r.mangledbabyducks.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -16,7 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.suteny0r.meshtastic.radio.RadioState
+import com.suteny0r.mangledbabyducks.radio.RadioState
 
 @Composable
 fun SettingsScreen(vm: SettingsViewModel = viewModel()) {

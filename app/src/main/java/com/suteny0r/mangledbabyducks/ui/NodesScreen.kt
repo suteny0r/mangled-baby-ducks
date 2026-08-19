@@ -1,4 +1,4 @@
-package com.suteny0r.meshtastic.ui
+package com.suteny0r.mangledbabyducks.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -22,7 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.suteny0r.meshtastic.db.NodeWithUser
+import com.suteny0r.mangledbabyducks.db.NodeWithUser
 
 @Composable
 fun NodesScreen(vm: NodesViewModel = viewModel()) {

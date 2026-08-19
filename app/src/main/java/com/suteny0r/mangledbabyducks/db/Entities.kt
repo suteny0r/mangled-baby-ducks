@@ -1,4 +1,4 @@
-package com.suteny0r.meshtastic.db
+package com.suteny0r.mangledbabyducks.db
 
 import androidx.room.Embedded
 import androidx.room.Entity

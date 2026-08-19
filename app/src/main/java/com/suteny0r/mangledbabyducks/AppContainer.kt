@@ -1,11 +1,11 @@
-package com.suteny0r.meshtastic
+package com.suteny0r.mangledbabyducks
 
 import android.content.Context
-import com.suteny0r.meshtastic.db.MeshDatabase
-import com.suteny0r.meshtastic.radio.BleScanner
-import com.suteny0r.meshtastic.radio.MessageNotifier
-import com.suteny0r.meshtastic.radio.PacketIngest
-import com.suteny0r.meshtastic.radio.RadioManager
+import com.suteny0r.mangledbabyducks.db.MeshDatabase
+import com.suteny0r.mangledbabyducks.radio.BleScanner
+import com.suteny0r.mangledbabyducks.radio.MessageNotifier
+import com.suteny0r.mangledbabyducks.radio.PacketIngest
+import com.suteny0r.mangledbabyducks.radio.RadioManager
 
 /** Manual singleton graph; the app is small enough not to need a DI framework yet. */
 class AppContainer(context: Context) {

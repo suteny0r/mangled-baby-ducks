@@ -1,4 +1,4 @@
-package com.suteny0r.meshtastic
+package com.suteny0r.mangledbabyducks
 
 import android.Manifest
 import android.os.Build
@@ -23,11 +23,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import com.suteny0r.meshtastic.ui.ConnectScreen
-import com.suteny0r.meshtastic.ui.MessagesScreen
-import com.suteny0r.meshtastic.ui.NodesScreen
-import com.suteny0r.meshtastic.ui.SettingsScreen
-import com.suteny0r.meshtastic.ui.theme.MeshtasticTheme
+import com.suteny0r.mangledbabyducks.ui.ConnectScreen
+import com.suteny0r.mangledbabyducks.ui.MessagesScreen
+import com.suteny0r.mangledbabyducks.ui.NodesScreen
+import com.suteny0r.mangledbabyducks.ui.SettingsScreen
+import com.suteny0r.mangledbabyducks.ui.theme.MeshtasticTheme
 
 private data class Tab(val label: String, val icon: ImageVector)
 
