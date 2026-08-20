@@ -1,121 +1,93 @@
-# Handoff — 2026-08-19 (~01:25)
+# Handoff — 2026-08-19 (~19:55)
 
 ## What this is
 Mangled Baby Ducks: an Android (Kotlin/Compose) Meshtastic-compatible client, ported from
 Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `app/src/main/proto`). Repo: https://github.com/suteny0r/mangled-baby-ducks (`main`,
-head `0b8cdbe`). All work is committed and pushed; the working tree is clean.
+head `d098769`). All work is committed and pushed; the working tree is clean.
+
+`CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
+invariants worth not breaking. Read it first; this file is the session log on top of it.
 
 ## Build / run
-- `gradlew.bat :app:assembleDebug` (JDK: Android Studio JBR via `org.gradle.java.home`
-  in gradle.properties; SDK path in local.properties).
-- Debug APK installs on the user's Galaxy Note 20 Ultra (adb serial `R5CN70YWT5Z`).
-- App auto-reconnects on launch to the remembered radio (DataStore).
+- PowerShell: `& .\gradlew.bat :app:assembleDebug` (JDK: Android Studio JBR via
+  `org.gradle.java.home` in gradle.properties; SDK path in local.properties).
+- Install: `adb -s R5CN70YWT5Z install -r app\build\outputs\apk\debug\app-debug.apk`
+  (the user's Galaxy Note 20 Ultra).
+- There are still no tests of any kind in the repo; verification is on the phone.
+
+## Current device state
+- The app is connected to SOBE, which is the single entry in its saved-radio list, and it
+  is the auto-connect target. Nothing else is remembered.
+- 47+ unread messages were sitting in the badge from the day's test traffic; harmless.
 
 ## Test rig (memory file `mesh-test-radios.md` has the full version)
-- Phone radio: "SOBE GAT562 30s" (📣), BLE `📣_9f4a` = ED:A6:3B:FA:9F:4A,
-  node 255142777 / `!0f352b79`. It sits on PC serial COM14, but **COM14 IS NOT TO BE
-  TOUCHED** (user instruction): opening it kicks the phone's BLE session. Reach SOBE
-  only through the app.
-- Test traffic sender: **Spiney Norman on COM3** (🦔_8e18).
-  `set PYTHONIOENCODING=utf-8; meshtastic --port COM3 --sendtext ... --dest '!0f352b79' --ack`
+- Phone radio: "SOBE GAT562 30s" (📣), BLE `📣_9f4a` = ED:A6:3B:FA:9F:4A. It normally sits
+  on PC serial COM14, but **COM14 IS NOT TO BE TOUCHED** (user instruction): opening it
+  kicks the phone's BLE session. Reach SOBE only through the app. (COM14 was not even
+  enumerated on 2026-08-19 evening; ports present were COM3, COM5, COM18.)
+- SOBE's node num is now **`!1eff739f`**. The **`!0f352b79`** node in mesh node DBs is a
+  stale duplicate carrying the same public key — address DM tests to `!1eff739f`.
+- Test traffic sender: **Spiney Norman on COM3** (🦔_8e18 = 3C:DC:75:6F:8E:19).
+  `set PYTHONIOENCODING=utf-8; meshtastic --port COM3 --sendtext ... --dest '!1eff739f' --ack`
+  `meshtastic --port COM3 --nodes` is the quickest way to see whether a radio is alive.
 - Spanky Ham (🐷) at 192.168.20.129 (TCP): unreliable LoRa path, don't rely on it.
-- **Never use 6abc or swaffelen for tests** (user instruction).
-- Channels on all nodes: 0 = unnamed Primary, 1 = "LongPrivate" (swaffelen has ONLY LongPrivate).
+- **Never use 6abc (🍆_6abc, 10:20:BA:6A:6A:BD) or swaffelen for tests** (user instruction).
+- Other bonded radios that are NOT SOBE: "Peewee Herman" 🐭_4fae (CD:12:B4:98:4F:AE,
+  `!b4984fae`, WISMESH_TAG, low battery, drops off BLE) and "Pickle Rick" 🥒_f1e4
+  (E1:B4:D6:DE:F1:E4). The app had been remembering Peewee Herman, which is what looked
+  like a connection bug for most of a session.
+- Channels on all nodes: 0 = unnamed Primary, 1 = "LongPrivate" (swaffelen has ONLY
+  LongPrivate).
 - Re-flash key-mismatch lesson: stale public keys make DMs NAK with error 39;
   fix = Settings > "Broadcast node info" on the re-flashed radio.
 
-## Startup reconnect loop (diagnosed and fixed 2026-08-19 ~18:45, on device)
-Symptom: on launch the app connected, dropped, reconnected, repeated, or sat stalled.
+## Connection lifecycle: what was wrong and what must stay true
+Symptom (reported twice): on launch the app cycled "connecting / connection lost /
+reconnecting" or stalled, and never said which radio it was reaching for.
 
-Cause, from logcat: two attempt loops drove `establish()` at the same time. Any
-unrequested BLE disconnect (which now includes a failed connect) fired
-`scheduleReconnect`, while `connect()`'s own 3-attempt loop was still running, so the
-stack registered two GATT clients for the same radio (`clientIf 7` **and** `8`,
-interleaved "Connect attempt N/3" and "Reconnect attempt N" lines) and each cancelled
-the other's connection. `MainActivity` made it worse: onCreate, the permission callback
-and every onResume all called `autoConnectIfRemembered`, whose state guard sat behind a
-suspending DataStore read, and it retried from `Failed`, so every resume re-armed the
-loop. A link drop during the node-DB step also waited out the full 120 s nonce timeout,
-which was the "hang".
+Root cause, straight out of logcat: **two attempt loops driving `establish()` at once** —
+`connect()`'s own 3-attempt retry plus the reconnect fired by any unrequested BLE
+disconnect, which a failed connect also is. Both registered a GATT client for the same
+radio (`clientIf 7` *and* `8` connecting simultaneously, interleaved "Connect attempt N/3"
+and "Reconnect attempt N" lines) and each cancelled the other. `MainActivity` re-armed it
+from onCreate, the permission result and every onResume, with a state guard sitting behind
+a suspending DataStore read. A drop during the node-DB step also waited out the full 120 s
+nonce timeout — that was the "hang".
 
-Fix (`RadioManager` + `MainActivity`):
-- `attemptLock` (Mutex) + `requestGeneration`: `runAttempts` is the only caller of
-  `establish`, one loop at a time, and an older loop aborts when a newer request lands.
-- Event collectors are tagged with their connection; events from a superseded link are
-  dropped, so a dying predecessor cannot reconnect or fail the live session.
-- Only a session that finished the handshake (`sessionWentLive`) may auto-reconnect;
-  failures inside `establish` complete a `linkLost` deferred that aborts the handshake
-  immediately, and the owning loop does the retrying.
-- `awaitConfigComplete` subscribes UNDISPATCHED (a fast nonce echo could previously be
-  emitted before the collector existed) and no longer leaks its waiter on timeout.
-- Attempt loops always land on a terminal `Failed`; auto-connect is an atomic claim with
-  a 20 s cooldown (`tryClaimAutoConnect`).
+Invariants now in `RadioManager` (do not relax any of these):
+- `attemptLock` + `requestGeneration`: `runAttempts` is the only caller of `establish`,
+  one loop at a time, and an older loop aborts as soon as a newer request lands.
+- Event collectors are tagged with their connection; a superseded link's events are
+  dropped so a dying predecessor cannot fail or reconnect the live session.
+- Only a session that finished the handshake (`sessionWentLive`) may auto-reconnect. A
+  drop inside `establish` completes the `linkLost` deferred, which aborts the handshake at
+  once; the owning loop owns the retrying.
+- `awaitConfigComplete` subscribes UNDISPATCHED (a fast nonce echo could otherwise be
+  emitted before the collector existed) and does not leak its waiter on timeout.
+- `autoConnect()` spends exactly **one** automatic attempt per process. A radio that is
+  off or out of range is never chased in the background; the Connect tab is the way back.
+- `Connecting(attempt, of)` is for a link that was never up; `Reconnecting(attempt)` only
+  for one that had been live. Every in-progress state names its target radio.
 
-Second round, after the user reported the churn was still visible: the storm was gone
-(logs show single bursts of 3 sequential attempts) but the *experience* was still a loop,
-because a) each burst rendered as "Connecting… / Connection lost, reconnecting (attempt
-2)… / …" for ~21 s, b) every burst was re-armed on resume once the cooldown expired, and
-c) no state except `Subscribed` named the radio, so the user could not see what it was
-reaching for. Fixed:
-- `RadioState.Connecting(attempt, of)` is now distinct from `Reconnecting(attempt)`,
-  which is only used for a link that had actually been live. Wording matches.
-- `RadioManager.autoConnect()` spends **one** automatic attempt per process (CAS), so a
-  radio that is off or out of range is never chased in the background. The resume-driven
-  cooldown retry is gone.
-- `_deviceName` is set before the first attempt, and the Connect card names the target in
-  every state ("Connecting to 📣_9f4a…", "Could not reach 🐭_4fae").
-- The Connect card now shows the remembered radio (label + address) with **Reconnect**
-  and **Forget** buttons whenever idle or failed — the only way back after auto-connect is
-  spent, and the way to drop a dead remembered radio without scanning.
-- `AppContainer.rememberedRadio()` / `connectionFactory()` / `forgetRadio()` are shared by
-  MainActivity and ConnectViewModel, so the two paths cannot drift.
-
-Third round: the app only ever stored **one** radio (`radio_type`/`radio_address`/
-`radio_name`), and Disconnect deleted it, so every reconnect meant a fresh scan. Added a
-saved-radio list:
-- `PrefKeys.KNOWN_RADIOS` holds a JSON array (`org.json`, no new dependency) of
-  `RememberedRadio(type, address, name, lastConnectedMs)`, most-recent-first, capped at 12.
-  `Preferences.knownRadios()` migrates a pre-list install by folding in its single
-  auto-connect target.
-- `AppContainer.rememberRadio()` is called on every successful connect (scan list, saved
-  list, TCP, and auto-connect) and both sets the auto-connect target and upserts the list
-  entry with a fresh timestamp.
-- **Disconnect no longer forgets the radio**: it clears the auto-connect target
-  (`clearAutoConnectTarget()`) so the app does not grab it on next launch, but the entry
-  stays in the list. `forgetRadio(address)` is the explicit delete, from the row's Forget
-  button.
-- The Connect tab shows "Saved radios" above the scan results: label, address, live
-  "in range <rssi>" when the scan currently sees it, "last used <relative>", a Connect
-  button (or "Connected"), and Forget. Scan results exclude anything already saved.
-
-Verified on device (2026-08-19 19:44-19:46): connect from the scan list saved 📣_9f4a, and
-a force-stop + relaunch auto-connected to it with a single GATT connect while the Connect
-tab listed it as "Saved radios → 📣_9f4a, last used just now, Connected".
-
-Note the prefs were wiped once mid-session: a Disconnect on the pre-list build deleted the
-only stored radio, which is why a relaunch then did nothing at all (no target to connect
-to). That failure mode is gone with the list.
-
-Verified on device (2026-08-19 19:24-19:29): one burst of 3 sequential attempts then a
-terminal "Could not reach 🐭_4fae"; three home/resume cycles added zero attempts; then a
-scan showed SOBE advertising, connect-from-scan reached `Subscribed` ("Connected to
-📣_9f4a", node DB loaded), and a force-stop + relaunch auto-connected to SOBE on the first
-attempt (1 GATT connect, MTU 247). The app is now pointed at SOBE again.
-
-Why nothing would connect: the remembered radio in DataStore was **CD:12:B4:98:4F:AE =
-🐭_4fae = "Peewee Herman"** (!b4984fae, WISMESH_TAG, last seen at 4% battery), not SOBE,
-and it was not advertising (GATT 133 on every attempt; a scan at 19:26 showed 🍆_6abc,
-📣_9f4a and 🦔_8e18 but no 🐭_4fae). Note SOBE's node num is now **!1eff739f**; the
-**!0f352b79** entry in these notes is a stale duplicate with the same public key. Its BLE
-identity (📣_9f4a / ED:A6:3B:FA:9F:4A) is unchanged.
+Radio memory is two separate things (conflating them caused a lost-radio incident):
+`RADIO_TYPE`/`RADIO_ADDRESS`/`RADIO_NAME` are the auto-connect target, cleared by a
+deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, capped at 12,
+`lastConnectedMs` for ordering) that only Forget deletes from.
+`AppContainer.rememberRadio()` writes both and is the only writer.
 
 ## Verified working on hardware
-- BLE connect pipeline (MTU 512, wantConfig/wantDatabase nonces 69420/69421), TCP framing,
-  initial-connect retry (3x), auto-reconnect (BT-off detection via adapter receiver;
-  reconnected in 1 attempt), heartbeat watchdog for TCP.
+- Connect flow (2026-08-19 19:24-19:46): one bounded burst of 3 sequential attempts against
+  an unreachable radio, one GATT client at a time, ending in a terminal "Could not reach
+  🐭_4fae"; resume cycles adding zero attempts; scan → Connect reaching `Subscribed`
+  ("Connected to 📣_9f4a", node DB loaded, MTU 247); force-stop → relaunch auto-connecting
+  on the first attempt; saved list rendering "📣_9f4a • ED:A6:3B:FA:9F:4A • last used just
+  now • Connected".
+- BLE connect pipeline (wantConfig/wantDatabase nonces 69420/69421), TCP framing,
+  auto-reconnect (BT-off detection via adapter receiver), heartbeat watchdog for TCP.
 - Messaging: channels + DMs, acks (✓/✓✓), 200-byte composer, tapbacks (👍 verified over
-  LoRa), replies, DM-from-node-list, notification deep links, per-message notifications.
+  LoRa), replies, DM-from-node-list, notification deep links, per-message notifications,
+  unread badge on the Messages tab.
 - Nodes list + node detail (identity/link/position, 48h battery & channel-util charts,
   key-mismatch warning).
 - Traceroute: verified to CAVE-GAT562, per-hop names + SNR both directions.
@@ -129,6 +101,7 @@ identity (📣_9f4a / ED:A6:3B:FA:9F:4A) is unchanged.
   key-mismatch), channel QR export (byte-identical to independent encoder) and URL import
   preview (Apply implemented, NOT fired), phone GPS sharing (OS-level HIGH_ACCURACY
   request verified; no indoor fix; toggle left OFF).
+- Retention pruning of positions/telemetry (30 days) runs on connect.
 
 ## Deliberately not done
 - MQTT client proxy: radio has MQTT disabled → untestable, and enabling bridges the
@@ -136,24 +109,42 @@ identity (📣_9f4a / ED:A6:3B:FA:9F:4A) is unchanged.
 - Config writes (LoRa region/preset/hop-limit, device role, channel-set Apply) are
   implemented but never fired at the radio — they save+reboot it. Exercise with a no-op
   write first (e.g. re-set the current region) when the user wants them proven.
+- Seeding the saved-radio list from the OS bonded-device list: the bond list is full of
+  unrelated devices (car, Sonos, watch) and does not reliably expose the Meshtastic
+  service UUID, so filtering would be name-pattern guesswork. Offered to the user, not
+  taken up.
 
 ## Known gaps / next candidates
-1. Fire a safe no-op set_config to prove the admin edit-transaction write path.
-2. Notification tap while app is foreground on the same thread: no read-state sync of the
-   notification shade (minor).
-3. Nodes list live re-sort makes rows jump under a finger (same for scan list, fixed there
-   by stable sort; consider for nodes).
-4. Telemetry charts only battery/channel-util; environment metrics stored but unplotted.
-5. Traceroute has no timeout state; a lost reply stays "pending" forever.
-6. Positions/telemetry tables grow unbounded; add retention pruning.
-7. Waypoint edit/delete UI; expiry option in the dialog.
-8. Messages: unread badges on the Messages tab icon; channel names in thread list use
-   index only for unnamed secondaries.
-9. QR scanning (import is paste-URL only; export QR is scannable by other apps).
-10. iOS-parity extras not started: MQTT proxy, range test, detection sensor UI, store &
+1. Blind MAC connects: a remembered radio that is not advertising costs ~5 s per attempt
+   and returns GATT 133. iOS scans first and connects when the radio is seen — worth
+   doing, and it would let the UI say "not in range" instead of "could not reach".
+2. `RadioService`'s notification always reads "Connected to <name>", including while an
+   attempt is still running or after it failed.
+3. Fire a safe no-op set_config to prove the admin edit-transaction write path.
+4. Notification tap while the app is foreground on the same thread: no read-state sync of
+   the notification shade (minor).
+5. Nodes list live re-sort makes rows jump under a finger (scan list was fixed with a
+   stable sort; do the same for nodes).
+6. Telemetry charts only battery/channel-util; environment metrics stored but unplotted.
+7. Traceroute has no timeout state; a lost reply stays "pending" forever.
+8. Waypoint edit/delete UI; expiry option in the dialog.
+9. Messages: channel names in the thread list use the index only for unnamed secondaries.
+10. QR scanning (import is paste-URL only; export QR is scannable by other apps).
+11. Saved-radio row is cramped when connected ("Connected" + Forget side by side).
+12. iOS-parity extras not started: MQTT proxy, range test, detection sensor UI, store &
     forward history, remote admin (session passkey), position exchange action.
 
 ## Gotchas learned (do not relearn)
+- **One attempt loop at a time.** Two concurrent connect drivers register two GATT clients
+  for the same radio and cancel each other; that is what the whole reconnect-loop bug was.
+  Anything that fires repeatedly (onResume, permission callbacks) must go through
+  `autoConnect`, not its own state check.
+- **GATT 133 on every attempt means the radio is not advertising**, not that the app is
+  broken. Check the remembered address first (`adb shell dumpsys bluetooth_manager` for
+  bonded names, the Connect tab's scan for what is actually in range, and
+  `meshtastic --port COM3 --nodes` for whether the node is alive on LoRa).
+- Diagnosing connection churn: filter logcat for `clientConnect(com.suteny0r` and
+  `clientIf` — two client interfaces at once is the tell for a double driver.
 - AndroidView `update` must read Compose state SYNCHRONOUSLY; reads inside deferred
   callbacks (getMapAsync) are not snapshot-tracked (fixed in `795daf5`, cost a debug cycle).
 - Room `my_info` single-row LIMIT 1 needs the row cleared on cross-radio switch (fixed).
@@ -163,3 +154,8 @@ identity (📣_9f4a / ED:A6:3B:FA:9F:4A) is unchanged.
   detects it, and reconnect can succeed immediately.
 - gradle must run via PowerShell `& .\gradlew.bat` (cmd /c chaining fails in this harness);
   multiline `python -c` also fails in Git Bash here — write scripts to the scratchpad.
+- Screenshots: `adb exec-out screencap -p > file.png` through a PowerShell redirect
+  corrupts the PNG (BOM/encoding). Use `adb shell screencap -p /sdcard/x.png` then
+  `adb pull`.
+- Git Bash rewrites `/data/...` paths in adb shell arguments; prefix the command with
+  `MSYS_NO_PATHCONV=1` when reading app-private files via `run-as`.
