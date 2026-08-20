@@ -214,19 +214,33 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     val nodeCount: StateFlow<Int> = container.database.nodeDao().count()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
-    val loraConfig: StateFlow<ConfigProtos.Config.LoRaConfig?> =
-        container.database.configDao().config("config.lora")
+    /**
+     * One config section, parsed from the raw proto bytes the radio sent. Sections the
+     * radio has not reported yet stay null, which is what the UI shows as "waiting".
+     */
+    private fun <T> configFlow(key: String, extract: (ConfigProtos.Config) -> T): StateFlow<T?> =
+        container.database.configDao().config(key)
             .map { entity ->
-                entity?.let { runCatching { ConfigProtos.Config.parseFrom(it.bytes).lora }.getOrNull() }
+                entity?.let { runCatching { extract(ConfigProtos.Config.parseFrom(it.bytes)) }.getOrNull() }
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    val loraConfig: StateFlow<ConfigProtos.Config.LoRaConfig?> =
+        configFlow("config.lora") { it.lora }
     val deviceConfig: StateFlow<ConfigProtos.Config.DeviceConfig?> =
-        container.database.configDao().config("config.device")
-            .map { entity ->
-                entity?.let { runCatching { ConfigProtos.Config.parseFrom(it.bytes).device }.getOrNull() }
-            }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+        configFlow("config.device") { it.device }
+    val bluetoothConfig: StateFlow<ConfigProtos.Config.BluetoothConfig?> =
+        configFlow("config.bluetooth") { it.bluetooth }
+    val displayConfig: StateFlow<ConfigProtos.Config.DisplayConfig?> =
+        configFlow("config.display") { it.display }
+    val networkConfig: StateFlow<ConfigProtos.Config.NetworkConfig?> =
+        configFlow("config.network") { it.network }
+    val positionConfig: StateFlow<ConfigProtos.Config.PositionConfig?> =
+        configFlow("config.position") { it.position }
+    val powerConfig: StateFlow<ConfigProtos.Config.PowerConfig?> =
+        configFlow("config.power") { it.power }
+    val securityConfig: StateFlow<ConfigProtos.Config.SecurityConfig?> =
+        configFlow("config.security") { it.security }
 
     val myUser: StateFlow<UserEntity?> = container.radioManager.myNodeNum
         .flatMapLatest { num ->
@@ -266,22 +280,49 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Write an edited LoRa config; the radio saves and usually reboots. */
-    fun writeLoraConfig(lora: ConfigProtos.Config.LoRaConfig) {
+    private val _writeResult = MutableStateFlow<Boolean?>(null)
+
+    /** Result of the last config write, or null while one is in flight / none has run. */
+    val writeResult: StateFlow<Boolean?> = _writeResult.asStateFlow()
+
+    fun clearWriteResult() {
+        _writeResult.value = null
+    }
+
+    /**
+     * Write one config section; the radio saves and usually reboots, so every screen
+     * batches a whole section into a single write rather than one write per field.
+     */
+    private fun writeConfig(build: ConfigProtos.Config.Builder.() -> Unit) {
         viewModelScope.launch {
-            container.radioManager.setConfig(
-                ConfigProtos.Config.newBuilder().setLora(lora).build()
+            _writeResult.value = null
+            _writeResult.value = container.radioManager.setConfig(
+                ConfigProtos.Config.newBuilder().apply(build).build()
             )
         }
     }
 
-    fun writeDeviceConfig(device: ConfigProtos.Config.DeviceConfig) {
-        viewModelScope.launch {
-            container.radioManager.setConfig(
-                ConfigProtos.Config.newBuilder().setDevice(device).build()
-            )
-        }
-    }
+    fun writeLoraConfig(lora: ConfigProtos.Config.LoRaConfig) = writeConfig { setLora(lora) }
+
+    fun writeDeviceConfig(device: ConfigProtos.Config.DeviceConfig) =
+        writeConfig { setDevice(device) }
+
+    fun writeBluetoothConfig(bluetooth: ConfigProtos.Config.BluetoothConfig) =
+        writeConfig { setBluetooth(bluetooth) }
+
+    fun writeDisplayConfig(display: ConfigProtos.Config.DisplayConfig) =
+        writeConfig { setDisplay(display) }
+
+    fun writeNetworkConfig(network: ConfigProtos.Config.NetworkConfig) =
+        writeConfig { setNetwork(network) }
+
+    fun writePositionConfig(position: ConfigProtos.Config.PositionConfig) =
+        writeConfig { setPosition(position) }
+
+    fun writePowerConfig(power: ConfigProtos.Config.PowerConfig) = writeConfig { setPower(power) }
+
+    fun writeSecurityConfig(security: ConfigProtos.Config.SecurityConfig) =
+        writeConfig { setSecurity(security) }
 
     private val _broadcastResult = MutableStateFlow<Boolean?>(null)
     val broadcastResult: StateFlow<Boolean?> = _broadcastResult.asStateFlow()

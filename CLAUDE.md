@@ -125,6 +125,15 @@ into `org.meshtastic.proto` (`java_package` set in the protos; outer classes `Me
 protos from `F:\Meshtastic-Apple\MeshtasticProtobufs` and rebuild; never hand-edit generated
 code.
 
+**Radio config UI**: `ui/ConfigScreens.kt` has one form per config section, reached from
+the Settings tab's "Radio configuration" list (a sub-screen held in local state plus
+`BackHandler`, not a nav graph). Each form edits a **draft** of the section's proto and
+writes it with a single Save, because every `setConfig` makes the radio save and reboot.
+`SettingsViewModel.configFlow(key, extract)` parses one section out of the stored raw
+bytes; `writeConfig {}` is the single write helper. Proto `uint32` fields arrive as signed
+`Int`, so number rows render and parse them unsigned (`0xFFFFFFFF` is a firmware
+"disabled" sentinel, not -1); genuinely signed fields like `tx_power` opt out.
+
 **UI** (`ui/`): the `navigation-compose` dependency is present but unused. Navigation is a
 `when (selected)` switch in `MainActivity` over five tabs, with cross-tab state in `Router`
 (`selectedTab` plus a one-shot `pendingThread` consumed by the Messages tab). Notification deep

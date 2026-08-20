@@ -2,6 +2,7 @@ package com.suteny0r.mangledbabyducks.ui
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -13,14 +14,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -30,6 +34,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,27 +45,44 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import com.suteny0r.mangledbabyducks.radio.RadioState
 import org.meshtastic.proto.AppOnlyProtos
-import org.meshtastic.proto.ConfigProtos
 
 @Composable
 fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
     val myInfo by vm.myInfo.collectAsState()
     val state by vm.state.collectAsState()
     val nodeCount by vm.nodeCount.collectAsState()
-    val lora by vm.loraConfig.collectAsState()
-    val device by vm.deviceConfig.collectAsState()
     val myUser by vm.myUser.collectAsState()
     val shareLocation by vm.shareLocation.collectAsState()
 
     var editingOwner by remember { mutableStateOf(false) }
     var showExport by remember { mutableStateOf(false) }
     var showImport by remember { mutableStateOf(false) }
-    var editRegion by remember { mutableStateOf(false) }
-    var editPreset by remember { mutableStateOf(false) }
-    var editHopLimit by remember { mutableStateOf(false) }
-    var editRole by remember { mutableStateOf(false) }
+
+    // Settings is a tab, not a nav graph, so a config section is a sub-screen held in
+    // local state with the system back gesture wired to it.
+    var section by rememberSaveable { mutableStateOf<ConfigSection?>(null) }
 
     val connected = state is RadioState.Subscribed
+
+    section?.let { open ->
+        BackHandler { section = null }
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { section = null }) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                }
+                Text(open.title, style = MaterialTheme.typography.headlineSmall)
+            }
+            ConfigSectionDetail(open, vm, connected)
+        }
+        return
+    }
 
     Column(
         Modifier
@@ -143,84 +165,17 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
             }
         }
 
-        Text("LoRa", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "Writing LoRa or device config saves to the radio and usually reboots it.",
-            style = MaterialTheme.typography.bodySmall,
-        )
+        Text("Radio configuration", style = MaterialTheme.typography.titleMedium)
         Card(Modifier.fillMaxWidth()) {
             Column {
-                ListItem(
-                    headlineContent = { Text("Region") },
-                    supportingContent = { Text(lora?.region?.name ?: "—") },
-                    modifier = Modifier.clickable(enabled = connected && lora != null) {
-                        editRegion = true
-                    },
-                )
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text("Modem preset") },
-                    supportingContent = {
-                        Text(
-                            lora?.let {
-                                if (it.usePreset) it.modemPreset.name
-                                else "custom (bw ${it.bandwidth}, sf ${it.spreadFactor}, cr ${it.codingRate})"
-                            } ?: "—",
-                        )
-                    },
-                    modifier = Modifier.clickable(enabled = connected && lora != null) {
-                        editPreset = true
-                    },
-                )
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text("Hop limit") },
-                    supportingContent = { Text(lora?.hopLimit?.toString() ?: "—") },
-                    modifier = Modifier.clickable(enabled = connected && lora != null) {
-                        editHopLimit = true
-                    },
-                )
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text("Transmit") },
-                    supportingContent = {
-                        Text(
-                            lora?.let {
-                                if (it.txEnabled) "enabled, ${it.txPower} dBm" else "disabled"
-                            } ?: "—",
-                        )
-                    },
-                )
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text("Frequency slot") },
-                    supportingContent = { Text(lora?.channelNum?.toString() ?: "—") },
-                )
-            }
-        }
-
-        Text("Device", style = MaterialTheme.typography.titleMedium)
-        Card(Modifier.fillMaxWidth()) {
-            Column {
-                ListItem(
-                    headlineContent = { Text("Role") },
-                    supportingContent = { Text(device?.role?.name ?: "—") },
-                    modifier = Modifier.clickable(enabled = connected && device != null) {
-                        editRole = true
-                    },
-                )
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text("Node info broadcast") },
-                    supportingContent = {
-                        Text(device?.nodeInfoBroadcastSecs?.let { "every ${it}s" } ?: "—")
-                    },
-                )
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text("Time zone") },
-                    supportingContent = { Text(device?.tzdef?.ifEmpty { "—" } ?: "—") },
-                )
+                ConfigSection.entries.forEachIndexed { index, entry ->
+                    if (index > 0) HorizontalDivider()
+                    ListItem(
+                        headlineContent = { Text(entry.title) },
+                        supportingContent = { Text(entry.summary) },
+                        modifier = Modifier.clickable { section = entry },
+                    )
+                }
             }
         }
 
@@ -258,101 +213,6 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
     if (showImport) {
         ChannelImportDialog(vm, onDismiss = { showImport = false })
     }
-    lora?.let { current ->
-        if (editRegion) {
-            EnumPickerDialog(
-                title = "LoRa region",
-                options = ConfigProtos.Config.LoRaConfig.RegionCode.entries
-                    .filter { it != ConfigProtos.Config.LoRaConfig.RegionCode.UNRECOGNIZED },
-                selected = current.region,
-                label = { it.name },
-                onDismiss = { editRegion = false },
-                onPick = {
-                    vm.writeLoraConfig(current.toBuilder().setRegion(it).build())
-                    editRegion = false
-                },
-            )
-        }
-        if (editPreset) {
-            EnumPickerDialog(
-                title = "Modem preset",
-                options = ConfigProtos.Config.LoRaConfig.ModemPreset.entries
-                    .filter { it != ConfigProtos.Config.LoRaConfig.ModemPreset.UNRECOGNIZED },
-                selected = current.modemPreset,
-                label = { it.name },
-                onDismiss = { editPreset = false },
-                onPick = {
-                    vm.writeLoraConfig(
-                        current.toBuilder().setModemPreset(it).setUsePreset(true).build()
-                    )
-                    editPreset = false
-                },
-            )
-        }
-        if (editHopLimit) {
-            EnumPickerDialog(
-                title = "Hop limit",
-                options = (1..7).toList(),
-                selected = current.hopLimit,
-                label = { it.toString() },
-                onDismiss = { editHopLimit = false },
-                onPick = {
-                    vm.writeLoraConfig(current.toBuilder().setHopLimit(it).build())
-                    editHopLimit = false
-                },
-            )
-        }
-    }
-    device?.let { current ->
-        if (editRole) {
-            EnumPickerDialog(
-                title = "Device role",
-                options = ConfigProtos.Config.DeviceConfig.Role.entries
-                    .filter { it != ConfigProtos.Config.DeviceConfig.Role.UNRECOGNIZED },
-                selected = current.role,
-                label = { it.name },
-                onDismiss = { editRole = false },
-                onPick = {
-                    vm.writeDeviceConfig(current.toBuilder().setRole(it).build())
-                    editRole = false
-                },
-            )
-        }
-    }
-}
-
-@Composable
-private fun <T> EnumPickerDialog(
-    title: String,
-    options: List<T>,
-    selected: T,
-    label: (T) -> String,
-    onDismiss: () -> Unit,
-    onPick: (T) -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                options.forEach { option ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onPick(option) },
-                    ) {
-                        RadioButton(selected = option == selected, onClick = { onPick(option) })
-                        Text(label(option))
-                    }
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        },
-    )
 }
 
 @Composable

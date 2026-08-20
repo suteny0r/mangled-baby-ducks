@@ -1,4 +1,4 @@
-# Handoff — 2026-08-19 (~21:00)
+# Handoff — 2026-08-19 (~21:45)
 
 ## What this is
 Mangled Baby Ducks: an Android (Kotlin/Compose) Meshtastic-compatible client, ported from
@@ -17,6 +17,9 @@ invariants worth not breaking. Read it first; this file is the session log on to
 - There are still no tests of any kind in the repo; verification is on the phone.
 
 ## Current device state
+- **Radio config editing shipped for all 8 sections** (LoRa, Device, Position, Bluetooth,
+  Display, Network, Power, Security) and the write path is now proven on hardware. See
+  "Config sections" below.
 - Connected to **📣_9f4a (SOBE)**, which is the auto-connect target again. The saved-radio
   list holds SOBE and **🐭_4fae (Peewee Herman)**, which is powered off (it was used to
   test the not-in-range path).
@@ -91,6 +94,22 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
 `lastConnectedMs` for ordering) that only Forget deletes from.
 `AppContainer.rememberRadio()` writes both and is the only writer.
 
+## Config sections (Settings → Radio configuration)
+`ui/ConfigScreens.kt` holds one form per section plus the shared rows/dialogs;
+`SettingsScreen` is now a list that opens a section as a sub-screen (local state +
+`BackHandler`, since navigation is still a tab switch, not a nav graph).
+
+- Sections read from the raw proto rows already stored by `PacketIngest`
+  (`config.<payloadVariantCase.lowercase()>`), so no schema change was needed.
+- **Each section is a draft edited locally and written by one Save button.** Every write
+  makes the radio save and reboot, so one write per toggled field would mean a reboot per
+  tap. `Revert` restores the radio's values; the draft is keyed on the incoming config, so
+  a fresh config dump (which is what a successful save produces) replaces it.
+- `SettingsViewModel` gained `configFlow(key, extract)` and one `writeConfig {}` helper;
+  adding a section is two lines there plus a form.
+- Not editable on purpose: the security private key (read-only "set"/"not set"; the public
+  key is shown base64) and anything under `module.*` (no module config UI yet).
+
 ## Verified working on hardware
 - Scan-before-connect, radio present (2026-08-19 20:47): auto-connect started a filtered
   scan, saw SOBE 739 ms later, then issued the single GATT connect and negotiated MTU 247.
@@ -126,6 +145,13 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
   shared on LongPrivate). Labels: Noto Sans glyphs only, emoji stripped (SDF servers have
   no emoji). A test waypoint "MBD test" (never expires) exists on LongPrivate — delete by
   sending an empty-name waypoint with the same id (in `waypoints` table) if unwanted.
+- **Config write path proven end to end (2026-08-19 21:36-21:38)**: Display section,
+  `heading_bold` false → true → Save. Radio stored it and rebooted (link lost, GATT 133 on
+  attempts 1-2, "Connected after 3 attempt(s)"), and the fresh config dump came back with
+  the new value (Save greyed, Revert gone). Then set back to false the same way, so SOBE is
+  as it was. All six new sections were also opened against the live radio and render its
+  real values (Security shows the public key and `serial_enabled` on, Position decodes the
+  flag bitmask, Network/Power/Bluetooth populated).
 - Settings: owner rename dialog (send path implemented, NOT test-fired), LoRa/Device
   config display from stored raw proto sections, Broadcast node info (verified, fixed the
   key-mismatch), channel QR export (byte-identical to independent encoder) and URL import
@@ -136,9 +162,9 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
 ## Deliberately not done
 - MQTT client proxy: radio has MQTT disabled → untestable, and enabling bridges the
   user's mesh to the public broker. Decision documented in commit `0b8cdbe`.
-- Config writes (LoRa region/preset/hop-limit, device role, channel-set Apply) are
-  implemented but never fired at the radio — they save+reboot it. Exercise with a no-op
-  write first (e.g. re-set the current region) when the user wants them proven.
+- Channel-set Apply is still implemented-but-never-fired (it REPLACES the radio's
+  channels). Config `setConfig` writes are now proven (see above); the admin
+  begin/set/commit transaction is the same path for both.
 - Seeding the saved-radio list from the OS bonded-device list: the bond list is full of
   unrelated devices (car, Sonos, watch) and does not reliably expose the Meshtastic
   service UUID, so filtering would be name-pattern guesswork. Offered to the user, not
@@ -151,7 +177,10 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
    only what is missing, and only when it is needed.
 2. `RadioService`'s notification always reads "Connected to <name>", including while an
    attempt is still running or after it failed.
-3. Fire a safe no-op set_config to prove the admin edit-transaction write path.
+3. Config forms are a flat field list per section: no grouping, no "advanced" disclosure,
+   no per-field validation beyond number/decimal parsing, and no interval pickers (iOS has
+   `UpdateIntervalPicker`). Sentinel values are shown raw (super deep sleep reads
+   `4294967295 s` rather than "disabled").
 4. Notification tap while the app is foreground on the same thread: no read-state sync of
    the notification shade (minor).
 5. Nodes list live re-sort makes rows jump under a finger (scan list was fixed with a
@@ -165,8 +194,23 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
 12. Android throttles an app to 5 scan starts per 30 s. The reconnect loop probes on
     attempts 2+, so a long recovery can hit that ceiling; the probe then reports "not
     visible" and the loop just backs off, but recovery is slower than it looks.
-13. iOS-parity extras not started: MQTT proxy, range test, detection sensor UI, store &
-    forward history, remote admin (session passkey), position exchange action.
+13. Module configs (`module.*`): 0 of iOS's 17 screens. MQTT, Telemetry, Position and
+    Store & Forward are the ones people actually change.
+14. Parity assessment (2026-08-19): the port covers the daily-driver core, roughly 15-20%
+    of the iOS surface (461 Swift files / ~111k lines vs 27 Kotlin files / ~5.6k). At
+    parity: transports, handshake, messaging with acks/tapbacks/replies, notifications,
+    channel QR, waypoints, traceroute, first-wins keys. Partial: node detail (4 charts vs
+    9 metric logs with tables + CSV), telemetry ingest (no air-quality/power/local-stats/
+    pax rows), map (no clustering, offline tiles, geofence), node list (no filter/search),
+    channels (no per-channel edit, no mute). Missing outright: 9 of 10 iOS node actions
+    (delete, ignore, exchange position/user info, local stats, client history, alerts,
+    navigate-to) plus reboot/shutdown/refresh-metadata, remote admin (no `sessionPasskey`
+    anywhere), firmware OTA/DFU, MQTT proxy, TAK, device profile import/export, backup
+    management, log/packet viewers, mesh discovery, route recording, lockdown, WiFi
+    provisioning, onboarding, App Intents/CarPlay/Watch, weather + compact widgets, NFC and
+    contact QR, serial transport, and localization (18 languages vs English only).
+    Next by value: favorite/ignore through admin (both DB fields exist and lie today),
+    then the no-schema node actions, then node list filter/search.
 
 ## Gotchas learned (do not relearn)
 - **One attempt loop at a time.** Two concurrent connect drivers register two GATT clients
@@ -181,6 +225,10 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
   `clientIf` — two client interfaces at once is the tell for a double driver. A working
   scan-then-connect looks like `BluetoothLeScanner: Start Scan with callback` followed by
   one `clientConnect` under a second later.
+- **Proto `uint32` is a signed `Int` in the generated Java.** The Power section showed
+  super deep sleep as `-1 s` until the number rows rendered/parsed unsigned
+  (`toUInt()` / `toUIntOrNull()`); `tx_power` is a real `int32` and stays signed. Same
+  family of bug as node numbers needing `Int.uint()`.
 - Kotlin trap hit while adding the probe: appending an optional parameter AFTER a trailing
   `() -> T` parameter silently rebinds every `f(x) { ... }` call site to the new parameter
   (a `fun interface` SAM-converts happily). `factory` must stay last in
@@ -192,6 +240,9 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
   `glyphs` URL for symbol layers.
 - Samsung "BT off" keeps BLE_ON: GATT dies silently; the adapter-state receiver is what
   detects it, and reconnect can succeed immediately.
+- `lintDebug` already failed at HEAD before this session's work: two
+  `ProduceStateDoesNotAssignValue` errors in `MessagesScreen.kt:270` and
+  `NodeDetailScreen.kt:241`. Unrelated to config editing, still unfixed.
 - gradle must run via PowerShell `& .\gradlew.bat` (cmd /c chaining fails in this harness);
   multiline `python -c` also fails in Git Bash here — write scripts to the scratchpad.
 - Screenshots: `adb exec-out screencap -p > file.png` through a PowerShell redirect
