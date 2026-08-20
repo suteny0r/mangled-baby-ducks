@@ -149,6 +149,9 @@ interface PositionDao {
     @Query("SELECT * FROM positions WHERE latest = 1")
     fun latestPositions(): Flow<List<PositionEntity>>
 
+    @Query("DELETE FROM positions WHERE latest = 0 AND time < :cutoff")
+    suspend fun prune(cutoff: Long)
+
     @Query(
         "SELECT p.nodeNum AS nodeNum, p.latitudeI AS latitudeI, p.longitudeI AS longitudeI, " +
             "p.time AS time, u.shortName AS shortName, u.longName AS longName " +
@@ -188,6 +191,9 @@ interface TelemetryDao {
             "AND time > :since ORDER BY time ASC"
     )
     fun history(nodeNum: Long, type: Int, since: Long): Flow<List<TelemetryEntity>>
+
+    @Query("DELETE FROM telemetry WHERE time < :cutoff")
+    suspend fun prune(cutoff: Long)
 }
 
 @Dao

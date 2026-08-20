@@ -15,6 +15,8 @@ import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SettingsRemote
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -22,13 +24,12 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.suteny0r.mangledbabyducks.radio.RadioService
-import com.suteny0r.mangledbabyducks.radio.RadioState
-import com.suteny0r.mangledbabyducks.radio.TcpConnection
 import com.suteny0r.mangledbabyducks.ui.ConnectScreen
 import com.suteny0r.mangledbabyducks.ui.MapScreen
 import com.suteny0r.mangledbabyducks.ui.MessagesScreen
@@ -36,7 +37,6 @@ import com.suteny0r.mangledbabyducks.ui.NodesScreen
 import com.suteny0r.mangledbabyducks.ui.SettingsScreen
 import com.suteny0r.mangledbabyducks.ui.ThreadTarget
 import com.suteny0r.mangledbabyducks.ui.theme.MeshtasticTheme
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 private data class Tab(val label: String, val icon: ImageVector)
@@ -63,6 +63,9 @@ class MainActivity : ComponentActivity() {
                     Tab("Settings", Icons.Default.Settings),
                 )
                 val selected by router.selectedTab.collectAsState()
+                val unread by remember {
+                    container.database.messageDao().unreadCount()
+                }.collectAsState(initial = 0)
                 Scaffold(
                     bottomBar = {
                         NavigationBar {
@@ -70,7 +73,15 @@ class MainActivity : ComponentActivity() {
                                 NavigationBarItem(
                                     selected = selected == index,
                                     onClick = { router.selectedTab.value = index },
-                                    icon = { Icon(tab.icon, contentDescription = tab.label) },
+                                    icon = {
+                                        if (index == com.suteny0r.mangledbabyducks.ui.Router.TAB_MESSAGES && unread > 0) {
+                                            BadgedBox(badge = { Badge { Text(unread.toString()) } }) {
+                                                Icon(tab.icon, contentDescription = tab.label)
+                                            }
+                                        } else {
+                                            Icon(tab.icon, contentDescription = tab.label)
+                                        }
+                                    },
                                     label = { Text(tab.label) },
                                 )
                             }
@@ -96,6 +107,12 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        // A deliberate Disconnect forgets the radio, so this stays a no-op then.
+        autoConnectIfRemembered()
+    }
+
     private fun handleIntent(intent: Intent?) {
         if (intent?.getBooleanExtra(EXTRA_OPEN_THREAD, false) != true) return
         val name = intent.getStringExtra(EXTRA_THREAD_NAME) ?: return
@@ -109,28 +126,33 @@ class MainActivity : ComponentActivity() {
         container.router.openThread(target)
     }
 
-    /** Reconnect to the last radio on app start, mirroring iOS's preferredPeripheral. */
+    /**
+     * Reconnect to the last radio on app start, mirroring iOS's preferredPeripheral.
+     * onCreate, the permission result and every onResume all land here; RadioManager
+     * spends exactly one automatic attempt per process, so a radio that is off or out
+     * of range is not chased in the background — the Connect screen offers an explicit
+     * Reconnect instead.
+     */
     private fun autoConnectIfRemembered() {
         val container = container
         lifecycleScope.launch {
-            if (container.radioManager.state.value != RadioState.Idle) return@launch
-            val prefs = container.prefs.data.first()
-            val type = prefs[PrefKeys.RADIO_TYPE] ?: return@launch
-            val address = prefs[PrefKeys.RADIO_ADDRESS] ?: return@launch
-            val name = prefs[PrefKeys.RADIO_NAME]
-            when (type) {
-                "ble" -> {
-                    if (!hasBlePermission() || container.bleScanner.adapter?.isEnabled != true) return@launch
-                    RadioService.start(this@MainActivity, name)
-                    container.radioManager.connect(name) { container.bleScanner.connection(address) }
-                }
-                "tcp" -> {
-                    val host = address.substringBefore(':')
-                    val port = address.substringAfter(':', "4403").toIntOrNull() ?: 4403
-                    RadioService.start(this@MainActivity, name)
-                    container.radioManager.connect(name) { TcpConnection(host, port) }
-                }
+            val target = container.rememberedRadio() ?: return@launch
+            val factory = container.connectionFactory(target) ?: return@launch
+            if (target.type == "ble" &&
+                (!hasBlePermission() || container.bleScanner.adapter?.isEnabled != true)
+            ) {
+                return@launch
             }
+            val radio = container.radioManager
+            if (radio.isConnected || radio.isAttempting) return@launch
+            RadioService.start(this@MainActivity, target.label)
+            radio.autoConnect(target.label, factory)
+            if (radio.isConnected) {
+                // Keeps "last used" ordering in the saved list honest.
+                container.rememberRadio(target.type, target.address, target.name)
+            }
+            // The service only earns its notification while a link is up or being made.
+            if (!radio.isConnected && !radio.isAttempting) RadioService.stop(this@MainActivity)
         }
     }
 

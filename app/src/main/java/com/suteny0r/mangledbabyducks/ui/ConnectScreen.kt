@@ -10,15 +10,18 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -38,6 +41,8 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
     val devices by vm.devices.collectAsState()
     val scanning by vm.scanning.collectAsState()
     val deviceName by vm.deviceName.collectAsState()
+    val remembered by vm.remembered.collectAsState()
+    val knownRadios by vm.knownRadios.collectAsState()
 
     Column(
         modifier = Modifier
@@ -48,21 +53,37 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Radio", style = MaterialTheme.typography.titleMedium)
+                // Every in-progress state names its target: "Connecting…" with no
+                // device told the user nothing about which radio was being reached.
+                val target = deviceName ?: remembered?.label
                 when (val s = state) {
                     is RadioState.Idle -> Text("Not connected")
-                    is RadioState.Connecting -> StatusRow("Connecting…")
+                    is RadioState.Connecting -> StatusRow(
+                        "Connecting to ${target ?: "radio"}…" +
+                            if (s.of > 1) "  (try ${s.attempt} of ${s.of})" else ""
+                    )
                     is RadioState.Communicating -> StatusRow("Retrieving configuration…")
                     is RadioState.RetrievingDatabase ->
                         StatusRow("Loading node database (${s.nodeCount} nodes)…")
                     is RadioState.Subscribed ->
                         Text("Connected to ${deviceName ?: "radio"}")
-                    is RadioState.Reconnecting ->
-                        StatusRow("Connection lost, reconnecting (attempt ${s.attempt})…")
+                    is RadioState.Reconnecting -> StatusRow(
+                        "Connection to ${target ?: "radio"} lost, reconnecting (attempt ${s.attempt})…"
+                    )
                     is RadioState.Failed ->
-                        Text("Failed: ${s.reason}", color = MaterialTheme.colorScheme.error)
+                        Text(s.reason, color = MaterialTheme.colorScheme.error)
                 }
                 if (state is RadioState.Subscribed) {
                     OutlinedButton(onClick = { vm.disconnect() }) { Text("Disconnect") }
+                }
+                // Auto-connect is spent once per launch, so the radio it gave up on
+                // needs an explicit way back.
+                if (state is RadioState.Failed) {
+                    remembered?.let { radio ->
+                        Button(onClick = { vm.connectKnown(radio) }) {
+                            Text("Retry ${radio.label}")
+                        }
+                    }
                 }
             }
         }
@@ -79,9 +100,60 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
         }
 
         LazyColumn(Modifier.weight(1f)) {
+            // Saved radios first: connecting to one of these needs no scan at all.
+            if (knownRadios.isNotEmpty()) {
+                item {
+                    Text(
+                        "Saved radios",
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+                items(knownRadios, key = { "saved-" + it.address }) { radio ->
+                    val seen = devices[radio.address]
+                    val live = state is RadioState.Subscribed && deviceName == radio.label
+                    ListItem(
+                        headlineContent = { Text(radio.label) },
+                        supportingContent = {
+                            Text(
+                                buildList {
+                                    add(radio.address)
+                                    if (seen != null) add("in range  ${seen.rssi} dBm")
+                                    if (radio.lastConnectedMs > 0) {
+                                        add("last used ${relativeTime(radio.lastConnectedMs)}")
+                                    }
+                                }.joinToString("  •  ")
+                            )
+                        },
+                        leadingContent = {
+                            Icon(
+                                if (radio.type == "tcp") Icons.Default.Wifi else Icons.Default.Bluetooth,
+                                contentDescription = null,
+                            )
+                        },
+                        trailingContent = {
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                if (live) {
+                                    Text("Connected", style = MaterialTheme.typography.labelMedium)
+                                } else {
+                                    Button(onClick = { vm.connectKnown(radio) }) { Text("Connect") }
+                                }
+                                TextButton(onClick = { vm.forget(radio) }) { Text("Forget") }
+                            }
+                        },
+                    )
+                }
+                item { HorizontalDivider(Modifier.padding(vertical = 8.dp)) }
+            }
+
+            // Scan results, minus anything already saved above.
             // Stable sort: RSSI updates every advertisement and reordering rows while
             // the user is aiming at a Connect button causes mis-taps.
-            items(devices.values.sortedBy { it.name + it.id }, key = { it.id }) { device ->
+            val savedAddresses = knownRadios.map { it.address }.toSet()
+            val found = devices.values
+                .filterNot { it.id in savedAddresses }
+                .sortedBy { it.name + it.id }
+            items(found, key = { it.id }) { device ->
                 ListItem(
                     headlineContent = { Text(device.name) },
                     supportingContent = { Text("${device.id}  •  ${device.rssi} dBm") },

@@ -14,6 +14,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -41,7 +42,12 @@ class BleConnection(
     private val device: BluetoothDevice,
 ) : RadioConnection {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // GATT failures surface as exceptions in these coroutines (e.g. a read that
+    // dies when the radio reboots mid-drain); they must never crash the process.
+    private val crashGuard = CoroutineExceptionHandler { _, e ->
+        Log.w(TAG, "BLE coroutine failed", e)
+    }
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + crashGuard)
     private val eventFlow = MutableSharedFlow<ConnectionEvent>(
         extraBufferCapacity = 4096,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
@@ -112,10 +118,11 @@ class BleConnection(
                     pendingConnect?.completeExceptionally(RadioException(err ?: "Disconnected"))
                     failAllPending(err ?: "Disconnected")
                     if (!closed) {
-                        // Status 8 (conn timeout) and 19 (peer terminated) mirror the iOS
-                        // reconnect-worthy CBError cases; everything else stays down.
-                        val reconnect = status == 8 || status == 19
-                        eventFlow.tryEmit(ConnectionEvent.Disconnected(reconnect, err))
+                        // Any disconnect the app did not ask for is worth reconnecting:
+                        // radio reboots (config saves!) arrive with varying statuses,
+                        // including 0. Deliberate disconnects set `closed` and never
+                        // reach this branch.
+                        eventFlow.tryEmit(ConnectionEvent.Disconnected(true, err))
                     }
                 }
             }
@@ -299,6 +306,10 @@ class BleConnection(
                 needsDrain = false
                 drainPendingPackets()
             }
+        } catch (e: Exception) {
+            // A read that fails mid-drain means the link just died; the disconnect
+            // path reports that separately — don't let it propagate.
+            Log.w(TAG, "Drain aborted: ${e.message}")
         } finally {
             isDraining = false
         }

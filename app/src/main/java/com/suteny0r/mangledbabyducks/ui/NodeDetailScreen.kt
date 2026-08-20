@@ -50,6 +50,8 @@ class NodeDetailViewModel(app: Application) : AndroidViewModel(app) {
     fun node(num: Long) = db.nodeDao().nodeWithUserFlow(num)
     fun deviceMetrics(num: Long) =
         db.telemetryDao().history(num, 0, System.currentTimeMillis() - 48 * 3600_000L)
+    fun environmentMetrics(num: Long) =
+        db.telemetryDao().history(num, 1, System.currentTimeMillis() - 48 * 3600_000L)
     fun latestPosition(num: Long) = db.positionDao().latestFlow(num)
     fun traceroutes(num: Long) = db.tracerouteDao().forNode(num)
 
@@ -71,6 +73,7 @@ fun NodeDetailScreen(
 ) {
     val entry by vm.node(nodeNum).collectAsState(initial = null)
     val metrics by vm.deviceMetrics(nodeNum).collectAsState(initial = emptyList())
+    val envMetrics by vm.environmentMetrics(nodeNum).collectAsState(initial = emptyList())
     val position by vm.latestPosition(nodeNum).collectAsState(initial = null)
     val traceroutes by vm.traceroutes(nodeNum).collectAsState(initial = emptyList())
 
@@ -184,6 +187,38 @@ fun NodeDetailScreen(
                 }
             }
 
+            if (envMetrics.isNotEmpty()) {
+                Text("Temperature (48h)", style = MaterialTheme.typography.titleMedium)
+                Card(Modifier.fillMaxWidth()) {
+                    MetricChart(
+                        points = envMetrics.mapNotNull { m ->
+                            m.temperature?.let { m.time to it }
+                        },
+                        unit = "°C",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(140.dp)
+                            .padding(12.dp),
+                    )
+                }
+                val humidity = envMetrics.mapNotNull { m ->
+                    m.relativeHumidity?.let { m.time to it }
+                }
+                if (humidity.size >= 2) {
+                    Text("Humidity (48h)", style = MaterialTheme.typography.titleMedium)
+                    Card(Modifier.fillMaxWidth()) {
+                        MetricChart(
+                            points = humidity,
+                            unit = "%",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(140.dp)
+                                .padding(12.dp),
+                        )
+                    }
+                }
+            }
+
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -205,7 +240,8 @@ fun NodeDetailScreen(
 private fun TracerouteCard(route: TracerouteEntity, vm: NodeDetailViewModel) {
     val text by androidx.compose.runtime.produceState(initialValue = "…", route) {
         value = if (!route.response) {
-            "pending"
+            // No schema for timeouts; anything unanswered after 2 minutes is dead.
+            if (System.currentTimeMillis() - route.time > 120_000) "no reply" else "pending"
         } else {
             buildString {
                 append("→ ")

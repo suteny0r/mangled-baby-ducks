@@ -5,10 +5,15 @@ import com.google.protobuf.ByteString
 import com.suteny0r.mangledbabyducks.db.MeshDatabase
 import com.suteny0r.mangledbabyducks.db.MessageEntity
 import com.suteny0r.mangledbabyducks.db.TracerouteEntity
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,6 +22,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import org.meshtastic.proto.AdminProtos
 import org.meshtastic.proto.AppOnlyProtos
@@ -24,15 +31,18 @@ import org.meshtastic.proto.ChannelProtos
 import org.meshtastic.proto.ConfigProtos
 import org.meshtastic.proto.MeshProtos
 import org.meshtastic.proto.Portnums
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.random.Random
 
 /** Connection lifecycle, port of AccessoryManagerState. */
 sealed interface RadioState {
     data object Idle : RadioState
-    data object Connecting : RadioState
+    /** Opening a link that was never up: carries which try of how many this is. */
+    data class Connecting(val attempt: Int = 1, val of: Int = 1) : RadioState
     data object Communicating : RadioState
     data class RetrievingDatabase(val nodeCount: Int) : RadioState
     data object Subscribed : RadioState
+    /** Re-opening a link that had been live, so "connection lost" is accurate. */
     data class Reconnecting(val attempt: Int) : RadioState
     data class Failed(val reason: String) : RadioState
 }
@@ -69,6 +79,25 @@ class RadioManager(
     private var nodeCount = 0
     @Volatile private var lastRxMs = 0L
 
+    // Exactly one attempt loop may run at a time. Two loops used to be able to drive
+    // establish() in parallel (the initial-connect retry plus an event-driven
+    // reconnect), each registering its own GATT client against the same radio; that
+    // is what produced the startup connect/disconnect storm and the stalled-forever
+    // state, so the lock and the generation counter below are load-bearing.
+    private val attemptLock = Mutex()
+
+    /** Bumped by every new connect/disconnect request; an older attempt loop aborts when it changes. */
+    @Volatile private var requestGeneration = 0
+
+    /** Only a link that finished the handshake may drive an automatic reconnect. */
+    @Volatile private var sessionWentLive = false
+
+    /** Completed when the link drops mid-handshake so establish() aborts instead of waiting out its timeout. */
+    private var linkLost: CompletableDeferred<String>? = null
+
+    /** Set once the process has spent its single automatic connect attempt. */
+    private val autoConnectSpent = AtomicBoolean(false)
+
     // Kept so a dropped link can be re-established with a fresh connection object.
     private var connectionFactory: (() -> RadioConnection)? = null
     private var lastName: String? = null
@@ -76,40 +105,118 @@ class RadioManager(
     val isConnected: Boolean
         get() = _state.value is RadioState.Subscribed || _state.value is RadioState.RetrievingDatabase
 
+    /** True while a connect or reconnect attempt loop owns the radio. */
+    val isAttempting: Boolean
+        get() = attemptLock.isLocked
+
+    /**
+     * One automatic connect per process. Callers such as MainActivity fire from
+     * onCreate, the permission result and onResume, so the guard is a CAS rather than
+     * a state check: once the automatic attempt has been spent, a radio that is off
+     * or out of range is not retried behind the user's back — they reconnect from the
+     * Connect screen. Returns false when the attempt was not started.
+     */
+    suspend fun autoConnect(name: String?, factory: () -> RadioConnection): Boolean {
+        if (isConnected || isAttempting) return false
+        if (!autoConnectSpent.compareAndSet(false, true)) return false
+        connect(name, factory)
+        return true
+    }
+
     suspend fun connect(name: String?, factory: () -> RadioConnection) {
-        disconnect()
+        val gen = beginRequest()
         connectionFactory = factory
         lastName = name
+        // Name the target before the first attempt: the UI has to be able to say
+        // which radio it is reaching for, not just "Connecting…".
+        _deviceName.value = name
+        _state.value = RadioState.Connecting(1, CONNECT_ATTEMPTS)
         // Initial-connect retry, mirroring the iOS pipeline's maxRetries = 2 with a
         // 2 s delay — transient GATT 133 style failures self-heal instead of
         // surfacing to the user.
-        repeat(CONNECT_ATTEMPTS) { attempt ->
-            if (attempt > 0) {
-                _state.value = RadioState.Reconnecting(attempt)
-                delay(RECONNECT_DELAY_MS)
-            }
-            try {
-                establish(factory(), name)
-                return
-            } catch (e: Exception) {
-                Log.w(TAG, "Connect attempt ${attempt + 1}/$CONNECT_ATTEMPTS failed: ${e.message}")
-            }
+        attemptLock.withLock {
+            runAttempts(
+                gen = gen,
+                factory = factory,
+                name = name,
+                attempts = CONNECT_ATTEMPTS,
+                delayFor = { attempt -> if (attempt == 0) 0L else RECONNECT_DELAY_MS },
+                progressFor = { attempt -> RadioState.Connecting(attempt + 1, CONNECT_ATTEMPTS) },
+                exhaustedReason = "Could not reach ${name ?: "the radio"}",
+            )
         }
-        // state is already Failed from the last establish()
     }
 
-    private suspend fun establish(conn: RadioConnection, name: String?) {
-        _state.value = RadioState.Connecting
+    /**
+     * Supersede whatever session or attempt loop is running and tear the link down.
+     * Returns the new request generation; any loop holding an older one stops at its
+     * next checkpoint instead of racing this request for the radio.
+     */
+    private suspend fun beginRequest(): Int {
+        val gen = ++requestGeneration
+        reconnectJob?.cancel()
+        heartbeatJob?.cancel()
+        eventJob?.cancel()
+        sessionWentLive = false
+        linkLost?.complete("Superseded")
+        connection?.let { runCatching { it.disconnect() } }
+        connection = null
+        return gen
+    }
+
+    /**
+     * Sequential attempt loop: the only place establish() is called from. Aborts as
+     * soon as a newer request arrives, and lands on a terminal Failed state when the
+     * attempts run out, so the UI never sits in Reconnecting forever.
+     */
+    private suspend fun runAttempts(
+        gen: Int,
+        factory: () -> RadioConnection,
+        name: String?,
+        attempts: Int,
+        delayFor: (Int) -> Long,
+        progressFor: (Int) -> RadioState,
+        exhaustedReason: String,
+    ) {
+        repeat(attempts) { attempt ->
+            if (gen != requestGeneration) return
+            _state.value = progressFor(attempt)
+            val wait = delayFor(attempt)
+            if (wait > 0) {
+                delay(wait)
+                if (gen != requestGeneration) return
+            }
+            try {
+                establish(gen, factory(), name)
+                if (attempt > 0) Log.i(TAG, "Connected after ${attempt + 1} attempt(s)")
+                return
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Attempt ${attempt + 1}/$attempts failed: ${e.message}")
+            }
+        }
+        if (gen == requestGeneration) _state.value = RadioState.Failed(exhaustedReason)
+    }
+
+    private suspend fun establish(gen: Int, conn: RadioConnection, name: String?) {
+        // The attempt state is owned by runAttempts; this only names the target.
         _deviceName.value = name
+        eventJob?.cancel()
+        val lost = CompletableDeferred<String>()
+        linkLost = lost
         connection = conn
         try {
-            eventJob = scope.launch { conn.events.collect { handleEvent(it) } }
+            // The collector is tagged with its own connection: a dying predecessor
+            // must not be able to tear down or reconnect the live session.
+            eventJob = scope.launch { conn.events.collect { handleEvent(conn, it) } }
             conn.connect()
+            if (gen != requestGeneration) throw RadioException("Superseded by a newer request")
             _state.value = RadioState.Communicating
 
             // Step 3: wantConfig handshake — the radio streams config then echoes the nonce.
             sendHeartbeat()
-            awaitConfigComplete(MeshProtocol.NONCE_ONLY_CONFIG.toLong(), timeoutMs = 30_000) {
+            awaitConfigComplete(MeshProtocol.NONCE_ONLY_CONFIG.toLong(), timeoutMs = 30_000, lost = lost) {
                 send { it.setWantConfigId(MeshProtocol.NONCE_ONLY_CONFIG) }
                 conn.startDrainPendingPackets()
             }
@@ -117,46 +224,74 @@ class RadioManager(
             // Step 5: node DB dump under the second nonce.
             nodeCount = 0
             _state.value = RadioState.RetrievingDatabase(0)
-            awaitConfigComplete(MeshProtocol.NONCE_ONLY_DB.toLong(), timeoutMs = 120_000) {
+            awaitConfigComplete(MeshProtocol.NONCE_ONLY_DB.toLong(), timeoutMs = 120_000, lost = lost) {
                 send { it.setWantConfigId(MeshProtocol.NONCE_ONLY_DB) }
                 conn.startDrainPendingPackets()
             }
 
-            // Step 7: set the radio's clock, then we are live.
+            // Step 7: set the radio's clock, then we are live. A Disconnect issued
+            // mid-handshake must not end with a session declaring itself live.
+            if (gen != requestGeneration) throw RadioException("Superseded by a newer request")
             sendSetTime()
+            sessionWentLive = true
             _state.value = RadioState.Subscribed
+
+            // Retention: positions (non-latest) and telemetry older than 30 days.
+            val cutoff = System.currentTimeMillis() - RETENTION_MS
+            runCatching {
+                db.positionDao().prune(cutoff)
+                db.telemetryDao().prune(cutoff)
+            }
 
             if (conn.requiresPeriodicHeartbeat) startPeriodicHeartbeat()
         } catch (e: Exception) {
-            Log.e(TAG, "Connect failed", e)
-            _state.value = RadioState.Failed(e.message ?: "Connection failed")
+            Log.w(TAG, "Establish failed: ${e.message}")
             eventJob?.cancel()
             runCatching { conn.disconnect() }
-            connection = null
+            if (connection === conn) connection = null
+            if (linkLost === lost) linkLost = null
             throw e
         }
     }
 
-    private suspend fun awaitConfigComplete(nonce: Long, timeoutMs: Long, request: suspend () -> Unit) {
+    /**
+     * Wait for the radio to echo a want_config nonce. The waiter subscribes
+     * UNDISPATCHED so a fast reply cannot land before the collector exists, and a
+     * link drop aborts the wait instead of burning the whole timeout (a 120 s stall
+     * on the node-DB step read as a hang).
+     */
+    private suspend fun awaitConfigComplete(
+        nonce: Long,
+        timeoutMs: Long,
+        lost: CompletableDeferred<String>,
+        request: suspend () -> Unit,
+    ) {
         withTimeout(timeoutMs) {
-            val waiter = scope.launch { configCompleteIds.filter { it == nonce }.first() }
-            request()
-            waiter.join()
+            coroutineScope {
+                val nonceSeen = async(start = CoroutineStart.UNDISPATCHED) {
+                    configCompleteIds.filter { it == nonce }.first()
+                }
+                val watchdog = launch(start = CoroutineStart.UNDISPATCHED) {
+                    throw RadioException("Link lost during handshake: ${lost.await()}")
+                }
+                request()
+                nonceSeen.await()
+                watchdog.cancel()
+            }
         }
     }
 
     suspend fun disconnect() {
+        beginRequest()
         connectionFactory = null
-        reconnectJob?.cancel()
-        heartbeatJob?.cancel()
-        eventJob?.cancel()
-        connection?.let { runCatching { it.disconnect() } }
-        connection = null
         _state.value = RadioState.Idle
         _deviceName.value = null
     }
 
-    private suspend fun handleEvent(event: ConnectionEvent) {
+    private suspend fun handleEvent(source: RadioConnection, event: ConnectionEvent) {
+        // A superseded connection keeps emitting while it dies; its events must not
+        // touch the live session or start a second reconnect driver.
+        if (source !== connection) return
         lastRxMs = System.currentTimeMillis()
         when (event) {
             is ConnectionEvent.Data -> processFromRadio(event.fromRadio)
@@ -164,6 +299,13 @@ class RadioManager(
             is ConnectionEvent.RssiUpdate -> {}
             is ConnectionEvent.Disconnected -> {
                 Log.w(TAG, "Link lost (reconnect=${event.shouldReconnect}): ${event.error}")
+                if (!sessionWentLive) {
+                    // Still inside establish(): the attempt loop owns the retry, so
+                    // just unblock it rather than starting a competing loop.
+                    linkLost?.complete(event.error ?: "Disconnected")
+                    return
+                }
+                sessionWentLive = false
                 if (event.shouldReconnect && connectionFactory != null) {
                     scheduleReconnect(event.error)
                 } else {
@@ -509,25 +651,28 @@ class RadioManager(
      * decides that), never for a user-initiated disconnect.
      */
     private fun scheduleReconnect(reason: String?) {
-        if (reconnectJob?.isActive == true) return
+        if (reconnectJob?.isActive == true || attemptLock.isLocked) return
         val factory = connectionFactory ?: return
+        val name = lastName
+        // Adopt the current generation rather than bumping it: a user-initiated
+        // connect() supersedes this loop, never the other way round.
+        val gen = requestGeneration
         reconnectJob = scope.launch {
             heartbeatJob?.cancel()
             eventJob?.cancel()
             connection?.let { runCatching { it.disconnect() } }
             connection = null
-            repeat(MAX_RECONNECT_ATTEMPTS) { attempt ->
-                _state.value = RadioState.Reconnecting(attempt + 1)
-                delay(RECONNECT_DELAY_MS * (attempt + 1))
-                try {
-                    establish(factory(), lastName)
-                    Log.i(TAG, "Reconnected after ${attempt + 1} attempt(s)")
-                    return@launch
-                } catch (e: Exception) {
-                    Log.w(TAG, "Reconnect attempt ${attempt + 1} failed: ${e.message}")
-                }
+            attemptLock.withLock {
+                runAttempts(
+                    gen = gen,
+                    factory = factory,
+                    name = name,
+                    attempts = MAX_RECONNECT_ATTEMPTS,
+                    delayFor = { attempt -> RECONNECT_DELAY_MS * (attempt + 1) },
+                    progressFor = { attempt -> RadioState.Reconnecting(attempt + 1) },
+                    exhaustedReason = reason ?: "Connection lost",
+                )
             }
-            _state.value = RadioState.Failed(reason ?: "Connection lost")
         }
     }
 
@@ -561,5 +706,6 @@ class RadioManager(
         private const val MAX_RECONNECT_ATTEMPTS = 10
         private const val RECONNECT_DELAY_MS = 2_000L
         private const val HEARTBEAT_TIMEOUT_MS = 3 * MeshProtocol.HEARTBEAT_INTERVAL_MS
+        private const val RETENTION_MS = 30L * 24 * 3600_000
     }
 }
