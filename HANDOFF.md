@@ -17,8 +17,14 @@ invariants worth not breaking. Read it first; this file is the session log on to
 - There are still no tests of any kind in the repo; verification is on the phone.
 
 ## Current device state
-- The app is connected to SOBE, which is the single entry in its saved-radio list, and it
-  is the auto-connect target. Nothing else is remembered.
+- Saved-radio list holds **🐭_4fae (Peewee Herman)** and **📣_9f4a (SOBE)**. Peewee is the
+  auto-connect target because it was the last successful connect (it was powered on to
+  test the absent path, then powered off), so the next launch does one 6 s scan and stops
+  with "not in range" until someone taps Connect on SOBE or powers Peewee back on.
+- A POST_NOTIFICATIONS dialog was left on screen by the launch-time permission request;
+  answering it is the user's call.
+- Connecting to Peewee wiped and rebuilt the nodes/channels/my_info tables (the
+  cross-radio guard). Reconnecting to SOBE rebuilds them from SOBE.
 - 47+ unread messages were sitting in the badge from the day's test traffic; harmless.
 
 ## Test rig (memory file `mesh-test-radios.md` has the full version)
@@ -84,11 +90,15 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
 `AppContainer.rememberRadio()` writes both and is the only writer.
 
 ## Verified working on hardware
-- Scan-before-connect (2026-08-19 20:47): auto-connect started a filtered scan, saw SOBE
-  739 ms later, then issued the single GATT connect and negotiated MTU 247. The
-  "<name> is not in range" branch has NOT been fired on hardware: everything advertising
-  today was reachable, and the one out-of-range radio cannot be added to the saved list
-  without connecting to it once.
+- Scan-before-connect, radio present (2026-08-19 20:47): auto-connect started a filtered
+  scan, saw SOBE 739 ms later, then issued the single GATT connect and negotiated MTU 247.
+- Scan-before-connect, radio absent (2026-08-19 21:04, Peewee Herman powered off by the
+  user for the test): scan 21:04:10.633 → 21:04:16.644 (the 6 s window), then
+  "🐭_4fae not advertising (attempt 1/3)" and a terminal "🐭_4fae is not in range" with a
+  Retry button. **Zero** GATT connects and one scan start for the whole launch; the old
+  behaviour was three ~5 s blind connects returning status 133.
+- Saved-radio list with two entries (🐭_4fae and 📣_9f4a), each with its own Connect and
+  Forget, "in range <rssi>" shown for whichever the running scan sees.
 - Connect flow (2026-08-19 19:24-19:46): one bounded burst of 3 sequential attempts against
   an unreachable radio, one GATT client at a time, ending in a terminal "Could not reach
   🐭_4fae"; resume cycles adding zero attempts; scan → Connect reaching `Subscribed`
@@ -127,7 +137,10 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
   taken up.
 
 ## Known gaps / next candidates
-1. Fire the "not in range" path on hardware (needs a saved radio that is powered off).
+1. `MainActivity.requestNeededPermissions()` fires the whole permission list on every
+   onCreate; on 2026-08-19 that put a POST_NOTIFICATIONS dialog on screen at launch (the
+   grant had lapsed, and message notifications are silently dropped without it). Request
+   only what is missing, and only when it is needed.
 2. `RadioService`'s notification always reads "Connected to <name>", including while an
    attempt is still running or after it failed.
 3. Fire a safe no-op set_config to prove the admin edit-transaction write path.
