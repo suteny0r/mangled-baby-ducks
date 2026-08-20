@@ -12,6 +12,7 @@ import com.suteny0r.mangledbabyducks.radio.LocationSharer
 import com.suteny0r.mangledbabyducks.radio.MeshProtocol
 import com.suteny0r.mangledbabyducks.radio.MessageNotifier
 import com.suteny0r.mangledbabyducks.radio.PacketIngest
+import com.suteny0r.mangledbabyducks.radio.PresenceProbe
 import com.suteny0r.mangledbabyducks.radio.RadioConnection
 import com.suteny0r.mangledbabyducks.radio.RadioManager
 import com.suteny0r.mangledbabyducks.radio.TcpConnection
@@ -135,6 +136,15 @@ class AppContainer(context: Context) {
             val others = prefs.knownRadios().filterNot { it.address == address }
             prefs[PrefKeys.KNOWN_RADIOS] = encodeRadios((listOf(entry) + others).take(MAX_KNOWN_RADIOS))
         }
+    }
+
+    /**
+     * Presence check for a saved radio: BLE waits for the advertisement before touching
+     * the GATT stack, TCP has nothing to scan for.
+     */
+    fun presenceProbe(radio: RememberedRadio): PresenceProbe? = when (radio.type) {
+        "ble" -> PresenceProbe { timeoutMs -> bleScanner.isAdvertising(radio.address, timeoutMs) }
+        else -> null
     }
 
     /** Connection builder for a remembered radio, or null for an unknown transport. */

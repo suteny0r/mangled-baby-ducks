@@ -37,6 +37,8 @@ import kotlin.random.Random
 /** Connection lifecycle, port of AccessoryManagerState. */
 sealed interface RadioState {
     data object Idle : RadioState
+    /** Waiting for the radio's advertisement before touching the GATT stack. */
+    data class Searching(val attempt: Int = 1, val of: Int = 1) : RadioState
     /** Opening a link that was never up: carries which try of how many this is. */
     data class Connecting(val attempt: Int = 1, val of: Int = 1) : RadioState
     data object Communicating : RadioState
@@ -45,6 +47,15 @@ sealed interface RadioState {
     /** Re-opening a link that had been live, so "connection lost" is accurate. */
     data class Reconnecting(val attempt: Int) : RadioState
     data class Failed(val reason: String) : RadioState
+}
+
+/**
+ * Checks whether the target radio is currently reachable before a connect attempt is
+ * made. Supplied by the BLE transport (a scan for the radio's advertisement); null for
+ * transports where a blind attempt costs nothing, such as TCP.
+ */
+fun interface PresenceProbe {
+    suspend fun isVisible(timeoutMs: Long): Boolean
 }
 
 /**
@@ -92,6 +103,9 @@ class RadioManager(
     /** Only a link that finished the handshake may drive an automatic reconnect. */
     @Volatile private var sessionWentLive = false
 
+    /** Presence probe for the current target, reused by the reconnect loop. */
+    @Volatile private var lastPresence: PresenceProbe? = null
+
     /** Completed when the link drops mid-handshake so establish() aborts instead of waiting out its timeout. */
     private var linkLost: CompletableDeferred<String>? = null
 
@@ -116,17 +130,27 @@ class RadioManager(
      * or out of range is not retried behind the user's back — they reconnect from the
      * Connect screen. Returns false when the attempt was not started.
      */
-    suspend fun autoConnect(name: String?, factory: () -> RadioConnection): Boolean {
+    suspend fun autoConnect(
+        name: String?,
+        presence: PresenceProbe? = null,
+        factory: () -> RadioConnection,
+    ): Boolean {
         if (isConnected || isAttempting) return false
         if (!autoConnectSpent.compareAndSet(false, true)) return false
-        connect(name, factory)
+        connect(name, presence, factory)
         return true
     }
 
-    suspend fun connect(name: String?, factory: () -> RadioConnection) {
+    // `factory` is deliberately last: every call site passes it as a trailing lambda.
+    suspend fun connect(
+        name: String?,
+        presence: PresenceProbe? = null,
+        factory: () -> RadioConnection,
+    ) {
         val gen = beginRequest()
         connectionFactory = factory
         lastName = name
+        lastPresence = presence
         // Name the target before the first attempt: the UI has to be able to say
         // which radio it is reaching for, not just "Connecting…".
         _deviceName.value = name
@@ -142,6 +166,11 @@ class RadioManager(
                 attempts = CONNECT_ATTEMPTS,
                 delayFor = { attempt -> if (attempt == 0) 0L else RECONNECT_DELAY_MS },
                 progressFor = { attempt -> RadioState.Connecting(attempt + 1, CONNECT_ATTEMPTS) },
+                searchingFor = { attempt -> RadioState.Searching(attempt + 1, CONNECT_ATTEMPTS) },
+                presenceFor = { presence },
+                // A radio that is not advertising will not answer a GATT connect either,
+                // so say so instead of retrying into three 5 s timeouts.
+                absentIsTerminal = true,
                 exhaustedReason = "Could not reach ${name ?: "the radio"}",
             )
         }
@@ -176,16 +205,36 @@ class RadioManager(
         attempts: Int,
         delayFor: (Int) -> Long,
         progressFor: (Int) -> RadioState,
+        searchingFor: (Int) -> RadioState,
+        presenceFor: (Int) -> PresenceProbe?,
+        absentIsTerminal: Boolean,
         exhaustedReason: String,
     ) {
-        repeat(attempts) { attempt ->
+        for (attempt in 0 until attempts) {
             if (gen != requestGeneration) return
-            _state.value = progressFor(attempt)
             val wait = delayFor(attempt)
             if (wait > 0) {
+                _state.value = progressFor(attempt)
                 delay(wait)
                 if (gen != requestGeneration) return
             }
+            // Scan first: a GATT connect to a radio that is not advertising costs a ~5 s
+            // timeout and comes back as status 133, which reads like a broken app.
+            val presence = presenceFor(attempt)
+            if (presence != null) {
+                _state.value = searchingFor(attempt)
+                val visible = presence.isVisible(PRESENCE_TIMEOUT_MS)
+                if (gen != requestGeneration) return
+                if (!visible) {
+                    Log.w(TAG, "${name ?: "Radio"} not advertising (attempt ${attempt + 1}/$attempts)")
+                    if (absentIsTerminal) {
+                        _state.value = RadioState.Failed("${name ?: "The radio"} is not in range")
+                        return
+                    }
+                    continue
+                }
+            }
+            _state.value = progressFor(attempt)
             try {
                 establish(gen, factory(), name)
                 if (attempt > 0) Log.i(TAG, "Connected after ${attempt + 1} attempt(s)")
@@ -670,6 +719,12 @@ class RadioManager(
                     attempts = MAX_RECONNECT_ATTEMPTS,
                     delayFor = { attempt -> RECONNECT_DELAY_MS * (attempt + 1) },
                     progressFor = { attempt -> RadioState.Reconnecting(attempt + 1) },
+                    searchingFor = { attempt -> RadioState.Searching(attempt + 1, MAX_RECONNECT_ATTEMPTS) },
+                    // Skip the scan on the first try: the radio was live a moment ago, and
+                    // a reboot after a config write comes back within seconds. Later tries
+                    // wait for the advertisement instead of hammering a radio that is down.
+                    presenceFor = { attempt -> if (attempt == 0) null else lastPresence },
+                    absentIsTerminal = false,
                     exhaustedReason = reason ?: "Connection lost",
                 )
             }
@@ -705,6 +760,8 @@ class RadioManager(
         private const val CONNECT_ATTEMPTS = 3
         private const val MAX_RECONNECT_ATTEMPTS = 10
         private const val RECONNECT_DELAY_MS = 2_000L
+        /** How long to wait for a known radio's advertisement before giving up on it. */
+        private const val PRESENCE_TIMEOUT_MS = 6_000L
         private const val HEARTBEAT_TIMEOUT_MS = 3 * MeshProtocol.HEARTBEAT_INTERVAL_MS
         private const val RETENTION_MS = 30L * 24 * 3600_000
     }

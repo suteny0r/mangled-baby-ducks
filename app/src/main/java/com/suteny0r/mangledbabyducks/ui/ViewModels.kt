@@ -108,7 +108,9 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val factory = container.connectionFactory(target) ?: return@launch
             RadioService.start(getApplication(), target.label)
-            runCatching { radio.connect(target.label, factory) }
+            runCatching {
+                radio.connect(target.label, container.presenceProbe(target), factory)
+            }
             if (radio.isConnected) {
                 container.rememberRadio(target.type, target.address, target.name)
             }

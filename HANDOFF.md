@@ -1,10 +1,10 @@
-# Handoff — 2026-08-19 (~19:55)
+# Handoff — 2026-08-19 (~21:00)
 
 ## What this is
 Mangled Baby Ducks: an Android (Kotlin/Compose) Meshtastic-compatible client, ported from
 Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
-`app/src/main/proto`). Repo: https://github.com/suteny0r/mangled-baby-ducks (`main`,
-head `d098769`). All work is committed and pushed; the working tree is clean.
+`app/src/main/proto`). Repo: https://github.com/suteny0r/mangled-baby-ducks (`main`; run
+`git log -1` for the head). All work is committed and pushed; the working tree is clean.
 
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
@@ -67,6 +67,13 @@ Invariants now in `RadioManager` (do not relax any of these):
   emitted before the collector existed) and does not leak its waiter on timeout.
 - `autoConnect()` spends exactly **one** automatic attempt per process. A radio that is
   off or out of range is never chased in the background; the Connect tab is the way back.
+- **Scan before connecting.** A known radio is only connected to after its advertisement
+  is seen (`BleScanner.isAdvertising`, wrapped as a `PresenceProbe`, 6 s window). Blind
+  MAC connects cost a ~5 s GATT timeout each and return status 133, which reads like an
+  app bug. An absent radio is terminal for the initial-connect loop ("<name> is not in
+  range"); in the reconnect loop it is not, and attempt 1 there skips the probe entirely
+  because a radio rebooting after a config write comes back within seconds. Connecting
+  from the scan list passes no probe: it was just seen.
 - `Connecting(attempt, of)` is for a link that was never up; `Reconnecting(attempt)` only
   for one that had been live. Every in-progress state names its target radio.
 
@@ -77,6 +84,11 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
 `AppContainer.rememberRadio()` writes both and is the only writer.
 
 ## Verified working on hardware
+- Scan-before-connect (2026-08-19 20:47): auto-connect started a filtered scan, saw SOBE
+  739 ms later, then issued the single GATT connect and negotiated MTU 247. The
+  "<name> is not in range" branch has NOT been fired on hardware: everything advertising
+  today was reachable, and the one out-of-range radio cannot be added to the saved list
+  without connecting to it once.
 - Connect flow (2026-08-19 19:24-19:46): one bounded burst of 3 sequential attempts against
   an unreachable radio, one GATT client at a time, ending in a terminal "Could not reach
   🐭_4fae"; resume cycles adding zero attempts; scan → Connect reaching `Subscribed`
@@ -115,9 +127,7 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
   taken up.
 
 ## Known gaps / next candidates
-1. Blind MAC connects: a remembered radio that is not advertising costs ~5 s per attempt
-   and returns GATT 133. iOS scans first and connects when the radio is seen — worth
-   doing, and it would let the UI say "not in range" instead of "could not reach".
+1. Fire the "not in range" path on hardware (needs a saved radio that is powered off).
 2. `RadioService`'s notification always reads "Connected to <name>", including while an
    attempt is still running or after it failed.
 3. Fire a safe no-op set_config to prove the admin edit-transaction write path.
@@ -131,7 +141,10 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
 9. Messages: channel names in the thread list use the index only for unnamed secondaries.
 10. QR scanning (import is paste-URL only; export QR is scannable by other apps).
 11. Saved-radio row is cramped when connected ("Connected" + Forget side by side).
-12. iOS-parity extras not started: MQTT proxy, range test, detection sensor UI, store &
+12. Android throttles an app to 5 scan starts per 30 s. The reconnect loop probes on
+    attempts 2+, so a long recovery can hit that ceiling; the probe then reports "not
+    visible" and the loop just backs off, but recovery is slower than it looks.
+13. iOS-parity extras not started: MQTT proxy, range test, detection sensor UI, store &
     forward history, remote admin (session passkey), position exchange action.
 
 ## Gotchas learned (do not relearn)
@@ -144,7 +157,13 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
   bonded names, the Connect tab's scan for what is actually in range, and
   `meshtastic --port COM3 --nodes` for whether the node is alive on LoRa).
 - Diagnosing connection churn: filter logcat for `clientConnect(com.suteny0r` and
-  `clientIf` — two client interfaces at once is the tell for a double driver.
+  `clientIf` — two client interfaces at once is the tell for a double driver. A working
+  scan-then-connect looks like `BluetoothLeScanner: Start Scan with callback` followed by
+  one `clientConnect` under a second later.
+- Kotlin trap hit while adding the probe: appending an optional parameter AFTER a trailing
+  `() -> T` parameter silently rebinds every `f(x) { ... }` call site to the new parameter
+  (a `fun interface` SAM-converts happily). `factory` must stay last in
+  `RadioManager.connect`.
 - AndroidView `update` must read Compose state SYNCHRONOUSLY; reads inside deferred
   callbacks (getMapAsync) are not snapshot-tracked (fixed in `795daf5`, cost a debug cycle).
 - Room `my_info` single-row LIMIT 1 needs the row cleared on cross-radio switch (fixed).

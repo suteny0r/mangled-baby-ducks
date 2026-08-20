@@ -11,6 +11,8 @@ import android.os.ParcelUuid
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** BLE discovery for Meshtastic radios (port of BLETransport scanning). */
 @SuppressLint("MissingPermission")
@@ -21,8 +23,12 @@ class BleScanner(private val context: Context) {
 
     val adapter get() = bluetoothManager.adapter
 
-    /** Emits every advertisement from a device carrying the Meshtastic service UUID. */
-    fun scan(): Flow<DiscoveredDevice> = callbackFlow {
+    /**
+     * Emits every advertisement from a device carrying the Meshtastic service UUID, or
+     * from one specific [address] when given (a known radio is matched by MAC, since its
+     * advertisement is the thing being waited for, not its service list).
+     */
+    fun scan(address: String? = null): Flow<DiscoveredDevice> = callbackFlow {
         val scanner = adapter?.bluetoothLeScanner
             ?: run { close(RadioException("Bluetooth unavailable")); return@callbackFlow }
 
@@ -44,7 +50,10 @@ class BleScanner(private val context: Context) {
         }
 
         val filter = ScanFilter.Builder()
-            .setServiceUuid(ParcelUuid(MeshProtocol.SERVICE_UUID))
+            .apply {
+                if (address != null) setDeviceAddress(address)
+                else setServiceUuid(ParcelUuid(MeshProtocol.SERVICE_UUID))
+            }
             .build()
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
@@ -53,6 +62,16 @@ class BleScanner(private val context: Context) {
 
         awaitClose { runCatching { scanner.stopScan(callback) } }
     }
+
+    /**
+     * True once the radio at [address] is seen advertising. Connecting by MAC to a radio
+     * that is not advertising just burns a ~5 s GATT timeout and returns status 133, so
+     * every attempt at a known radio waits for its advertisement first.
+     */
+    suspend fun isAdvertising(address: String, timeoutMs: Long): Boolean =
+        withTimeoutOrNull(timeoutMs) {
+            runCatching { scan(address).first() }.isSuccess
+        } ?: false
 
     fun connection(address: String): BleConnection =
         BleConnection(context, adapter.getRemoteDevice(address))

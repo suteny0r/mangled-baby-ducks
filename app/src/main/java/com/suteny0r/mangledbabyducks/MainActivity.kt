@@ -146,7 +146,7 @@ class MainActivity : ComponentActivity() {
             val radio = container.radioManager
             if (radio.isConnected || radio.isAttempting) return@launch
             RadioService.start(this@MainActivity, target.label)
-            radio.autoConnect(target.label, factory)
+            radio.autoConnect(target.label, container.presenceProbe(target), factory)
             if (radio.isConnected) {
                 // Keeps "last used" ordering in the saved list honest.
                 container.rememberRadio(target.type, target.address, target.name)

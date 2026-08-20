@@ -93,7 +93,9 @@ that fire repeatedly (`MainActivity.onResume`) go through `autoConnect`, which s
 automatic attempt per process: a radio that is off or out of range must not be retried behind the
 user's back, and the Connect card's Reconnect/Forget buttons are the way back. `Connecting` is for
 a link that was never up, `Reconnecting` only for one that had been live, and every in-progress
-state names its target radio.
+state names its target radio. A known BLE radio is scanned for before any GATT connect
+(`PresenceProbe` / `BleScanner.isAdvertising`), because a blind MAC connect to a radio that
+is not advertising just burns a ~5 s timeout and returns status 133.
 
 **`PacketIngest`** holds all packet-to-database business logic and no transport concerns.
 Invariants worth knowing before touching it:

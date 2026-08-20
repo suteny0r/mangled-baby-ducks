@@ -58,6 +58,10 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
                 val target = deviceName ?: remembered?.label
                 when (val s = state) {
                     is RadioState.Idle -> Text("Not connected")
+                    is RadioState.Searching -> StatusRow(
+                        "Looking for ${target ?: "radio"}…" +
+                            if (s.of > 1) "  (try ${s.attempt} of ${s.of})" else ""
+                    )
                     is RadioState.Connecting -> StatusRow(
                         "Connecting to ${target ?: "radio"}…" +
                             if (s.of > 1) "  (try ${s.attempt} of ${s.of})" else ""
