@@ -17,14 +17,16 @@ invariants worth not breaking. Read it first; this file is the session log on to
 - There are still no tests of any kind in the repo; verification is on the phone.
 
 ## Current device state
-- Saved-radio list holds **🐭_4fae (Peewee Herman)** and **📣_9f4a (SOBE)**. Peewee is the
-  auto-connect target because it was the last successful connect (it was powered on to
-  test the absent path, then powered off), so the next launch does one 6 s scan and stops
-  with "not in range" until someone taps Connect on SOBE or powers Peewee back on.
-- A POST_NOTIFICATIONS dialog was left on screen by the launch-time permission request;
-  answering it is the user's call.
-- Connecting to Peewee wiped and rebuilt the nodes/channels/my_info tables (the
-  cross-radio guard). Reconnecting to SOBE rebuilds them from SOBE.
+- Connected to **📣_9f4a (SOBE)**, which is the auto-connect target again. The saved-radio
+  list holds SOBE and **🐭_4fae (Peewee Herman)**, which is powered off (it was used to
+  test the not-in-range path).
+- **POST_NOTIFICATIONS is denied** (`granted=false, USER_SET`), so message notifications
+  are silently dropped. The launch-time permission dialog was dismissed with back, not
+  answered — the choice is the user's. Grant it from system settings if notifications are
+  wanted for testing.
+- The nodes/channels/my_info tables were wiped and rebuilt twice by the radio switches
+  (the cross-radio guard); they are now populated from SOBE. Messages, positions,
+  telemetry and traceroutes were untouched.
 - 47+ unread messages were sitting in the badge from the day's test traffic; harmless.
 
 ## Test rig (memory file `mesh-test-radios.md` has the full version)
@@ -98,7 +100,13 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
   Retry button. **Zero** GATT connects and one scan start for the whole launch; the old
   behaviour was three ~5 s blind connects returning status 133.
 - Saved-radio list with two entries (🐭_4fae and 📣_9f4a), each with its own Connect and
-  Forget, "in range <rssi>" shown for whichever the running scan sees.
+  Forget, "in range <rssi>" shown for whichever the running scan sees, and switching
+  between radios from the list.
+- Retry loop still earns its keep: reconnecting to SOBE right after switching away from it
+  (2026-08-19 21:08) was seen advertising each time yet returned GATT 133 on attempts 1
+  and 2 before succeeding on attempt 3 ("Connected after 3 attempt(s)"). Scanning first
+  removes pointless attempts at an absent radio; it does not make 133 go away for a radio
+  whose link was just torn down.
 - Connect flow (2026-08-19 19:24-19:46): one bounded burst of 3 sequential attempts against
   an unreachable radio, one GATT client at a time, ending in a terminal "Could not reach
   🐭_4fae"; resume cycles adding zero attempts; scan → Connect reaching `Subscribed`
