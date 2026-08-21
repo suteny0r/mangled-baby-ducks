@@ -176,6 +176,18 @@ data class WaypointEntity(
     val longitude: Double get() = longitudeI / 1e7
 }
 
+/** A node's current position, for resolving hops on a trace route to map coordinates. */
+data class RoutePoint(
+    val nodeNum: Long,
+    val latitudeI: Int,
+    val longitudeI: Int,
+    val shortName: String?,
+    val longName: String?,
+) {
+    val latitude: Double get() = latitudeI / 1e7
+    val longitude: Double get() = longitudeI / 1e7
+}
+
 /** Node joined with its user identity and latest position — the list-row shape. */
 data class NodeWithUser(
     @Embedded val node: NodeEntity,

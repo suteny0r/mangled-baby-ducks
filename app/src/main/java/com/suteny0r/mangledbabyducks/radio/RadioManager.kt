@@ -498,6 +498,32 @@ class RadioManager(
         return sendAdmin { it.setCommitEditSettings(true) }
     }
 
+    /**
+     * Mark a node as a favorite on the radio. No edit transaction: this is a single
+     * admin field, matching the Swift original (AccessoryManager+ToRadio.swift).
+     */
+    suspend fun setFavorite(nodeNum: Long, favorite: Boolean): Boolean {
+        val num = nodeNum.toInt()
+        return if (favorite) {
+            sendAdmin { it.setSetFavoriteNode(num) }
+        } else {
+            sendAdmin { it.setRemoveFavoriteNode(num) }
+        }
+    }
+
+    /**
+     * Mark a node as ignored on the radio (incoming traffic from it is dropped).
+     * No edit transaction, matching the Swift original.
+     */
+    suspend fun setIgnored(nodeNum: Long, ignored: Boolean): Boolean {
+        val num = nodeNum.toInt()
+        return if (ignored) {
+            sendAdmin { it.setSetIgnoredNode(num) }
+        } else {
+            sendAdmin { it.setRemoveIgnoredNode(num) }
+        }
+    }
+
     /** Replace the channel table and LoRa config from a shared ChannelSet URL. */
     suspend fun applyChannelSet(set: AppOnlyProtos.ChannelSet): Boolean {
         if (!sendAdmin { it.setBeginEditSettings(true) }) return false

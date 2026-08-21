@@ -17,7 +17,7 @@ interface NodeDao {
     suspend fun get(num: Long): NodeEntity?
 
     @Transaction
-    @Query("SELECT * FROM nodes ORDER BY favorite DESC, lastHeard DESC")
+    @Query("SELECT * FROM nodes ORDER BY favorite DESC, lastHeard DESC, num DESC")
     fun nodesWithUsers(): Flow<List<NodeWithUser>>
 
     @Transaction
@@ -32,6 +32,9 @@ interface NodeDao {
 
     @Query("UPDATE nodes SET favorite = :favorite WHERE num = :num")
     suspend fun setFavorite(num: Long, favorite: Boolean)
+
+    @Query("UPDATE nodes SET ignored = :ignored WHERE num = :num")
+    suspend fun setIgnored(num: Long, ignored: Boolean)
 }
 
 @Dao
@@ -158,6 +161,15 @@ interface PositionDao {
             "FROM positions p LEFT JOIN users u ON u.num = p.nodeNum WHERE p.latest = 1"
     )
     fun mapNodes(): Flow<List<MapNode>>
+
+    /** Latest positions + user names for a set of node nums (the route nodes with snapshots). */
+    @Query(
+        "SELECT p.nodeNum AS nodeNum, p.latitudeI AS latitudeI, p.longitudeI AS longitudeI, " +
+            "u.shortName AS shortName, u.longName AS longName " +
+            "FROM positions p LEFT JOIN users u ON u.num = p.nodeNum " +
+            "WHERE p.latest = 1 AND p.nodeNum IN (:nums)"
+    )
+    fun latestByNums(nums: List<Long>): Flow<List<RoutePoint>>
 }
 
 @Dao

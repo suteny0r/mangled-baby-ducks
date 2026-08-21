@@ -1,4 +1,4 @@
-# Handoff — 2026-08-19 (~21:45)
+# Handoff — 2026-08-20 (~session resume)
 
 ## What this is
 Mangled Baby Ducks: an Android (Kotlin/Compose) Meshtastic-compatible client, ported from
@@ -15,6 +15,24 @@ invariants worth not breaking. Read it first; this file is the session log on to
 - Install: `adb -s R5CN70YWT5Z install -r app\build\outputs\apk\debug\app-debug.apk`
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
+
+## Favorite / ignore (2026-08-20, implemented, build passing, awaiting UI verification)
+Port of iOS `FavoriteNodeButton`/`IgnoreNodeButton` (client-mode favorite/ignore via admin):
+- `RadioManager`: `setFavorite(num, fav)` (uses `set_favorite_node` 39 / `remove_favorite_node`
+  40) and `setIgnored(num, ignore)` (47/48), both on the admin path next to `sendAdmin`.
+- `NodeDao`: `setFavorite(num, value)` / `setIgnored(num, value)` update queries.
+- `NodesViewModel`: `toggleFavorite(num, on)` + `toggleIgnored(num, on)`;
+  `myNodeNum` StateFlow (from `RadioManager.myNodeNum`) so the UI knows which row is self.
+- `NodesScreen.kt`: list rows show star (favorite, filled/outline) + RemoveCircle (ignore,
+  filled error-tinted / outlined) in trailingContent; ignore and message hidden for self.
+  Detail-screen call site passes `isSelf = num == myNum` plus both callbacks (lines 44-63).
+- `NodeDetailScreen.kt`: `TopAppBar` actions for favorite (star) and ignore (RemoveCircle,
+  `isSelf` hides the ignore button), same toggle semantics.
+- Build: `:app:assembleDebug` clean; APK installed on R5CN70YWT5Z and launched without crash.
+  **Not yet verified by clicking on the phone**; that is the immediate next step.
+- Note: favorite state here is the CLIENT-side view (DB flag + admin write), matching iOS
+  behavior of preferring the `favorite` field in the node DB when the mesh is not in full
+  mode.
 
 ## Current device state
 - **Radio config editing shipped for all 8 sections** (LoRa, Device, Position, Bluetooth,

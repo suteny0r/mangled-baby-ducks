@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -142,13 +143,50 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
 class NodesViewModel(app: Application) : AndroidViewModel(app) {
     private val container = app.container
 
-    val nodes: StateFlow<List<NodeWithUser>> = container.database.nodeDao().nodesWithUsers()
+    /** Mirrors the iOS node list: ignored nodes are hidden unless shown, favorites can be isolated. */
+    val showIgnored = MutableStateFlow(false)
+    val favoritesOnly = MutableStateFlow(false)
+    val searchText = MutableStateFlow("")
+
+    val nodes: StateFlow<List<NodeWithUser>> = combine(
+        showIgnored, favoritesOnly, searchText, container.database.nodeDao().nodesWithUsers()
+    ) { showIgnored, favoritesOnly, search, list ->
+        val needle = search.trim().lowercase()
+        list.asSequence()
+            .filter { (showIgnored || !it.node.ignored) && (!favoritesOnly || it.node.favorite) }
+            .filter {
+                needle.isEmpty() || nodeMatches(it, needle)
+            }
+            .sortedWith(compareByDescending<NodeWithUser> { it.node.lastHeard ?: 0L })
+            .toList()
+    }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private fun nodeMatches(entry: NodeWithUser, needle: String): Boolean {
+        val user = entry.user
+        return listOfNotNull(
+            user?.userId,
+            user?.longName,
+            user?.shortName,
+            user?.hwModel,
+            "!%08x".format(entry.node.num),
+        ).any { it?.trim()?.lowercase()?.contains(needle) == true }
+    }
 
     val myNodeNum: StateFlow<Long> = container.radioManager.myNodeNum
 
     fun toggleFavorite(num: Long, favorite: Boolean) {
-        viewModelScope.launch { container.database.nodeDao().setFavorite(num, favorite) }
+        viewModelScope.launch {
+            container.radioManager.setFavorite(num, favorite)
+            container.database.nodeDao().setFavorite(num, favorite)
+        }
+    }
+
+    fun toggleIgnored(num: Long, ignored: Boolean) {
+        viewModelScope.launch {
+            container.radioManager.setIgnored(num, ignored)
+            container.database.nodeDao().setIgnored(num, ignored)
+        }
     }
 }
 

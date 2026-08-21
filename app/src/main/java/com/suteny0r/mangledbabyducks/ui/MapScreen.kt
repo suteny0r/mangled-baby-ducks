@@ -1,10 +1,18 @@
 package com.suteny0r.mangledbabyducks.ui
 
 import android.app.Application
+import com.suteny0r.mangledbabyducks.db.RoutePoint
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -41,6 +49,7 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import android.graphics.PointF
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
@@ -66,8 +75,15 @@ import org.maplibre.android.style.layers.PropertyFactory.textOptional
 import org.maplibre.android.style.layers.PropertyFactory.textSize
 import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.sources.GeoJsonSource
+import org.maplibre.android.style.layers.LineLayer
+import org.maplibre.android.style.layers.PropertyFactory.lineCap
+import org.maplibre.android.style.layers.PropertyFactory.lineColor
+import org.maplibre.android.style.layers.PropertyFactory.lineDasharray
+import org.maplibre.android.style.layers.PropertyFactory.lineJoin
+import org.maplibre.android.style.layers.PropertyFactory.lineWidth
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
+import org.maplibre.geojson.LineString
 import org.maplibre.geojson.Point
 
 /** Streets: keyless openfreemap vector style. */
@@ -102,9 +118,26 @@ private const val LABEL_LAYER_ID = "mesh-nodes-labels"
 private const val WP_SOURCE_ID = "waypoints"
 private const val WP_CIRCLE_LAYER_ID = "waypoints-circles"
 private const val WP_LABEL_LAYER_ID = "waypoints-labels"
+private const val FWD_LINE_SOURCE_ID = "route-forward"
+private const val FWD_LINE_ID = "route-forward-line"
+private const val BACK_LINE_SOURCE_ID = "route-back"
+private const val BACK_LINE_ID = "route-back-line"
+
+/**
+ * The traceroute to render: a node list to draw, the forward path, the return path.
+ * Empty when no route is active.
+ */
+data class RouteView(
+    val nodes: List<RoutePoint> = emptyList(),
+    val forwardPath: List<RoutePoint> = emptyList(),
+    val returnPath: List<RoutePoint> = emptyList(),
+    val sourceNum: Long = 0L,
+    val targetNum: Long = 0L,
+)
 
 class MapViewModel(app: Application) : AndroidViewModel(app) {
     private val container = app.container
+    private val router = container.router
 
     val nodes: StateFlow<List<MapNode>> = container.database.positionDao().mapNodes()
         .onEach { android.util.Log.d("MapScreen", "mapNodes emitted ${it.size}") }
@@ -118,6 +151,52 @@ class MapViewModel(app: Application) : AndroidViewModel(app) {
     val channels: StateFlow<List<ChannelEntity>> =
         container.database.channelDao().activeChannels()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /**
+     * Active trace route for rendering (empty = no route). Resolved from the router state +
+     * the positions DB so that hops without a position snapshot are silently dropped (matching
+     * iOS, which compactMaps on missing positions). The originator is our own radio (myInfo).
+     * Forward = originator -> hops -> target; Return = target -> back hops -> originator.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val route: StateFlow<RouteView> =
+        router.activeRoute
+            .flatMapLatest { route ->
+                if (route == null) {
+                    flowOf(RouteView())
+                } else {
+                    val forwardCsv = route.routeTowards.split(",").mapNotNull { it.trim().toLongOrNull() }
+                    val backCsv = route.routeBack.split(",").mapNotNull { it.trim().toLongOrNull() }
+                    container.database.myInfoDao().myInfoOnce().let { myInfo ->
+                        val myNum = myInfo?.myNodeNum ?: 0L
+                        val baseNums = (listOf(route.toNum) + forwardCsv + backCsv).distinct()
+                        val numSet = if (myNum != 0L) (baseNums + myNum).distinct() else baseNums
+                        container.database.positionDao().latestByNums(numSet).map { points ->
+                            val byNum = points.associateBy { it.nodeNum }
+                            val forward: List<RoutePoint> = buildList {
+                                if (myNum != 0L) byNum[myNum]?.let { add(it) }
+                                forwardCsv.forEach { n -> byNum[n]?.let { add(it) } }
+                                byNum[route.toNum]?.let { add(it) }
+                            }
+                            val back: List<RoutePoint> = buildList {
+                                byNum[route.toNum]?.let { add(it) }
+                                backCsv.forEach { n -> byNum[n]?.let { add(it) } }
+                                if (myNum != 0L) byNum[myNum]?.let { add(it) }
+                            }
+                            val uniq = (forward + back).distinctBy { it.nodeNum }
+                            RouteView(
+                                nodes = uniq,
+                                forwardPath = forward,
+                                returnPath = back,
+                                sourceNum = myNum,
+                                targetNum = route.toNum,
+                            )
+                        }
+                    }
+                }
+            }
+            .flowOn(Dispatchers.IO)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), RouteView())
 
     fun sendWaypoint(name: String, description: String, lat: Double, lon: Double, channel: Int) {
         viewModelScope.launch {
@@ -134,11 +213,14 @@ class MapViewModel(app: Application) : AndroidViewModel(app) {
 fun MapScreen(vm: MapViewModel = viewModel()) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val router = context.container.router
     val nodes by vm.nodes.collectAsState()
     val waypoints by vm.waypoints.collectAsState()
     val channels by vm.channels.collectAsState()
+    val route by vm.route.collectAsState()
     val currentNodes = rememberUpdatedState(nodes)
     val currentWaypoints = rememberUpdatedState(waypoints)
+    val currentRoute = rememberUpdatedState(route)
     var satellite by rememberSaveable { mutableStateOf(true) }
     var newWaypointAt by remember { mutableStateOf<Pair<Double, Double>?>(null) }
 
@@ -160,11 +242,24 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
             }
             map.setStyle(builder) { style ->
                 addNodeLayers(style, satellite)
+                addRouteLayers(style)
                 renderNodes(map, currentNodes.value, fitState)
                 renderWaypoints(map, currentWaypoints.value)
             }
             map.addOnMapLongClickListener { latLng ->
                 newWaypointAt = latLng.latitude to latLng.longitude
+                true
+            }
+            map.addOnMapClickListener { latLng ->
+                // Only a tap on a node circle or its label opens the detail
+                // screen; a tap on empty space returns false (not our gesture).
+                val point = map.projection.toScreenLocation(latLng)
+                val hit = map.queryRenderedFeatures(point, CIRCLE_LAYER_ID, LABEL_LAYER_ID)
+                    .firstOrNull { it.hasProperty("nodeNum") }
+                    ?: return@addOnMapClickListener false
+                val num = hit.getNumberProperty("nodeNum")?.toLong()
+                    ?: return@addOnMapClickListener false
+                router.openNode(num)
                 true
             }
         }
@@ -198,9 +293,27 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
                 // invisible to Compose's snapshot observer — update would never re-run.
                 val currentNodeList = nodes
                 val currentWaypointList = waypoints
+                val currentRouteView = route
+                // When a route is active, show only the nodes on that path (matching iOS
+                // selectedTraceRoute behavior); otherwise show the full mesh.
+                val displayNodes = if (currentRouteView.nodes.isNotEmpty()) {
+                    currentRouteView.nodes.map { p ->
+                        MapNode(
+                            nodeNum = p.nodeNum,
+                            latitudeI = (p.latitude * 1e7).toInt(),
+                            longitudeI = (p.longitude * 1e7).toInt(),
+                            time = 0L,
+                            shortName = p.shortName,
+                            longName = p.longName,
+                        )
+                    }
+                } else {
+                    currentNodeList
+                }
                 view.getMapAsync { map ->
-                    renderNodes(map, currentNodeList, fitState)
+                    renderNodes(map, displayNodes, fitState)
                     renderWaypoints(map, currentWaypointList)
+                    renderRoutePath(map, currentRouteView)
                 }
             },
         )
@@ -212,7 +325,17 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
         ) {
             Icon(Icons.Default.Layers, contentDescription = "Toggle satellite/streets")
         }
-        if (nodes.isEmpty()) {
+        if (route.nodes.isNotEmpty()) {
+            SmallFloatingActionButton(
+                onClick = { router.clearRoute() },
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(12.dp),
+            ) {
+                Icon(Icons.Default.Close, contentDescription = "Close traceroute")
+            }
+        }
+        if (nodes.isEmpty() && route.nodes.isEmpty()) {
             Text(
                 "No node positions yet",
                 modifier = Modifier
@@ -366,6 +489,53 @@ private fun addNodeLayers(style: Style, satellite: Boolean) {
 }
 
 /**
+ * Add the trace-route line layers (solid forward + dashed return). Created once per style
+ * load; renderRoutePath pushes the geometry each time the route changes.
+ */
+private fun addRouteLayers(style: Style) {
+    if (style.getSourceAs<GeoJsonSource>(FWD_LINE_SOURCE_ID) != null) return
+    style.addSource(GeoJsonSource(FWD_LINE_SOURCE_ID))
+    style.addSource(GeoJsonSource(BACK_LINE_SOURCE_ID))
+    style.addLayer(
+        LineLayer(FWD_LINE_ID, FWD_LINE_SOURCE_ID).withProperties(
+            lineColor(0xFFFF9800.toInt()),
+            lineWidth(3f),
+            lineCap("round"),
+            lineJoin("round"),
+        )
+    )
+    style.addLayer(
+        LineLayer(BACK_LINE_ID, BACK_LINE_SOURCE_ID).withProperties(
+            lineColor(0xFF00BFFF.toInt()),
+            lineWidth(3f),
+            lineCap("round"),
+            lineJoin("round"),
+            lineDasharray(arrayOf(2f, 1.0f)),
+        )
+    )
+}
+
+/**
+ * Push the active route's forward + return LineStrings into their sources. The forward path
+ * is solid orange (originator -> hops -> target); the return path is dashed cyan (target ->
+ * back hops -> originator). Both collapse to an empty FeatureCollection when no route is set.
+ */
+private fun renderRoutePath(map: MapLibreMap, route: RouteView) {
+    val style = map.style ?: return
+    val fwdSource = style.getSourceAs<GeoJsonSource>(FWD_LINE_SOURCE_ID) ?: return
+    val backSource = style.getSourceAs<GeoJsonSource>(BACK_LINE_SOURCE_ID) ?: return
+
+    fun lineString(points: List<RoutePoint>): FeatureCollection? {
+        if (points.size < 2) return FeatureCollection.fromFeatures(emptyList())
+        val pts = points.map { Point.fromLngLat(it.longitude, it.latitude) }
+        val ls = LineString.fromLngLats(pts)
+        return FeatureCollection.fromFeatures(listOf(Feature.fromGeometry(ls)))
+    }
+    lineString(route.forwardPath)?.let { fwdSource.setGeoJson(it) }
+    lineString(route.returnPath)?.let { backSource.setGeoJson(it) }
+}
+
+/**
  * Glyph servers carry SDF fonts, not emoji, and unknown glyph ranges 404 — strip
  * non-BMP characters and fall back to the node id when nothing printable is left.
  */
@@ -376,7 +546,7 @@ private fun mapLabel(node: MapNode): String {
 }
 
 class FitState {
-    var done = false
+    var fittedSize = -1
 }
 
 private fun renderNodes(map: MapLibreMap, nodes: List<MapNode>, fit: FitState) {
@@ -388,16 +558,18 @@ private fun renderNodes(map: MapLibreMap, nodes: List<MapNode>, fit: FitState) {
         android.util.Log.d("MapScreen", "renderNodes: source missing (${nodes.size} nodes)")
         return
     }
-    android.util.Log.d("MapScreen", "renderNodes: ${nodes.size} nodes, fitDone=${fit.done}")
+    android.util.Log.d("MapScreen", "renderNodes: ${nodes.size} nodes, fittedSize=${fit.fittedSize}")
     val features = nodes.map { node ->
         Feature.fromGeometry(Point.fromLngLat(node.longitude, node.latitude)).also {
             it.addStringProperty("label", mapLabel(node))
+            it.addNumberProperty("nodeNum", node.nodeNum)
         }
     }
     source.setGeoJson(FeatureCollection.fromFeatures(features))
 
-    if (!fit.done && nodes.size >= 2) {
-        fit.done = true
+    // Re-fit whenever the visible node set size changes (mesh -> route collapse, close).
+    if (nodes.size >= 2 && fit.fittedSize != nodes.size) {
+        fit.fittedSize = nodes.size
         val bounds = LatLngBounds.Builder()
         nodes.forEach { bounds.include(LatLng(it.latitude, it.longitude)) }
         runCatching {

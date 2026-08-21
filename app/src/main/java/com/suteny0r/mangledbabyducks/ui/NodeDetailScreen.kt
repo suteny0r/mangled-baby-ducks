@@ -2,6 +2,7 @@ package com.suteny0r.mangledbabyducks.ui
 
 import android.app.Application
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,6 +15,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Message
+import androidx.compose.material.icons.filled.RemoveCircle
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.RemoveCircle
+import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -34,6 +39,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -59,6 +66,11 @@ class NodeDetailViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { container.radioManager.sendTraceroute(num) }
     }
 
+    /** Tap a completed traceroute card: show its path on the map. */
+    fun openRoute(route: TracerouteEntity) {
+        container.router.openRoute(route)
+    }
+
     suspend fun nameFor(num: Long): String =
         db.userDao().get(num)?.let { it.longName ?: "!%08x".format(num) } ?: "!%08x".format(num)
 }
@@ -69,6 +81,9 @@ fun NodeDetailScreen(
     nodeNum: Long,
     onBack: () -> Unit,
     onMessage: () -> Unit,
+    onToggleFavorite: () -> Unit,
+    onToggleIgnore: () -> Unit,
+    isSelf: Boolean,
     vm: NodeDetailViewModel = viewModel(),
 ) {
     val entry by vm.node(nodeNum).collectAsState(initial = null)
@@ -86,6 +101,28 @@ fun NodeDetailScreen(
                 }
             },
             actions = {
+                IconButton(
+                    onClick = onToggleFavorite,
+                    modifier = Modifier.semantics { contentDescription = if (entry?.node?.favorite == true) "Unfavorite" else "Favorite" },
+                ) {
+                    Icon(
+                        imageVector = if (entry?.node?.favorite == true) Icons.Filled.Star else Icons.Outlined.StarOutline,
+                        contentDescription = null,
+                        tint = if (entry?.node?.favorite == true) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (!isSelf) {
+                    IconButton(
+                        onClick = onToggleIgnore,
+                        modifier = Modifier.semantics { contentDescription = if (entry?.node?.ignored == true) "Unignore" else "Ignore" },
+                    ) {
+                        Icon(
+                            imageVector = if (entry?.node?.ignored == true) Icons.Filled.RemoveCircle else Icons.Outlined.RemoveCircle,
+                            contentDescription = null,
+                            tint = if (entry?.node?.ignored == true) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 IconButton(onClick = onMessage) {
                     Icon(Icons.AutoMirrored.Outlined.Message, contentDescription = "Message")
                 }
@@ -253,7 +290,10 @@ private fun TracerouteCard(route: TracerouteEntity, vm: NodeDetailViewModel) {
             }
         }
     }
-    Card(Modifier.fillMaxWidth()) {
+    val cardModifier = Modifier
+        .fillMaxWidth()
+        .let { if (route.response) it.clickable { vm.openRoute(route) } else it }
+    Card(cardModifier) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(relativeTime(route.time), style = MaterialTheme.typography.labelSmall)
             Text(text, style = MaterialTheme.typography.bodySmall)
@@ -307,7 +347,7 @@ private fun MetricChart(
 
     Column(modifier) {
         Text(
-            "%.0f$unit – %.0f$unit".format(min, max),
+            "${"%.0f".format(min)}$unit  –  ${"%.0f".format(max)}$unit",
             style = MaterialTheme.typography.labelSmall,
             color = label,
         )
