@@ -50,6 +50,8 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        // iOS navigationTitle("Connect") (Connect.swift).
+        Text("Connect", style = MaterialTheme.typography.headlineSmall)
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Radio", style = MaterialTheme.typography.titleMedium)

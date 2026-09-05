@@ -44,10 +44,11 @@ class Router {
     }
 
     companion object {
-        const val TAB_CONNECT = 0
+        /** Tab order matches the iOS app: Messages, Nodes, Map, Settings, Connect. */
+        const val TAB_MESSAGES = 0
         const val TAB_NODES = 1
         const val TAB_MAP = 2
-        const val TAB_MESSAGES = 3
-        const val TAB_SETTINGS = 4
+        const val TAB_SETTINGS = 3
+        const val TAB_CONNECT = 4
     }
 }

@@ -16,6 +16,7 @@ import com.suteny0r.mangledbabyducks.PrefKeys
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -34,6 +35,10 @@ class LocationSharer(
     private val locationManager =
         context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
     private var listening = false
+
+    /** Last GPS fix seen; lets "send my position to a node" work even when sharing is off. */
+    data class GpsFix(val latitudeI: Int, val longitudeI: Int, val altitude: Int)
+    val lastFix = MutableStateFlow<GpsFix?>(null)
 
     private val listener = LocationListener { location -> onFix(location) }
 
@@ -86,12 +91,14 @@ class LocationSharer(
     }
 
     private fun onFix(location: Location) {
+        val fix = GpsFix(
+            latitudeI = (location.latitude * 1e7).toInt(),
+            longitudeI = (location.longitude * 1e7).toInt(),
+            altitude = location.altitude.toInt(),
+        )
+        lastFix.value = fix
         scope.launch(Dispatchers.IO) {
-            radioManager.sendPhonePosition(
-                latitudeI = (location.latitude * 1e7).toInt(),
-                longitudeI = (location.longitude * 1e7).toInt(),
-                altitude = location.altitude.toInt(),
-            )
+            radioManager.sendPhonePosition(fix.latitudeI, fix.longitudeI, fix.altitude)
         }
     }
 

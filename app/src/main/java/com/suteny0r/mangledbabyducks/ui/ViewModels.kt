@@ -140,6 +140,7 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
     }
 }
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class NodesViewModel(app: Application) : AndroidViewModel(app) {
     private val container = app.container
 
@@ -148,16 +149,23 @@ class NodesViewModel(app: Application) : AndroidViewModel(app) {
     val favoritesOnly = MutableStateFlow(false)
     val searchText = MutableStateFlow("")
 
+    // iOS NodeList display order: connected node first, then favorites,
+    // then most-recently-heard.
     val nodes: StateFlow<List<NodeWithUser>> = combine(
-        showIgnored, favoritesOnly, searchText, container.database.nodeDao().nodesWithUsers()
-    ) { showIgnored, favoritesOnly, search, list ->
+        showIgnored, favoritesOnly, searchText, container.radioManager.myNodeNum,
+        container.database.nodeDao().nodesWithUsers()
+    ) { showIgnored, favoritesOnly, search, myNum, list ->
         val needle = search.trim().lowercase()
         list.asSequence()
             .filter { (showIgnored || !it.node.ignored) && (!favoritesOnly || it.node.favorite) }
             .filter {
                 needle.isEmpty() || nodeMatches(it, needle)
             }
-            .sortedWith(compareByDescending<NodeWithUser> { it.node.lastHeard ?: 0L })
+            .sortedWith(
+                compareByDescending<NodeWithUser> { it.node.num == myNum }
+                    .thenByDescending { it.node.favorite }
+                    .thenByDescending { it.node.lastHeard ?: 0L }
+            )
             .toList()
     }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -174,6 +182,19 @@ class NodesViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     val myNodeNum: StateFlow<Long> = container.radioManager.myNodeNum
+
+    /** Latest battery % per node for the list rows (empty for nodes without telemetry). */
+    val batteryByNode: StateFlow<Map<Long, Int>> = nodes
+        .flatMapLatest { items ->
+            if (items.isEmpty()) flowOf<Map<Long, Int>>(emptyMap())
+            else container.database.telemetryDao()
+                .batteryByNums(items.map { it.node.num })
+                .map { rows ->
+                    // Rows are time-desc; the first per node is its latest reading.
+                    rows.groupBy { it.nodeNum }.mapValues { (_, list) -> list.first().batteryLevel ?: 0 }
+                }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
     fun toggleFavorite(num: Long, favorite: Boolean) {
         viewModelScope.launch {

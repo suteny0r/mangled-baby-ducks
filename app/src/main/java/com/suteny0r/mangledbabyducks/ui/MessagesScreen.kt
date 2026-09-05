@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material3.Card
@@ -96,7 +97,7 @@ fun MessagesScreen(vm: MessagesViewModel = viewModel()) {
     when (val thread = openThread) {
         null -> ThreadList(vm, onOpen = { openThread = it })
         is ThreadTarget.Channel -> ThreadView(
-            title = "#${thread.name}",
+            title = thread.name,
             messages = vm.channelMessages(thread.index),
             tapbacks = vm.channelTapbacks(thread.index),
             vm = vm,
@@ -127,6 +128,14 @@ private fun ThreadList(vm: MessagesViewModel, onOpen: (ThreadTarget) -> Unit) {
 
     LazyColumn(Modifier.fillMaxSize()) {
         item {
+            // iOS navigationTitle("Messages") on the sidebar (Messages.swift).
+            Text(
+                "Messages",
+                style = MaterialTheme.typography.headlineSmall,
+                modifier = Modifier.padding(16.dp),
+            )
+        }
+        item {
             Text(
                 "Channels",
                 style = MaterialTheme.typography.titleSmall,
@@ -134,17 +143,22 @@ private fun ThreadList(vm: MessagesViewModel, onOpen: (ThreadTarget) -> Unit) {
             )
         }
         items(channels, key = { "c${it.index}" }) { channel ->
-            val name = channel.name?.ifEmpty { "Primary" } ?: "Primary"
+            val name = channel.name?.ifEmpty { "Primary Channel" } ?: "Primary Channel"
             ListItem(
                 headlineContent = { Text(name) },
                 leadingContent = { Icon(Icons.Default.Tag, contentDescription = null) },
                 supportingContent = { Text("Channel ${channel.index}") },
+                trailingContent = if (channel.mute) {
+                    { Icon(Icons.Filled.NotificationsOff, contentDescription = "muted") }
+                } else {
+                    null
+                },
                 modifier = Modifier.clickable { onOpen(ThreadTarget.Channel(channel.index, name)) },
             )
         }
         item {
             Text(
-                "Direct messages",
+                "Direct Messages",
                 style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.padding(16.dp),
             )
@@ -163,10 +177,35 @@ private fun ThreadList(vm: MessagesViewModel, onOpen: (ThreadTarget) -> Unit) {
             ListItem(
                 headlineContent = { Text(name) },
                 leadingContent = { Icon(Icons.Default.Person, contentDescription = null) },
-                supportingContent = { user.lastMessage?.let { Text(relativeTime(it)) } },
+                supportingContent = { user.lastMessage?.let { Text(listTimestamp(it)) } },
+                trailingContent = if (user.mute) {
+                    { Icon(Icons.Filled.NotificationsOff, contentDescription = "muted") }
+                } else {
+                    null
+                },
                 modifier = Modifier.clickable { onOpen(ThreadTarget.Direct(user.num, name)) },
             )
         }
+    }
+}
+
+/**
+ * iOS list-row timestamp convention (ChannelList.makeChannelRow): time-of-day today,
+ * literal "Yesterday", else MM/dd/YY.
+ */
+private fun listTimestamp(epochMillis: Long): String {
+    val cal = java.util.Calendar.getInstance()
+    val then = (cal.clone() as java.util.Calendar).apply { timeInMillis = epochMillis }
+    val nowDay = cal.get(java.util.Calendar.DAY_OF_YEAR)
+    val nowYear = cal.get(java.util.Calendar.YEAR)
+    val thenDay = then.get(java.util.Calendar.DAY_OF_YEAR)
+    val thenYear = then.get(java.util.Calendar.YEAR)
+    return when {
+        nowDay == thenDay && nowYear == thenYear ->
+            java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(epochMillis)
+        nowYear == thenYear && nowDay - thenDay == 1 -> "Yesterday"
+        else ->
+            java.text.SimpleDateFormat("MM/dd/yy", java.util.Locale.getDefault()).format(epochMillis)
     }
 }
 

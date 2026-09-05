@@ -17,18 +17,23 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Message
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.RemoveCircle
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -38,12 +43,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.suteny0r.mangledbabyducks.container
 import com.suteny0r.mangledbabyducks.db.NodeWithUser
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NodesScreen(vm: NodesViewModel = viewModel()) {
     val nodes by vm.nodes.collectAsState()
@@ -85,8 +92,11 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
     val showIgnored by vm.showIgnored.collectAsState()
     val favoritesOnly by vm.favoritesOnly.collectAsState()
     val search by vm.searchText.collectAsState()
+    val batteryByNode by vm.batteryByNode.collectAsState()
 
     Column(Modifier.fillMaxSize()) {
+        // iOS sidebar title is "Nodes (<live count>)" (NodeList.swift).
+        TopAppBar(title = { Text("Nodes (${nodes.size})") })
         OutlinedTextField(
             value = search,
             onValueChange = { vm.searchText.value = it },
@@ -133,6 +143,7 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
                 items(nodes, key = { it.node.num }) { entry ->
                     NodeRow(
                         entry = entry,
+                        battery = batteryByNode[entry.node.num],
                         isSelf = entry.node.num == myNum,
                         onOpen = { detailNode = entry.node.num },
                         onToggleFavorite = { vm.toggleFavorite(entry.node.num, !entry.node.favorite) },
@@ -155,6 +166,7 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
 @Composable
 private fun NodeRow(
     entry: NodeWithUser,
+    battery: Int?,
     isSelf: Boolean,
     onOpen: () -> Unit,
     onToggleFavorite: () -> Unit,
@@ -166,10 +178,16 @@ private fun NodeRow(
     ListItem(
         modifier = Modifier.clickable(onClick = onOpen),
         headlineContent = {
-            Text((user?.longName ?: "Node ${node.num}") + if (isSelf) "  (this radio)" else "")
+            // iOS rows identify the connected radio with the "Connected" metadata
+            // line only; no name suffix.
+            Text(user?.longName ?: "Node ${node.num}")
         },
         supportingContent = {
             val parts = buildList {
+                if (isSelf) add("connected")
+                val role = user?.role
+                if (role != null && role != 0) add(roleLabel(role))
+                battery?.let { add("battery ${it.coerceIn(0, 100)}%") }
                 node.lastHeard?.let { add("heard ${relativeTime(it)}") }
                 if (node.snr != 0f) add("SNR %.1f".format(node.snr))
                 if (node.hopsAway == 0) add("direct") else if (node.hopsAway > 0) add("${node.hopsAway} hops")
@@ -178,17 +196,42 @@ private fun NodeRow(
             Text(parts.joinToString("  •  "))
         },
         leadingContent = {
-            Box(
-                Modifier
-                    .size(44.dp)
-                    .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    user?.shortName?.take(4) ?: "?",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(
+                    Modifier
+                        .size(44.dp)
+                        .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        user?.shortName?.take(4) ?: "?",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
+                // PKI state: signed node -> green lock when the key matches, red when
+                // it doesn't; unsigned -> no glyph. Mute rides the bell-slash. Port of
+                // NodeListItem keyStatus + NodeAlertsButton glyph.
+                if (user?.pkiEncrypted == true || user?.mute == true) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (user?.pkiEncrypted == true) {
+                            Icon(
+                                if (user.keyMatch) Icons.Filled.Lock else Icons.Outlined.Lock,
+                                contentDescription = if (user.keyMatch) "key verified" else "key mismatch",
+                                tint = if (user.keyMatch) Color(0xFF2E7D32) else MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        if (user?.mute == true) {
+                            Icon(
+                                Icons.Filled.NotificationsOff,
+                                contentDescription = "muted",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(14.dp),
+                            )
+                        }
+                    }
+                }
             }
         },
         trailingContent = {

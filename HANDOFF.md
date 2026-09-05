@@ -16,6 +16,93 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Cosmetic parity round (2026-08-25, built, NOT installed — phone was not attached)
+Display-only pass to match the iOS app's visible UI. No behavior or schema changes:
+- **Tab bar reordered to iOS ContentView order**: Messages, Nodes, Map, Settings,
+  Connect (was Connect-first). `Router.TAB_*` constants renumbered; Connect icon is now
+  `Link` (iOS `link` symbol). Unread badge still on Messages.
+- **Theme**: dropped Material You dynamic color; both modes now use the iOS AccentColor
+  navy `#2855A8` (AccentColor.colorset sRGB 0.157/0.333/0.659).
+- **Messages**: channel fallback name "Primary" → "Primary Channel"; header casing
+  "Direct Messages"; DM rows use the iOS list timestamp convention (HH:mm today,
+  literal "Yesterday", else MM/dd/yy) instead of relative time; muted channels/contacts
+  show the bell-slash trailing icon; thread title lost its "#" prefix; screen title
+  "Messages" added.
+- **Nodes**: TopAppBar title "Nodes (<live count>)" (iOS sidebar title); sort is now
+  connected-node first, then favorites, then lastHeard (was pure lastHeard); the
+  "(this radio)" headline suffix is gone (iOS marks self with the Connected line only).
+- **Node detail**: identity card got the iOS Section("Node") header plus a Name row;
+  labels matched to iOS ("Node Number", "User Id", "Public Key"). Actions section now
+  ordered like iOS actionsSection: Mute notifications, Share Contact QR, Exchange
+  Positions, Request Local Stats, Exchange User Info, Client History, S&F config,
+  Delete Node. New Administration section (iOS administrationSection): Refresh device
+  metadata, Power Off, Reboot. All confirms are the canonical iOS shape: title
+  "Are you sure?", destructive-role buttons labeled "Shutdown Node?" / "Reboot node?" /
+  "Delete Node", destructive tint on button + label. ActionButton grew a `destructive`
+  param; ConfirmableAction carries confirmLabel+destructive.
+- **Settings**: config rows split into iOS groups — "Radio Configuration" (LoRa,
+  Security) and "Device Configuration" (Bluetooth, Device, Display, Network, Position,
+  Power).
+- **Connect**: "Connect" page title added (iOS navigationTitle).
+- Build clean (one pre-existing-style ExperimentalCoroutinesApi warning fixed by
+  annotating NodesViewModel). **Install pending: adb devices showed nothing on
+  2026-08-25** — install when the phone is attached:
+  `adb -s R5CN70YWT5Z install -r app\build\outputs\apk\debug\app-debug.apk`.
+- Not done by design (would need schema/data work beyond cosmetics): per-row unread
+  dots and message previews in the thread list (ChannelEntity has no lastMessage column),
+  iOS multi-line icon metadata rows, hardware hero card, Logs section, filter sheets.
+
+## Feature parity round 2 (2026-08-24, built and installed, pending click-through)
+Closed the remaining iOS node-action / parity gaps the user approved (NO skips):
+- **Schema v3→v4** (destructive wipe, per convention): new columns `users.unmessagable`,
+  `nodes.node_status`, `nodes.has_xeddsa_signed`; `fallbackToDestructiveMigration` as always.
+- **PacketIngest NODE_STATUS_APP** dispatch (iOS `AccessoryManager+Nodes`); `NodeDao.setMute`,
+  `UserDao` mute write.
+- **RadioManager: `sendPayload` + 9 cross-node admin methods** — shutdown, reboot,
+  remove-node, exchange-user-info, send-to-position, local-stats request, device-metadata
+  request, store-and-forward config + client-history request. All `sessionPasskey` is
+  **intentionally NOT set** (iOS sets it; deliberate divergence, documented in KDoc).
+  `PacketIngest.adminResponse()` dispatches the responses.
+- **NodeDetailScreen**: full Actions section per iOS NodeDetail — Alerts (mute bell toggle,
+  now a local `users.mute` flag), Share Contact QR (gated on `unmessagable == false`),
+  Favorite, Message, Exchange position/user, Local stats, Refresh metadata, Send to
+  position, Client history, plus destructive Shutdown / Reboot / Remove with an
+  AlertDialog confirm (ConfirmableAction is a `data class`, not sealed). Mute/Remove
+  hidden on the self row. "Signed node — Verified automatically" positive row (iOS
+  `hasXeddsaSigned`) above the key-mismatch warning.
+- **NodesScreen rows**: PKI glyph from iOS NodeListItem keyStatus — solid green lock when
+  `pkiEncrypted && keyMatch`, outlined red lock on mismatch, bell-slash when muted;
+  self row and rows without a glyph render the avatar as before.
+- **ShareContactURL**: `shareContactUrl()` builds `https://meshtastic.org/v/#` + base64url
+  of a `SharedContact` proto (node_num, user proto, manually_verified=false). Prefix with
+  the `#` is canonical: iOS `ContactURLHandler.canonicalPrefix` and the reference
+  meshtastic-android-app manifest intent-filter both include it. Dialog shows the QR
+  (shared `qrBitmap` helper, now internal), a Share intent (text/plain with the URL), and
+  Copy link. NFC tag write is iOS-only, not ported.
+- Build `:app:assembleDebug` clean; installed on R5CN70YWT5Z 2026-08-24.
+  **Not yet click-verified.** Destructive admin calls (shutdown/reboot/remove) the user
+  will fire manually.
+
+## Node metadata alignment (2026-08-23, built and installed, on phone awaiting click-through)
+Closed the per-node field gaps vs the iOS app using only data already in the local DB
+(scope was explicitly limited to this; admin actions like delete/reboot/shutdown, the
+XEdDSA "signed node" badge, and full telemetry parity were all deliberately NOT done):
+- `NodeDetailScreen.kt`: new identity card rows — Node number (decimal + Copy),
+  User ID (`!hex`), Role (via new `roleLabel(Int)` mapping the config.proto Role enum,
+  shown in the Identity row), first-heard timestamp in the Link row, Battery % and
+  Uptime rows (new `latestDevice()` VM helper over `TelemetryDao.latestDeviceMetrics`,
+  "1d 4h 12m" style via new `uptimeLabel(Int)`), Position row now includes altitude /
+  sats / speed / heading when present, Public key row (Base64 + new `CopyButton`
+  composable using `ClipboardManager` + Toast) right above the existing key-mismatch
+  warning.
+- `NodesScreen.kt` rows: supporting line now leads with "connected" (self row), the
+  role (omitted when 0 == CLIENT, matching iOS' affirmative-only display), and
+  "battery NN%" when telemetry exists.
+- `TelemetryDao.batteryByNums(nums)` (first match per node in time-desc order feeds
+  `NodesViewModel.batteryByNode`, a `flatMapLatest` derive over the visible node list).
+- Build: `:app:assembleDebug` clean; `adb devices` confirmed R5CN70YWT5Z; installed.
+  Not yet click-verified on the phone.
+
 ## Favorite / ignore (2026-08-20, implemented, build passing, awaiting UI verification)
 Port of iOS `FavoriteNodeButton`/`IgnoreNodeButton` (client-mode favorite/ignore via admin):
 - `RadioManager`: `setFavorite(num, fav)` (uses `set_favorite_node` 39 / `remove_favorite_node`

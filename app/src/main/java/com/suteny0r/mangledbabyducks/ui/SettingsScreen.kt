@@ -165,10 +165,33 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
             }
         }
 
-        Text("Radio configuration", style = MaterialTheme.typography.titleMedium)
+        // iOS Settings groups: Radio Configuration holds LoRa/Security (+ channel QR),
+        // Device Configuration holds the rest of the sections.
+        Text("Radio Configuration", style = MaterialTheme.typography.titleMedium)
         Card(Modifier.fillMaxWidth()) {
             Column {
-                ConfigSection.entries.forEachIndexed { index, entry ->
+                listOf(ConfigSection.LORA, ConfigSection.SECURITY).forEachIndexed { index, entry ->
+                    if (index > 0) HorizontalDivider()
+                    ListItem(
+                        headlineContent = { Text(entry.title) },
+                        supportingContent = { Text(entry.summary) },
+                        modifier = Modifier.clickable { section = entry },
+                    )
+                }
+            }
+        }
+
+        Text("Device Configuration", style = MaterialTheme.typography.titleMedium)
+        Card(Modifier.fillMaxWidth()) {
+            Column {
+                listOf(
+                    ConfigSection.BLUETOOTH,
+                    ConfigSection.DEVICE,
+                    ConfigSection.DISPLAY,
+                    ConfigSection.NETWORK,
+                    ConfigSection.POSITION,
+                    ConfigSection.POWER,
+                ).forEachIndexed { index, entry ->
                     if (index > 0) HorizontalDivider()
                     ListItem(
                         headlineContent = { Text(entry.title) },
@@ -304,7 +327,7 @@ private fun ChannelImportDialog(vm: SettingsViewModel, onDismiss: () -> Unit) {
     )
 }
 
-private fun qrBitmap(content: String, size: Int = 720): Bitmap {
+fun qrBitmap(content: String, size: Int = 720): Bitmap {
     val matrix = QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, size, size)
     val pixels = IntArray(size * size)
     for (y in 0 until size) {

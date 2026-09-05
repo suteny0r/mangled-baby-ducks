@@ -30,6 +30,9 @@ interface NodeDao {
     @Query("DELETE FROM nodes")
     suspend fun clear()
 
+    @Query("DELETE FROM nodes WHERE num = :num")
+    suspend fun delete(num: Long)
+
     @Query("UPDATE nodes SET favorite = :favorite WHERE num = :num")
     suspend fun setFavorite(num: Long, favorite: Boolean)
 
@@ -53,6 +56,12 @@ interface UserDao {
 
     @Query("UPDATE users SET lastMessage = :time WHERE num = :num")
     suspend fun touchLastMessage(num: Long, time: Long)
+
+    @Query("UPDATE users SET mute = :mute WHERE num = :num")
+    suspend fun setMute(num: Long, mute: Boolean)
+
+    @Query("DELETE FROM users WHERE num = :num")
+    suspend fun delete(num: Long)
 }
 
 @Dao
@@ -197,6 +206,13 @@ interface TelemetryDao {
 
     @Query("SELECT * FROM telemetry WHERE nodeNum = :nodeNum AND metricsType = 0 ORDER BY time DESC LIMIT 1")
     fun latestDeviceMetrics(nodeNum: Long): Flow<TelemetryEntity?>
+
+    /** Latest battery reading per node: rows in time-desc order, first per node wins. */
+    @Query(
+        "SELECT * FROM telemetry WHERE nodeNum IN (:nums) AND metricsType = 0 " +
+            "AND batteryLevel IS NOT NULL ORDER BY time DESC"
+    )
+    fun batteryByNums(nums: List<Long>): Flow<List<TelemetryEntity>>
 
     @Query(
         "SELECT * FROM telemetry WHERE nodeNum = :nodeNum AND metricsType = :type " +

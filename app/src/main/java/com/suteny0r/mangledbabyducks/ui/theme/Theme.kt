@@ -1,26 +1,26 @@
 package com.suteny0r.mangledbabyducks.ui.theme
 
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 
-private val MeshtasticGreen = Color(0xFF67EA94)
+/**
+ * The iOS app pins one AccentColor asset (sRGB 0.157, 0.333, 0.659) for light and dark;
+ * mirror that here instead of Material You dynamic color so both ports read the same.
+ */
+private val AccentBlue = Color(0xFF2855A8)
 
 private val DarkColors = darkColorScheme(
-    primary = MeshtasticGreen,
-    secondary = Color(0xFF4CBF6F),
+    primary = AccentBlue,
+    secondary = AccentBlue,
 )
 
 private val LightColors = lightColorScheme(
-    primary = Color(0xFF2E8B57),
-    secondary = Color(0xFF4CBF6F),
+    primary = AccentBlue,
+    secondary = AccentBlue,
 )
 
 @Composable
@@ -28,13 +28,6 @@ fun MeshtasticTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-        darkTheme -> DarkColors
-        else -> LightColors
-    }
+    val colorScheme = if (darkTheme) DarkColors else LightColors
     MaterialTheme(colorScheme = colorScheme, content = content)
 }

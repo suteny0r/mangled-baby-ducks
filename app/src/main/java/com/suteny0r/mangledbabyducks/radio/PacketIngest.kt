@@ -11,6 +11,7 @@ import com.suteny0r.mangledbabyducks.db.PositionEntity
 import com.suteny0r.mangledbabyducks.db.TelemetryEntity
 import com.suteny0r.mangledbabyducks.db.UserEntity
 import com.suteny0r.mangledbabyducks.db.WaypointEntity
+import org.meshtastic.proto.AdminProtos
 import org.meshtastic.proto.ChannelProtos
 import org.meshtastic.proto.ConfigProtos
 import org.meshtastic.proto.MeshProtos
@@ -61,6 +62,31 @@ class PacketIngest(private val db: MeshDatabase) {
         db.configDao().upsert(ConfigEntity(type, moduleConfig.toByteArray(), System.currentTimeMillis()))
     }
 
+    /**
+     * Inbound ADMIN_APP replies to a remote admin request (PacketIngest.adminResponse is
+     * dispatched from RadioManager for every ADMIN_APP packet whose sender is not our own
+     * node). DeviceMetadata lands on the my_info row; ModuleConfig rows land on the
+     * config table, keyed the same way the handshake does.
+     */
+    suspend fun adminResponse(packet: MeshProtos.MeshPacket) {
+        val myNum = db.myInfoDao().myInfoOnce()?.myNodeNum
+        if (myNum != null && packet.from.uint() == myNum) return
+        try {
+            val admin = AdminProtos.AdminMessage.parseFrom(packet.decoded.payload)
+            when (admin.payloadVariantCase) {
+                AdminProtos.AdminMessage.PayloadVariantCase.GET_DEVICE_METADATA_RESPONSE -> {
+                    deviceMetadata(admin.getGetDeviceMetadataResponse())
+                }
+                AdminProtos.AdminMessage.PayloadVariantCase.GET_MODULE_CONFIG_RESPONSE -> {
+                    moduleConfig(admin.getGetModuleConfigResponse())
+                }
+                else -> Log.d(TAG, "Admin response ignored: ${admin.payloadVariantCase}")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse ADMIN_APP response", e)
+        }
+    }
+
     suspend fun deviceMetadata(metadata: MeshProtos.DeviceMetadata) {
         val existing = db.myInfoDao().myInfoOnce() ?: return
         db.myInfoDao().upsert(existing.copy(firmwareVersion = metadata.firmwareVersion))
@@ -83,6 +109,9 @@ class PacketIngest(private val db: MeshDatabase) {
                 viaMqtt = info.viaMqtt,
                 favorite = info.isFavorite || (existing?.favorite ?: false),
                 ignored = existing?.ignored ?: false,
+                hasXeddsaSigned = (existing?.hasXeddsaSigned ?: false) || info.hasXeddsaSigned,
+                nodeStatus = existing?.nodeStatus,
+                firmwareVersion = existing?.firmwareVersion,
             )
         )
         if (info.hasUser()) upsertUser(num, info.user)
@@ -95,28 +124,36 @@ class PacketIngest(private val db: MeshDatabase) {
     private suspend fun upsertUser(num: Long, user: MeshProtos.User) {
         val existing = db.userDao().get(num)
         // First-wins public key policy (UserEntity.applyInboundPublicKey): a differing
-        // inbound key is refused and flagged so the UI can warn.
+        // inbound key is refused, flagged so the UI can warn, and recorded for review.
         val inboundKey = user.publicKey.toByteArray().takeIf { it.isNotEmpty() }
         val storedKey = existing?.publicKey
-        val (key, keyMatch) = when {
-            inboundKey == null -> storedKey to (existing?.keyMatch ?: true)
-            storedKey == null || storedKey.isEmpty() -> inboundKey to true
-            storedKey.contentEquals(inboundKey) -> storedKey to true
-            else -> storedKey to false
+        val (key, keyMatch, newKey) = when {
+            inboundKey == null -> Triple(storedKey, existing?.keyMatch ?: true, existing?.newPublicKey)
+            storedKey == null || storedKey.isEmpty() -> Triple(inboundKey, true, existing?.newPublicKey)
+            storedKey.contentEquals(inboundKey) -> Triple(storedKey, true, existing?.newPublicKey)
+            else -> Triple(storedKey, false, inboundKey)
         }
+        // Explicit wire flag wins; otherwise derive from role (unmessagableFromUser).
+        val role = user.roleValue
+        val unmessagable =
+            if (user.hasIsUnmessagable()) user.isUnmessagable else role in UNMESSAGABLE_ROLES
         db.userDao().upsert(
             UserEntity(
                 num = num,
                 userId = user.id,
                 longName = user.longName.ifEmpty { existing?.longName },
                 shortName = user.shortName.ifEmpty { existing?.shortName },
-                hwModel = user.hwModel.name,
-                role = user.roleValue,
+                hwModel = user.hwModel.name.uppercase(),
+                hwModelId = user.hwModelValue,
+                role = role,
                 isLicensed = user.isLicensed,
                 publicKey = key,
                 pkiEncrypted = key != null && key.isNotEmpty(),
                 keyMatch = keyMatch,
+                newPublicKey = newKey,
                 lastMessage = existing?.lastMessage,
+                mute = existing?.mute ?: false,
+                unmessagable = unmessagable,
             )
         )
     }
@@ -160,6 +197,7 @@ class PacketIngest(private val db: MeshDatabase) {
                 viaMqtt = packet.viaMqtt,
                 lastHeard = lastHeard,
                 hopsAway = hopsAway,
+                hasXeddsaSigned = (existing?.hasXeddsaSigned ?: false) || packet.xeddsaSigned,
             )
         )
     }
@@ -222,6 +260,20 @@ class PacketIngest(private val db: MeshDatabase) {
             MeshProtos.User.parseFrom(packet.decoded.payload)
         }.getOrNull() ?: return
         upsertUser(packet.from.uint(), user)
+    }
+
+    /**
+     * NODE_STATUS_APP: the node's free-form status text. Port of
+     * UpdateSwiftData.upsertNodeStatusPacket; empty status clears the field.
+     */
+    suspend fun nodeStatusPacket(packet: MeshProtos.MeshPacket) {
+        val num = packet.from.uint()
+        if (num == 0L) return
+        val status = runCatching {
+            MeshProtos.StatusMessage.parseFrom(packet.decoded.payload)
+        }.getOrNull()?.status ?: return
+        val existing = db.nodeDao().get(num) ?: return
+        db.nodeDao().upsert(existing.copy(nodeStatus = status.ifEmpty { null }))
     }
 
     /** POSITION_APP. */
@@ -300,7 +352,7 @@ class PacketIngest(private val db: MeshDatabase) {
         )
     }
 
-    /** TELEMETRY_APP. */
+    /** TELEMETRY_APP; handles device, environment, power, air-quality, and local-stats variants. */
     suspend fun telemetryPacket(packet: MeshProtos.MeshPacket) {
         val telemetry = runCatching {
             TelemetryProtos.Telemetry.parseFrom(packet.decoded.payload)
@@ -309,20 +361,101 @@ class PacketIngest(private val db: MeshDatabase) {
         val timeSec = if (telemetry.time != 0) telemetry.time.uint()
         else if (packet.rxTime != 0) packet.rxTime.uint()
         else System.currentTimeMillis() / 1000
+        val base = TelemetryEntity(
+            nodeNum = nodeNum,
+            metricsType = 0,
+            time = if (timeSec != 0L) timeSec * 1000 else System.currentTimeMillis(),
+            snr = if (packet.rxSnr != 0f) packet.rxSnr else null,
+            rssi = if (packet.rxRssi != 0) packet.rxRssi else null,
+        )
         when (telemetry.variantCase) {
-            TelemetryProtos.Telemetry.VariantCase.DEVICE_METRICS ->
-                deviceMetrics(nodeNum, telemetry.deviceMetrics, timeSec.toInt())
+            TelemetryProtos.Telemetry.VariantCase.DEVICE_METRICS -> {
+                val m = telemetry.deviceMetrics
+                db.telemetryDao().insert(
+                    base.copy(
+                        batteryLevel = if (m.hasBatteryLevel()) m.batteryLevel else null,
+                        voltage = if (m.hasVoltage()) m.voltage else null,
+                        channelUtilization = if (m.hasChannelUtilization()) m.channelUtilization else null,
+                        airUtilTx = if (m.hasAirUtilTx()) m.airUtilTx else null,
+                        uptimeSeconds = if (m.hasUptimeSeconds()) m.uptimeSeconds else null,
+                    )
+                )
+            }
             TelemetryProtos.Telemetry.VariantCase.ENVIRONMENT_METRICS -> {
                 val m = telemetry.environmentMetrics
                 db.telemetryDao().insert(
-                    TelemetryEntity(
-                        nodeNum = nodeNum,
+                    base.copy(
                         metricsType = 1,
-                        time = timeSec * 1000,
                         temperature = if (m.hasTemperature()) m.temperature else null,
                         relativeHumidity = if (m.hasRelativeHumidity()) m.relativeHumidity else null,
                         barometricPressure = if (m.hasBarometricPressure()) m.barometricPressure else null,
+                        gasResistance = if (m.hasGasResistance()) m.gasResistance else null,
+                        voltage = if (m.hasVoltage()) m.voltage else null,
+                        current = if (m.hasCurrent()) m.current else null,
                         iaq = if (m.hasIaq()) m.iaq else null,
+                        distance = if (m.hasDistance()) m.distance else null,
+                        lux = if (m.hasLux()) m.lux else null,
+                        whiteLux = if (m.hasWhiteLux()) m.whiteLux else null,
+                        irLux = if (m.hasIrLux()) m.irLux else null,
+                        uvLux = if (m.hasUvLux()) m.uvLux else null,
+                        windDirection = if (m.hasWindDirection()) m.windDirection else null,
+                        windSpeed = if (m.hasWindSpeed()) m.windSpeed else null,
+                        weight = if (m.hasWeight()) m.weight else null,
+                        windGust = if (m.hasWindGust()) m.windGust else null,
+                        windLull = if (m.hasWindLull()) m.windLull else null,
+                        radiation = if (m.hasRadiation()) m.radiation else null,
+                        rainfall1H = if (m.hasRainfall1H()) m.rainfall1H else null,
+                        rainfall24H = if (m.hasRainfall24H()) m.rainfall24H else null,
+                        soilMoisture = if (m.hasSoilMoisture()) m.soilMoisture else null,
+                        soilTemperature = if (m.hasSoilTemperature()) m.soilTemperature else null,
+                    )
+                )
+            }
+            TelemetryProtos.Telemetry.VariantCase.POWER_METRICS -> {
+                val m = telemetry.powerMetrics
+                db.telemetryDao().insert(
+                    base.copy(
+                        metricsType = 2,
+                        powerCh1Voltage = if (m.hasCh1Voltage()) m.ch1Voltage else null,
+                        powerCh1Current = if (m.hasCh1Current()) m.ch1Current else null,
+                        powerCh2Voltage = if (m.hasCh2Voltage()) m.ch2Voltage else null,
+                        powerCh2Current = if (m.hasCh2Current()) m.ch2Current else null,
+                        powerCh3Voltage = if (m.hasCh3Voltage()) m.ch3Voltage else null,
+                        powerCh3Current = if (m.hasCh3Current()) m.ch3Current else null,
+                    )
+                )
+            }
+            TelemetryProtos.Telemetry.VariantCase.AIR_QUALITY_METRICS -> {
+                val m = telemetry.airQualityMetrics
+                db.telemetryDao().insert(
+                    base.copy(
+                        metricsType = 3,
+                        pm10Standard = if (m.hasPm10Standard()) m.pm10Standard else null,
+                        pm25Standard = if (m.hasPm25Standard()) m.pm25Standard else null,
+                        pm100Standard = if (m.hasPm100Standard()) m.pm100Standard else null,
+                        pm10Environmental = if (m.hasPm10Environmental()) m.pm10Environmental else null,
+                        pm25Environmental = if (m.hasPm25Environmental()) m.pm25Environmental else null,
+                        pm100Environmental = if (m.hasPm100Environmental()) m.pm100Environmental else null,
+                    )
+                )
+            }
+            TelemetryProtos.Telemetry.VariantCase.LOCAL_STATS -> {
+                val m = telemetry.localStats
+                db.telemetryDao().insert(
+                    base.copy(
+                        metricsType = 4,
+                        uptimeSeconds = m.uptimeSeconds,
+                        channelUtilization = m.channelUtilization,
+                        airUtilTx = m.airUtilTx,
+                        numPacketsTx = m.numPacketsTx,
+                        numPacketsRx = m.numPacketsRx,
+                        numPacketsRxBad = m.numPacketsRxBad,
+                        numRxDupe = m.numRxDupe,
+                        numTxRelay = m.numTxRelay,
+                        numTxRelayCanceled = m.numTxRelayCanceled,
+                        numOnlineNodes = m.numOnlineNodes,
+                        numTotalNodes = m.numTotalNodes,
+                        noiseFloor = m.noiseFloor,
                     )
                 )
             }
@@ -348,5 +481,8 @@ class PacketIngest(private val db: MeshDatabase) {
 
     companion object {
         private const val TAG = "PacketIngest"
+
+        /** Roles that cannot receive DMs (unmessagableFromUser fallback). */
+        private val UNMESSAGABLE_ROLES = setOf(2, 4, 5, 6, 7, 10, 11)
     }
 }

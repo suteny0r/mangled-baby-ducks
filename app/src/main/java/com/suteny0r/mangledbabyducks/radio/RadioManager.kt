@@ -31,6 +31,8 @@ import org.meshtastic.proto.ChannelProtos
 import org.meshtastic.proto.ConfigProtos
 import org.meshtastic.proto.MeshProtos
 import org.meshtastic.proto.Portnums
+import org.meshtastic.proto.StoreAndForwardProtos
+import org.meshtastic.proto.TelemetryProtos
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.random.Random
 
@@ -408,8 +410,10 @@ class RadioManager(
                 ingest.textMessage(packet, myNum)?.let { incomingMessages.emit(it) }
             }
             Portnums.PortNum.NODEINFO_APP -> ingest.userPacket(packet)
+            Portnums.PortNum.NODE_STATUS_APP -> ingest.nodeStatusPacket(packet)
             Portnums.PortNum.POSITION_APP -> ingest.positionPacket(packet)
             Portnums.PortNum.TELEMETRY_APP -> ingest.telemetryPacket(packet)
+            Portnums.PortNum.ADMIN_APP -> ingest.adminResponse(packet)
             Portnums.PortNum.ROUTING_APP -> ingest.routing(packet, myNum)
             Portnums.PortNum.TRACEROUTE_APP -> ingest.traceroute(packet)
             Portnums.PortNum.WAYPOINT_APP -> ingest.waypointPacket(packet)
@@ -661,6 +665,245 @@ class RadioManager(
             .build()
         return runCatching { send { it.setPacket(packet) } }.isSuccess
     }
+
+    /**
+     * Build and send a mesh packet carrying a decoded portnum payload. Covers the
+     * non-admin outbound calls: S&F client-history, user-info exchange, position,
+     * telemetry. Port of the per-method sendPosition / requestS&F / exchangeUserInfo /
+     * sendLocalStatsRequest builders in AccessoryManager+ToRadio.swift /
+     * AccessoryManager+Position.swift.
+     */
+    private suspend fun sendPayload(
+        toNum: Int,
+        portnum: Portnums.PortNum,
+        reliable: Boolean,
+        wantAck: Boolean,
+        wantResponse: Boolean,
+        channel: Int,
+        hopsAway: Int,
+        data: (MeshProtos.Data.Builder) -> MeshProtos.Data.Builder,
+    ): Boolean {
+        val myNum = _myNodeNum.value
+        if (myNum == 0L) return false
+        val packet = MeshProtos.MeshPacket.newBuilder()
+            .setId(Random.nextLong(255L, 0xFFFFFFFFL).toInt())
+            .setTo(toNum)
+            .setFrom(myNum.toInt())
+            .setChannel(channel)
+            .setWantAck(wantAck)
+            .apply { if (reliable) setPriority(MeshProtos.MeshPacket.Priority.RELIABLE) }
+            .apply { if (hopsAway > 0) setHopLimit(hopsAway) }
+            .setDecoded(
+                (data(MeshProtos.Data.newBuilder().setPortnum(portnum).setWantResponse(wantResponse)))
+                    .build()
+            )
+            .build()
+        return runCatching { send { it.setPacket(packet) } }.isSuccess
+    }
+
+    /**
+     * Send an AdminMessage on a single mesh packet, reliable + ack'd. Remote admin
+     * (targeting a node other than ours) carries wantResponse so the radio's
+     * AdminMessage reply rides back through the ADMIN_APP dispatch. Port of
+     * sendShutdown / sendReboot / removeNode / requestDeviceMetadata /
+     * requestStoreAndForwardConfig in AccessoryManager+ToRadio.swift.
+     *
+     * Session-passkey note: iOS tags cross-node admin with the destination's
+     * PKI-issued session passkey. This app does not run that PKI handshake, so
+     * the field is left unset (proto3 default == empty bytes == iOS fallback).
+     */
+    private suspend fun sendRemoteAdmin(
+        toNum: Int,
+        wantResponse: Boolean,
+        build: (AdminProtos.AdminMessage.Builder) -> AdminProtos.AdminMessage.Builder,
+    ): Boolean {
+        val myNum = _myNodeNum.value
+        if (myNum == 0L) return false
+        val admin = (build(AdminProtos.AdminMessage.newBuilder())).build()
+        val data = MeshProtos.Data.newBuilder()
+            .setPortnum(Portnums.PortNum.ADMIN_APP)
+            .setWantResponse(wantResponse)
+            .setPayload(admin.toByteString())
+            .build()
+        val packet = MeshProtos.MeshPacket.newBuilder()
+            .setId(Random.nextLong(255L, 0xFFFFFFFFL).toInt())
+            .setTo(toNum)
+            .setFrom(myNum.toInt())
+            .setWantAck(true)
+            .setPriority(MeshProtos.MeshPacket.Priority.RELIABLE)
+            .setDecoded(data)
+            .build()
+        return runCatching { send { it.setPacket(packet) } }.isSuccess
+    }
+
+    /**
+     * Ask a node to power off after 5 s (admin shutdown_seconds). Mirrors iOS
+     * sendShutdown. For the connected radio, targetNum = myNodeNum — same call
+     * either way.
+     */
+    suspend fun sendNodeShutdown(targetNum: Long): Boolean =
+        sendRemoteAdmin(targetNum.toInt(), wantResponse = false) { it.setShutdownSeconds(5) }
+
+    /**
+     * Ask a node to reboot after 5 s (admin reboot_seconds). Mirrors iOS sendReboot.
+     */
+    suspend fun sendNodeReboot(targetNum: Long): Boolean =
+        sendRemoteAdmin(targetNum.toInt(), wantResponse = false) { it.setRebootSeconds(5) }
+
+    /**
+     * Ask a node to forget another node from its node database (admin
+     * remove_by_nodenum) and delete our local records. Mirrors iOS removeNode,
+     * which also drops the rows locally on send success.
+     */
+    suspend fun removeNode(targetNum: Long, removedNodeNum: Long): Boolean {
+        val sent = sendRemoteAdmin(
+            toNum = targetNum.toInt(),
+            wantResponse = false,
+        ) { it.setRemoveByNodenum(removedNodeNum.toInt()) }
+        if (sent) {
+            db.nodeDao().delete(removedNodeNum)
+            db.userDao().delete(removedNodeNum)
+        }
+        return sent
+    }
+
+    /**
+     * Ask a node to replay its Store & Forward history window (S&F rr=CLIENT_HISTORY).
+     * Mirrors iOS requestStoreAndForwardClientHistory. This app does not persist a
+     * per-node S&F config (iOS does), so the history window and last-request index
+     * fall back to the same defaults iOS uses for an unconfigured node.
+     */
+    suspend fun requestStoreAndForwardClientHistory(targetNum: Long, channel: Int): Boolean {
+        val sf = StoreAndForwardProtos.StoreAndForward.newBuilder()
+            .setRr(StoreAndForwardProtos.StoreAndForward.RequestResponse.CLIENT_HISTORY)
+            .setHistory(
+                StoreAndForwardProtos.StoreAndForward.History.newBuilder()
+                    .setWindow(120)
+                    .setLastRequest(0),
+            )
+            .build()
+        return sendPayload(
+            toNum = targetNum.toInt(),
+            portnum = Portnums.PortNum.STORE_FORWARD_APP,
+            reliable = true,
+            wantAck = true,
+            wantResponse = true,
+            channel = channel,
+            hopsAway = 0,
+        ) { it.setPayload(sf.toByteString()) }
+    }
+
+    /**
+     * Ask a node to broadcast its identity to the mesh with a User info exchange
+     * request (admin request to exchange). Mirrors iOS exchangeUserInfo. Target
+     * channel comes from the destination node's row, 0 for unknown.
+     */
+    suspend fun exchangeUserInfo(targetNum: Long, channel: Int = 0): Boolean {
+        val myNum = _myNodeNum.value
+        if (myNum == 0L) return false
+        val me = db.userDao().get(myNum) ?: return false
+        val user = MeshProtos.User.newBuilder()
+            .setId(me.userId ?: "!%08x".format(myNum))
+            .setLongName(me.longName ?: "")
+            .setShortName(me.shortName ?: "")
+            .apply { me.publicKey?.let { setPublicKey(ByteString.copyFrom(it)) } }
+            .build()
+        return sendPayload(
+            toNum = targetNum.toInt(),
+            portnum = Portnums.PortNum.NODEINFO_APP,
+            reliable = true,
+            wantAck = true,
+            wantResponse = true,
+            channel = channel,
+            hopsAway = 0,
+        ) { it.setPayload(user.toByteString()) }
+    }
+
+    /**
+     * Send the phone's current GPS fix as a POSITION_APP packet to a node. Source is
+     * the same LocationManager the periodic LocationSharer already listens on; the
+     * fix here is whatever that last returned. Mirrors iOS sendPosition.
+     */
+    suspend fun sendDestPosition(
+        toNum: Long,
+        latitudeI: Int,
+        longitudeI: Int,
+        altitude: Int,
+        channel: Int,
+    ): Boolean {
+        val position = MeshProtos.Position.newBuilder()
+            .setLatitudeI(latitudeI)
+            .setLongitudeI(longitudeI)
+            .setAltitude(altitude)
+            .setTime((System.currentTimeMillis() / 1000).toInt())
+            .setTimestamp((System.currentTimeMillis() / 1000).toInt())
+            .setLocationSource(MeshProtos.Position.LocSource.LOC_EXTERNAL)
+            .build()
+        return sendPayload(
+            toNum = toNum.toInt(),
+            portnum = Portnums.PortNum.POSITION_APP,
+            reliable = false,
+            wantAck = false,
+            wantResponse = true,
+            channel = channel,
+            hopsAway = 0,
+        ) { it.setPayload(position.toByteString()) }
+    }
+
+    /**
+     * Ask a node for its local mesh statistics (Telemetry.localStats, empty request
+     * payload). Mirrors iOS sendLocalStatsRequest. When the destination carries a
+     * 32-byte public key (PKI-capable firmware), tag the packet with that key so
+     * the firmware will run it under PKI.
+     */
+    suspend fun sendLocalStatsRequest(targetNum: Long, destinationPublicKey: ByteArray?): Boolean {
+        val telemetry = TelemetryProtos.Telemetry.newBuilder()
+            .setLocalStats(TelemetryProtos.LocalStats.newBuilder().build())
+            .build()
+        val wantPki = destinationPublicKey?.size == 32
+        val myNum = _myNodeNum.value
+        if (myNum == 0L) return false
+        val data = MeshProtos.Data.newBuilder()
+            .setPortnum(Portnums.PortNum.TELEMETRY_APP)
+            .setWantResponse(true)
+            .setPayload(telemetry.toByteString())
+            .build()
+        val packet = MeshProtos.MeshPacket.newBuilder()
+            .setId(Random.nextLong(255L, 0xFFFFFFFFL).toInt())
+            .setTo(targetNum.toInt())
+            .setFrom(myNum.toInt())
+            .setWantAck(true)
+            .apply {
+                if (wantPki && destinationPublicKey != null) {
+                    setPublicKey(ByteString.copyFrom(destinationPublicKey))
+                    setPkiEncrypted(true)
+                }
+            }
+            .setDecoded(data)
+            .build()
+        return runCatching { send { it.setPacket(packet) } }.isSuccess
+    }
+
+    /**
+     * Ask a node for its DeviceMetadata (firmware version, min app version, etc).
+     * The response rides back through the ADMIN_APP ingest (PacketIngest.adminResponse).
+     * Mirrors iOS requestDeviceMetadata.
+     */
+    suspend fun requestDeviceMetadata(targetNum: Long): Boolean =
+        sendRemoteAdmin(targetNum.toInt(), wantResponse = true) { it.setGetDeviceMetadataRequest(true) }
+
+    /**
+     * Ask a node for its Store & Forward ModuleConfig section (admin
+     * get_module_config_request=STOREFORWARD_CONFIG). Response rides back through
+     * ADMIN_APP ingest as a ModuleConfig row. Mirrors iOS
+     * requestStoreAndForwardConfig.
+     */
+    suspend fun requestStoreAndForwardConfig(targetNum: Long): Boolean =
+        sendRemoteAdmin(targetNum.toInt(), wantResponse = true) {
+            it.setGetModuleConfigRequest(
+                AdminProtos.AdminMessage.ModuleConfigType.STOREFORWARD_CONFIG,
+            )
+        }
 
     /**
      * Rename this radio's owner via AdminMessage.set_owner, with an optimistic

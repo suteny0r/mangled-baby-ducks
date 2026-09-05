@@ -23,6 +23,11 @@ data class NodeEntity(
     val viaMqtt: Boolean = false,
     val favorite: Boolean = false,
     val ignored: Boolean = false,
+    /** Latched true once any packet from this node arrived xeddsaSigned (never cleared). */
+    val hasXeddsaSigned: Boolean = false,
+    /** Last NODE_STATUS_APP message text, if any. */
+    val nodeStatus: String? = null,
+    val firmwareVersion: String? = null,
 )
 
 @Entity(tableName = "users")
@@ -32,14 +37,25 @@ data class UserEntity(
     val longName: String? = null,
     val shortName: String? = null,
     val hwModel: String? = null,
+    val hwModelId: Int = 0,
+    val hwDisplayName: String? = null,
     val role: Int = 0,
     val isLicensed: Boolean = false,
     val publicKey: ByteArray? = null,
     val pkiEncrypted: Boolean = false,
     /** First-wins key policy: a differing inbound key sets this false. */
     val keyMatch: Boolean = true,
+    /** A differing inbound key that was refused (possible key-substitution attempt). */
+    val newPublicKey: ByteArray? = null,
     val lastMessage: Long? = null,
+    /** Local mute flag (NodeAlertsButton); not sent over the wire. */
+    val mute: Boolean = false,
+    /** No DMable channel found (all channels muted/disabled); shown by ShareContactQR gate. */
+    val unmessagable: Boolean = false,
 )
+
+/** "!" + hex(8) node number, for display (iOS numString). */
+fun nodeNumString(num: Long): String = "!%08x".format(num)
 
 @Entity(
     tableName = "messages",
@@ -116,7 +132,7 @@ data class PositionEntity(
 data class TelemetryEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val nodeNum: Long,
-    /** 0=device, 1=environment (matches iOS metricsType discriminator). */
+    /** 0=device, 1=environment, 2=power, 3=air-quality, 4=local-stats (iOS metricsType). */
     val metricsType: Int,
     val time: Long,
     val batteryLevel: Int? = null,
@@ -128,6 +144,50 @@ data class TelemetryEntity(
     val relativeHumidity: Float? = null,
     val barometricPressure: Float? = null,
     val iaq: Int? = null,
+    // EnvironmentMetrics extras
+    val current: Float? = null,
+    val weight: Float? = null,
+    val distance: Float? = null,
+    val windSpeed: Float? = null,
+    val windGust: Float? = null,
+    val windLull: Float? = null,
+    val windDirection: Int? = null,
+    val irLux: Float? = null,
+    val lux: Float? = null,
+    val whiteLux: Float? = null,
+    val uvLux: Float? = null,
+    val radiation: Float? = null,
+    val rainfall1H: Float? = null,
+    val rainfall24H: Float? = null,
+    val soilTemperature: Float? = null,
+    val soilMoisture: Int? = null,
+    val gasResistance: Float? = null,
+    // PowerMetrics
+    val powerCh1Voltage: Float? = null,
+    val powerCh1Current: Float? = null,
+    val powerCh2Voltage: Float? = null,
+    val powerCh2Current: Float? = null,
+    val powerCh3Voltage: Float? = null,
+    val powerCh3Current: Float? = null,
+    // AirQualityMetrics (particulate matter, µg/m³)
+    val pm10Standard: Int? = null,
+    val pm25Standard: Int? = null,
+    val pm100Standard: Int? = null,
+    val pm10Environmental: Int? = null,
+    val pm25Environmental: Int? = null,
+    val pm100Environmental: Int? = null,
+    // LocalStats (plain proto scalars, always present)
+    val noiseFloor: Int? = null,
+    val numPacketsTx: Int = 0,
+    val numPacketsRx: Int = 0,
+    val numPacketsRxBad: Int = 0,
+    val numRxDupe: Int = 0,
+    val numTxRelay: Int = 0,
+    val numTxRelayCanceled: Int = 0,
+    val numOnlineNodes: Int = 0,
+    val numTotalNodes: Int = 0,
+    val snr: Float? = null,
+    val rssi: Int? = null,
 )
 
 /**

@@ -11,10 +11,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Message
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
@@ -55,12 +55,13 @@ class MainActivity : ComponentActivity() {
         setContent {
             MeshtasticTheme {
                 val router = container.router
+                // Tab order + labels mirror the iOS TabView (ContentView.swift).
                 val tabs = listOf(
-                    Tab("Connect", Icons.Default.SettingsRemote),
+                    Tab("Messages", Icons.AutoMirrored.Filled.Message),
                     Tab("Nodes", Icons.Default.Router),
                     Tab("Map", Icons.Default.Map),
-                    Tab("Messages", Icons.AutoMirrored.Filled.Message),
                     Tab("Settings", Icons.Default.Settings),
+                    Tab("Connect", Icons.Default.Link),
                 )
                 val selected by router.selectedTab.collectAsState()
                 val unread by remember {
@@ -90,11 +91,11 @@ class MainActivity : ComponentActivity() {
                 ) { padding ->
                     androidx.compose.foundation.layout.Box(Modifier.padding(padding)) {
                         when (selected) {
-                            0 -> ConnectScreen()
+                            0 -> MessagesScreen()
                             1 -> NodesScreen()
                             2 -> MapScreen()
-                            3 -> MessagesScreen()
-                            else -> SettingsScreen()
+                            3 -> SettingsScreen()
+                            else -> ConnectScreen()
                         }
                     }
                 }

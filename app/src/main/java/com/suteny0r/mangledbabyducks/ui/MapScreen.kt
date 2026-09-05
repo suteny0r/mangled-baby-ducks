@@ -214,6 +214,7 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val router = context.container.router
+    val activeRoute by router.activeRoute.collectAsState()
     val nodes by vm.nodes.collectAsState()
     val waypoints by vm.waypoints.collectAsState()
     val channels by vm.channels.collectAsState()
@@ -295,9 +296,14 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
                 val currentWaypointList = waypoints
                 val currentRouteView = route
                 // When a route is active, show only the nodes on that path (matching iOS
-                // selectedTraceRoute behavior); otherwise show the full mesh.
-                val displayNodes = if (currentRouteView.nodes.isNotEmpty()) {
-                    currentRouteView.nodes.map { p ->
+                // selectedTraceRoute behavior); otherwise show the full mesh. If the route
+                // resolved to fewer than two positioned nodes, draw nothing: the overlay
+                // explains why, and falling back to the mesh would just show an unrelated
+                // regional view.
+                val displayNodes = when {
+                    activeRoute == null -> currentNodeList
+                    currentRouteView.nodes.size < 2 -> emptyList()
+                    else -> currentRouteView.nodes.map { p ->
                         MapNode(
                             nodeNum = p.nodeNum,
                             latitudeI = (p.latitude * 1e7).toInt(),
@@ -307,8 +313,6 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
                             longName = p.longName,
                         )
                     }
-                } else {
-                    currentNodeList
                 }
                 view.getMapAsync { map ->
                     renderNodes(map, displayNodes, fitState)
@@ -335,13 +339,21 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
                 Icon(Icons.Default.Close, contentDescription = "Close traceroute")
             }
         }
-        if (nodes.isEmpty() && route.nodes.isEmpty()) {
-            Text(
-                "No node positions yet",
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .padding(16.dp),
-            )
+        when {
+            activeRoute != null && route.nodes.size < 2 ->
+                Text(
+                    "This route has no position data to draw",
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(16.dp),
+                )
+            activeRoute == null && nodes.isEmpty() ->
+                Text(
+                    "No node positions yet",
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(16.dp),
+                )
         }
     }
 
