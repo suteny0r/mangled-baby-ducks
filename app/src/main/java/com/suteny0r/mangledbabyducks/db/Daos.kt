@@ -60,6 +60,16 @@ interface UserDao {
     @Query("UPDATE users SET mute = :mute WHERE num = :num")
     suspend fun setMute(num: Long, mute: Boolean)
 
+    /**
+     * Promote the refused inbound key (see PacketIngest.upsertUser) to the trusted one.
+     * Returns 0 when there was nothing to accept.
+     */
+    @Query(
+        "UPDATE users SET publicKey = newPublicKey, keyMatch = 1, newPublicKey = NULL " +
+            "WHERE num = :num AND newPublicKey IS NOT NULL"
+    )
+    suspend fun acceptNewKey(num: Long): Int
+
     @Query("DELETE FROM users WHERE num = :num")
     suspend fun delete(num: Long)
 }
@@ -112,6 +122,9 @@ interface MessageDao {
 
     @Query("SELECT * FROM messages WHERE toNum IS NULL AND channel = :channel ORDER BY timestamp DESC LIMIT 1")
     suspend fun lastChannelMessage(channel: Int): MessageEntity?
+
+    @Query("SELECT * FROM messages WHERE messageId = :messageId")
+    suspend fun get(messageId: Long): MessageEntity?
 }
 
 @Dao

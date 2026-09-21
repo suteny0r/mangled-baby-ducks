@@ -106,9 +106,15 @@ Invariants worth knowing before touching it:
   own sends back, and a replace would reset read/ack state and fire a phantom notification.
 - `MessageEntity.toNum == null` is the channel-vs-DM discriminator used by every query.
 - Acks and naks arrive on `ROUTING_APP` and are correlated back through `decoded.requestId`.
-- Public keys are first-wins: a differing inbound key is refused and flags
-  `UserEntity.keyMatch = false` so the UI can warn. A re-flashed radio therefore NAKs DMs with
-  error 39 until "Broadcast node info" is used.
+- Public keys are first-wins: a differing inbound key is refused, stored in
+  `UserEntity.newPublicKey`, and flags `keyMatch = false` so the UI can warn. The radio's own
+  NodeDB is first-wins too (firmware drops a NodeInfo whose key differs). Repair paths: a DM
+  nak with error 6/34/35/39 triggers `RadioManager.healPkiFailure` (push our stored key to
+  the radio with `add_contact` on 39, user-info exchange with the peer, NodeInfo broadcast;
+  all cooldown-limited); the node detail "Accept new key" action promotes the stored key,
+  makes our radio forget the node, pushes the new key with `add_contact`, and asks the node
+  to re-announce. Over the air a re-keyed node can never fix a stock peer's stale copy; only
+  that peer's own client can. Settings > "Broadcast node info" remains the manual version.
 - A new radio's `MyNodeInfo` with a different node num wipes nodes **and** the `my_info` row
   (its single-row `LIMIT 1` queries would otherwise serve the old radio's identity).
 
@@ -151,6 +157,22 @@ deliberate Disconnect, so the app stops grabbing that radio on launch); `KNOWN_R
 **saved list** of every radio ever connected to, a JSON array of `RememberedRadio` that only the
 Forget button deletes from. `AppContainer.rememberRadio()` writes both on every successful
 connect and is the single place that does so.
+
+**Android Auto** (`auto/`): `MeshCarAppService` (Car App Library, category POI so
+`PlaceListMapTemplate` can put nodes on the host map), a `CarHomeScreen` menu as root,
+and one `Screen` per phone tab in `CarScreens.kt`. Navigation is titled rows, not
+action-strip icons: on a real head unit the icons were not found by the driver. Screens observe the same Room flows and call `invalidate()`; row titles
+stay stable because the host counts a title change as a template step (quota ~5 per
+task). Row counts are clamped by `contentLimit(type, cap)`: the host advertises limits
+up to 1000, but a template is one binder transaction (~1 MB), and 197 place rows made
+1.8 MB. `PlaceListMapTemplate` rows must be browsable unless they carry a DistanceSpan. Free typing is not available on the head unit, so sends go through canned quick
+replies; free-form voice replies come through the `MessagingStyle` notification that
+`MessageNotifier` posts per conversation and `MessageActionReceiver` handles. A sideloaded
+build only shows up with "Unknown sources" enabled in Android Auto's developer settings. The
+package has two launcher personalities (templated service, notification-messaging app); the car
+service carries its own label and icon so the dock's blue map icon is the templated app and the
+green triangle is Android Auto's message view.
+`AppContainer.autoConnectIfRemembered` is shared by `MainActivity` and the car session.
 
 **Foreground service**: `RadioService` exists only to keep the process alive during a session
 (`connectedDevice|location`), started and stopped alongside connect/disconnect. A deliberate

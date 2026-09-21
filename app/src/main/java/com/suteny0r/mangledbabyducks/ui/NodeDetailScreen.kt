@@ -123,6 +123,18 @@ class NodeDetailViewModel(app: Application) : AndroidViewModel(app) {
     fun exchangeUser(target: Long) =
         launchAdmin { run { container.radioManager.exchangeUserInfo(target) } }
 
+    /** One-shot outcome of Accept new key, shown as a toast and then cleared. */
+    val keyAcceptResult = MutableStateFlow<String?>(null)
+
+    fun acceptNewKey(num: Long) {
+        viewModelScope.launch {
+            val ok = run { container.radioManager.acceptNewKey(num) }
+            keyAcceptResult.value =
+                if (ok) "New key accepted; the radio will re-learn this node"
+                else "Could not accept the key (radio not connected?)"
+        }
+    }
+
     fun sendPosition(target: Long) =
         launchAdmin {
             val fix = container.locationSharer.lastFix.value
@@ -177,6 +189,13 @@ fun NodeDetailScreen(
 ) {
     val context = LocalContext.current
     val entry by vm.node(nodeNum).collectAsState(initial = null)
+    val keyAcceptResult by vm.keyAcceptResult.collectAsState()
+    LaunchedEffect(keyAcceptResult) {
+        keyAcceptResult?.let {
+            android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_LONG).show()
+            vm.keyAcceptResult.value = null
+        }
+    }
     val metrics by vm.deviceMetrics(nodeNum).collectAsState(initial = emptyList())
     val envMetrics by vm.environmentMetrics(nodeNum).collectAsState(initial = emptyList())
     val position by vm.latestPosition(nodeNum).collectAsState(initial = null)
@@ -349,14 +368,52 @@ fun NodeDetailScreen(
                     }
                     if (entry?.user?.keyMatch == false) {
                         HorizontalDivider()
+                        val newKey = entry?.user?.newPublicKey
+                        var confirmAccept by remember { mutableStateOf(false) }
                         ListItem(
                             headlineContent = {
                                 Text("Key mismatch", color = MaterialTheme.colorScheme.error)
                             },
                             supportingContent = {
-                                Text("This node's public key changed; DMs may fail until re-verified.")
+                                Text(
+                                    if (newKey != null) {
+                                        "This node is announcing a different public key " +
+                                            "(${keyFingerprint(newKey)}). Accept it only if you know the " +
+                                            "node was reset or re-flashed."
+                                    } else {
+                                        "This node's public key changed; DMs may fail until re-verified."
+                                    }
+                                )
+                            },
+                            trailingContent = if (newKey != null) {
+                                { TextButton(onClick = { confirmAccept = true }) { Text("Accept") } }
+                            } else {
+                                null
                             },
                         )
+                        if (confirmAccept && newKey != null) {
+                            AlertDialog(
+                                onDismissRequest = { confirmAccept = false },
+                                title = { Text("Accept new key?") },
+                                text = {
+                                    Text(
+                                        "Trusted key ${publicKey?.let { keyFingerprint(it) } ?: "none"} will be " +
+                                            "replaced by ${keyFingerprint(newKey)}. The radio forgets this node " +
+                                            "and re-learns it from its next announcement. If you did not expect " +
+                                            "this node to change keys, cancel: it could be an impostor."
+                                    )
+                                },
+                                confirmButton = {
+                                    TextButton(onClick = {
+                                        confirmAccept = false
+                                        vm.acceptNewKey(nodeNum)
+                                    }) { Text("Accept new key") }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { confirmAccept = false }) { Text("Cancel") }
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -694,6 +751,10 @@ private fun NodeActions(
         ShareContactQRDialog(entry = entry, onDismiss = { shareQr.value = null })
     }
 }
+
+/** Short, human-comparable form of a 32-byte key: first 8 base64 characters. */
+private fun keyFingerprint(key: ByteArray): String =
+    Base64.encodeToString(key, Base64.NO_WRAP).take(8) + "…"
 
 /**
  * Build the meshtastic.org shared-contact URL: prefix + base64url of a

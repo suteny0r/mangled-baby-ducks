@@ -414,11 +414,128 @@ class RadioManager(
             Portnums.PortNum.POSITION_APP -> ingest.positionPacket(packet)
             Portnums.PortNum.TELEMETRY_APP -> ingest.telemetryPacket(packet)
             Portnums.PortNum.ADMIN_APP -> ingest.adminResponse(packet)
-            Portnums.PortNum.ROUTING_APP -> ingest.routing(packet, myNum)
+            Portnums.PortNum.ROUTING_APP -> ingest.routing(packet, myNum)?.let { healPkiFailure(it) }
             Portnums.PortNum.TRACEROUTE_APP -> ingest.traceroute(packet)
             Portnums.PortNum.WAYPOINT_APP -> ingest.waypointPacket(packet)
             else -> Log.d(TAG, "Unhandled port ${packet.decoded.portnum}")
         }
+    }
+
+    /**
+     * Routing naks on a DM that mean a public key is missing or stale somewhere. What the
+     * firmware (meshtastic/firmware master, Router.cpp / ReliableRouter.cpp) actually emits:
+     *  - 39 PKI_SEND_FAIL_PUBLIC_KEY: our own radio refused to send because it holds no key
+     *    for the destination (every text DM is PKI-encrypted; there is no channel fallback).
+     *  - 35 PKI_UNKNOWN_PUBKEY: the peer received our PKI packet but has no key for us at
+     *    all. The peer's firmware also sends us its NodeInfo on its own in that case.
+     *  - 6 NO_CHANNEL: the peer could not decrypt a packet addressed to it. For a DM that
+     *    means it holds a *stale* key for us (or we for it), because the unknown-key case
+     *    is reported as 35 instead.
+     *  - 34 PKI_FAILED: key requested by the client differs from the radio's, or PKI was
+     *    demanded and unavailable.
+     */
+    private val pkiKeyErrors = setOf(
+        MeshProtos.Routing.Error.NO_CHANNEL_VALUE,
+        MeshProtos.Routing.Error.PKI_FAILED_VALUE,
+        MeshProtos.Routing.Error.PKI_UNKNOWN_PUBKEY_VALUE,
+        MeshProtos.Routing.Error.PKI_SEND_FAIL_PUBLIC_KEY_VALUE,
+    )
+    private val lastKeyExchangeMs = HashMap<Long, Long>()
+    @Volatile private var lastKeyBroadcastMs = 0L
+
+    /**
+     * Self-heal for stale or missing public keys after a DM nak (see [pkiKeyErrors]).
+     * When a node is re-flashed its key pair changes, but every other radio, and this
+     * app, keeps the first key it saw (firmware NodeDB.updateUser logs "Public Key
+     * mismatch, dropping NodeInfo"). Three repairs, each rate limited:
+     *  1. If our radio has no key for the peer (39) but this app does, push it with
+     *     add_contact. That is what stock clients do before every DM, and it makes the
+     *     user's next send work at once.
+     *  2. A direct user-info exchange with the peer. NodeInfo unicasts are never PKI
+     *     encrypted by the firmware, so this gets through however stale the keys are;
+     *     the peer learns our current key (if its radio has none or its client accepts
+     *     a change) and, unless it answered us within the last 12 h, replies with its own.
+     *  3. A NodeInfo broadcast for everyone else, the automatic form of Settings >
+     *     "Broadcast node info".
+     * Only text messages this app stored can trigger it, so the exchange packets cannot
+     * recurse. The failed message is not resent; it stays marked failed in the thread.
+     */
+    private suspend fun healPkiFailure(ack: PacketIngest.AckResult) {
+        if (ack.errorReason !in pkiKeyErrors) return
+        val message = db.messageDao().get(ack.messageId) ?: return
+        val peer = message.toNum ?: return
+        val now = System.currentTimeMillis()
+        val exchange = synchronized(lastKeyExchangeMs) {
+            val last = lastKeyExchangeMs[peer] ?: 0L
+            (now - last > KEY_EXCHANGE_COOLDOWN_MS).also { if (it) lastKeyExchangeMs[peer] = now }
+        }
+        if (!exchange) return
+        val peerHex = "!%08x".format(peer)
+        Log.i(TAG, "DM to $peerHex naked with error ${ack.errorReason}; repairing keys")
+        if (ack.errorReason == MeshProtos.Routing.Error.PKI_SEND_FAIL_PUBLIC_KEY_VALUE) {
+            val known = db.userDao().get(peer)?.publicKey?.takeIf { it.size == 32 }
+            if (known != null) {
+                Log.i(TAG, "Radio has no key for $peerHex; pushing this app's copy with add_contact")
+                runCatching { pushContactToRadio(peer, known) }
+            }
+        }
+        runCatching { exchangeUserInfo(peer, channel = message.channel) }
+        if (now - lastKeyBroadcastMs > KEY_BROADCAST_COOLDOWN_MS) {
+            lastKeyBroadcastMs = now
+            Log.i(TAG, "Broadcasting node info after key nak")
+            runCatching { broadcastNodeInfo() }
+        }
+    }
+
+    /**
+     * Hand the radio a node's user record and public key (admin add_contact, firmware
+     * NodeDB.addFromContact). The firmware overwrites the stored user, so this is the one
+     * way to replace a key its first-wins NodeInfo path would refuse. Side effect in the
+     * firmware: the node is marked favorite so it is not evicted; that is undone here
+     * unless the user had favorited it, so the radio's favorites match the app's.
+     */
+    private suspend fun pushContactToRadio(nodeNum: Long, key: ByteArray): Boolean {
+        val user = db.userDao().get(nodeNum) ?: return false
+        val contact = AdminProtos.SharedContact.newBuilder()
+            .setNodeNum(nodeNum.toInt())
+            .setUser(
+                MeshProtos.User.newBuilder()
+                    .setId(user.userId ?: "!%08x".format(nodeNum))
+                    .setLongName(user.longName ?: "")
+                    .setShortName(user.shortName ?: "")
+                    .setHwModelValue(user.hwModelId)
+                    .setRoleValue(user.role)
+                    .setIsLicensed(user.isLicensed)
+                    .setPublicKey(ByteString.copyFrom(key)),
+            )
+            .setManuallyVerified(false)
+            .build()
+        val added = sendAdmin { it.setAddContact(contact) }
+        if (added && db.nodeDao().get(nodeNum)?.favorite != true) {
+            sendAdmin { it.setRemoveFavoriteNode(nodeNum.toInt()) }
+        }
+        return added
+    }
+
+    /**
+     * Adopt a node's changed public key after the user confirmed it. Both key stores are
+     * first-wins: this app's users row (PacketIngest.upsertUser) and the radio's own
+     * NodeDB, whose firmware logs "Public Key mismatch, dropping NodeInfo" and keeps the
+     * old key. So: promote the refused key locally; make the radio forget the node
+     * (remove_by_nodenum on ourselves) so no stale key or verified flag survives; hand it
+     * the new key with add_contact so DMs work immediately; then ask the node for a fresh
+     * NodeInfo, which the radio now accepts because the keys agree.
+     */
+    suspend fun acceptNewKey(nodeNum: Long): Boolean {
+        val myNum = _myNodeNum.value
+        if (myNum == 0L) return false
+        if (db.userDao().acceptNewKey(nodeNum) == 0) return false
+        val key = db.userDao().get(nodeNum)?.publicKey ?: return false
+        val forgot = sendAdmin { it.setRemoveByNodenum(nodeNum.toInt()) }
+        val pushed = pushContactToRadio(nodeNum, key)
+        val asked = exchangeUserInfo(nodeNum)
+        Log.i(TAG, "Accepted new key for ${"!%08x".format(nodeNum)}: forget=$forgot push=$pushed exchange=$asked")
+        return forgot && pushed
     }
 
     /**
@@ -1026,6 +1143,10 @@ class RadioManager(
 
     companion object {
         private const val TAG = "RadioManager"
+        /** Per-peer floor between automatic user-info exchanges after a PKI nak. */
+        private const val KEY_EXCHANGE_COOLDOWN_MS = 5 * 60_000L
+        /** Floor between automatic NodeInfo broadcasts; the whole mesh hears these. */
+        private const val KEY_BROADCAST_COOLDOWN_MS = 15 * 60_000L
         private const val CONNECT_ATTEMPTS = 3
         private const val MAX_RECONNECT_ATTEMPTS = 10
         private const val RECONNECT_DELAY_MS = 2_000L

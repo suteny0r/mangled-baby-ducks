@@ -235,13 +235,19 @@ class PacketIngest(private val db: MeshDatabase) {
         return if (isFromSelf) null else message
     }
 
-    /** ROUTING_APP: correlate an ack/nak back to the original message via requestId. */
-    suspend fun routing(packet: MeshProtos.MeshPacket, myNum: Long) {
+    /** An ack or nak correlated to one of our sends; errorReason 0 is a clean ack. */
+    data class AckResult(val messageId: Long, val errorReason: Int)
+
+    /**
+     * ROUTING_APP: correlate an ack/nak back to the original message via requestId.
+     * Returns what was applied so the caller can react to specific naks.
+     */
+    suspend fun routing(packet: MeshProtos.MeshPacket, myNum: Long): AckResult? {
         val routing = runCatching {
             MeshProtos.Routing.parseFrom(packet.decoded.payload)
-        }.getOrNull() ?: return
+        }.getOrNull() ?: return null
         val requestId = packet.decoded.requestId.uint()
-        if (requestId == 0L) return
+        if (requestId == 0L) return null
         val errorReason = routing.errorReason.number
         val realAck = packet.to.uint() != packet.from.uint()
         db.messageDao().applyAck(
@@ -252,6 +258,7 @@ class PacketIngest(private val db: MeshDatabase) {
             ackSnr = packet.rxSnr,
             ackTimestamp = if (packet.rxTime != 0) packet.rxTime.uint() * 1000 else System.currentTimeMillis(),
         )
+        return AckResult(requestId, errorReason)
     }
 
     /** NODEINFO_APP: a User broadcast from another node. */

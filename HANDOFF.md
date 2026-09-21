@@ -16,6 +16,189 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Public-key self-healing, round 2 (2026-09-19 evening, INSTALLED; Accept test interrupted)
+Refined after reading meshtastic/firmware master (Router.cpp, ReliableRouter.cpp, NodeDB.cpp,
+NodeInfoModule.cpp, AdminModule.cpp). Facts that drove the design, worth keeping:
+- Every text DM is PKI-encrypted when the radio holds a key for the destination; with no
+  key it **refuses to send** ("refusing to send legacy DM") and naks the phone with 39.
+  There is no channel-PSK fallback for DMs.
+- NODEINFO_APP, POSITION_APP, ROUTING_APP, TRACEROUTE_APP unicasts are **never** PKI
+  encrypted, so a user-info exchange always gets through regardless of key state.
+- Receiver side (ReliableRouter): an undecryptable PKI packet naks **35** only when the
+  receiver has *no* key for the sender (and it then sends its NodeInfo to the sender by
+  itself); with a *stale* key it naks **6 NO_CHANNEL**. So stale-key DMs show up as
+  error 6, not a PKI code; `pkiKeyErrors` includes 6 for that reason.
+- `NodeDB.updateUser` drops any NodeInfo whose key differs from the stored one. Over the
+  air a re-keyed node can never fix a peer's stale copy. Only a client can, via admin
+  `add_contact` (NodeDB.addFromContact overwrites the user; stock clients send it before
+  every DM) or `remove_by_nodenum`. addFromContact marks the node favorite as a side
+  effect; `pushContactToRadio` undoes that unless the app row says favorite.
+- NodeInfoModule suppresses a want_response reply to the same sender for 12 h
+  (USERPREFS_NODEINFO_REPLY_SUPPRESS_SECS 43200), so an exchange may not be answered.
+Implementation now: `healPkiFailure` on DM nak 6/34/35/39, per-peer 5 min cooldown:
+on 39 push this app's stored key with add_contact, then `exchangeUserInfo(peer)`, plus a
+NodeInfo broadcast at most every 15 min. `acceptNewKey` = promote locally,
+remove_by_nodenum, add_contact(new key), exchangeUserInfo. SOBE runs firmware 2.7.23, so
+add_contact is available.
+Test state: three nodes were flagged mismatched (`!16cd737c` W1HQL-Shack, `!62f8eeac`
+FAU ind, `!a6961cf4` Thing 2). Drove the phone UI via uiautomator to W1HQL-Shack's detail;
+the Key mismatch row showed fingerprints `Hu2xvEMu…` -> `v+e2lgPx…` and the dialog opened;
+the confirm tap was sent and the phone dropped off adb the same second, so whether it
+landed is **unverified**. Check with the pulled DB (`run-as ... cat databases/mesh.db`):
+`select keyMatch from users where num=0x16cd737c`, and `logcat -s RadioManager` for
+"Accepted new key for !16cd737c". Note the auto-connect did not fire on this launch (BLE
+state read as off at that moment?); connecting from the Connect tab worked.
+
+## Public-key self-healing (2026-09-19 evening, built, NOT installed — phone unplugged again)
+Until now a re-flashed node was detected (first-wins key policy, red lock, "Key mismatch"
+row) but never repaired automatically; the manual fix was Settings > Broadcast node info.
+Two pieces added, neither yet exercised on hardware:
+- **Automatic key exchange on PKI naks** (`RadioManager.healPkiFailure`). `PacketIngest.routing`
+  now returns `AckResult(messageId, errorReason)`; RadioManager reacts to Routing.Error
+  34 PKI_FAILED, 35 PKI_UNKNOWN_PUBKEY (peer cannot decode us), 39 PKI_SEND_FAIL_PUBLIC_KEY
+  (our radio has no key for the peer) on a **DM we stored** by sending `exchangeUserInfo(peer)`
+  (per-peer cooldown 5 min) and `broadcastNodeInfo()` (global cooldown 15 min). Only text
+  message ids trigger it, so the exchange packets cannot recurse. The failed message is not
+  resent. New `MessageDao.get(messageId)`.
+- **Accept new key** on the node detail "Key mismatch" row (only when `newPublicKey` is
+  stored): confirm dialog shows old/new key fingerprints (first 8 base64 chars) and an
+  impostor warning, then `RadioManager.acceptNewKey(num)`: `UserDao.acceptNewKey` promotes
+  `newPublicKey` -> `publicKey`, `keyMatch = 1`; `remove_by_nodenum` admin **to our own
+  radio** so its NodeDB forgets the node (firmware is also first-wins: NodeDB.cpp logs
+  "Public Key mismatch, dropping NodeInfo" and keeps the old key, verified in the
+  meshtastic/firmware master source); then `exchangeUserInfo(num)` so the node re-announces
+  and both stores learn the new key. Result surfaces as a Toast via
+  `NodeDetailViewModel.keyAcceptResult`.
+- Test plan when a re-flashed node is available: DM it from the app, expect the nak, then
+  `logcat -s RadioManager` shows "exchanging user info" / "Broadcasting node info"; a
+  second DM after the exchange should ack. For Accept: node detail > Accept > confirm,
+  then the red lock should turn green after the node's next NodeInfo.
+- Pre-existing warning at RadioManager.kt:938 ("Condition is always true", localStats
+  builder) is not from this change.
+
+## Android Auto: templated app cannot run in a real car when sideloaded (2026-09-20, platform rule)
+Google's testing page: Unknown sources "applies to media, messaging notifications, and parked
+apps but doesn't apply to apps built using the Android for Cars App Library." So the Cadillac
+shows only the notification/messaging personality (listed in Customize launcher with the app
+icon, no grid entry); the templated app needs a Google Play install (internal testing track is
+enough). The DHU runs the sideloaded build fine. `tools/dhu.ps1` launches it in its own window
+(phone: Android Auto > overflow > Start head unit server first). Decision pending on Play.
+
+## Android Auto: why the car only showed the message view (2026-09-20 evening, RESOLVED)
+The app has **two personalities** in the Android Auto launcher because `automotive_app_desc.xml`
+declares both `template` and `notification`: (1) the templated `MeshCarAppService` (POI), and
+(2) a notification-messaging app keyed to `MainActivity`. The host de-duplicates the app grid
+to one "Mangled…" entry, which opens the templated app, but the dock's "recent app" slot is
+filled from whichever personality was last active; a fresh message notification makes that the
+messaging one, and tapping it opens Android Auto's own message view (last message, Play aloud,
+Reply). That is exactly what the user saw in the car twice. On the DHU, launching that
+messaging entry crashed the host (`startCarActivity(MainActivity)` -> "No matching component").
+Fix/mitigation: `MeshCarAppService` now has its own `android:label` ("Ducks Mesh") and
+`android:icon` (`ic_car_launcher`, blue map glyph). The grid label is still de-duplicated to the
+app name, but the dock icon now tells the two apart: **blue map = templated app, green triangle
+= messaging view**. Open the app from the grid once and the dock slot switches to the blue one.
+Read-aloud/voice reply are unaffected. Verified on the DHU 2026-09-20 19:50: grid entry opens the
+home menu (Map 234 nodes, Messages, Nodes 96, Radio). Installed on the phone 19:48, not yet
+seen in the car. Also: "Customize launcher" is not in this Android Auto build's settings at all
+(checked with and without a head unit connected; per-vehicle settings have only Forget/Rename).
+
+## Android Auto round 2 (2026-09-19 afternoon, built, NOT installed — phone unplugged)
+The user drove with the first build: it worked but "very limited": no visible way to pick a
+channel, open the node list, or connect/disconnect. The action-strip icons and the Radio
+row inside the map list were not discoverable on the real head unit (they were on the DHU).
+Changes, all in `auto/`:
+- **Root is now `CarHomeScreen`**, a ListTemplate menu with four titled, chevroned rows:
+  Map (count of positioned nodes), Messages (unread count), Nodes (count), Radio (link
+  state). `CarMapScreen` is a child (BACK header, title "Map"); it keeps its strip and
+  Radio row.
+- **`CarRadioScreen` rewritten** from a MessageTemplate to a sectioned ListTemplate:
+  "Status" row, then every saved radio (`knownRadios()`) as a row; tapping a saved radio
+  connects (`AppContainer.connectKnown`, supersedes the live session), tapping the live
+  one disconnects. Action strip "Disconnect" while connected or attempting.
+- New `AppContainer.disconnectRadio(context)` = disconnect + stop RadioService + clear
+  the auto-connect target; `ConnectViewModel.disconnect()` now delegates to it. Same
+  semantics from the car as from the phone: after a car-side Disconnect the app will
+  not auto-connect on the next launch until a radio is picked again.
+- `ic_car_map.xml` icon added.
+- Built clean; **not installed** (adb showed no device) and **not seen on the DHU** (the
+  DHU process was killed by Claude Code for low system memory; this PC had ~1.1 GB free).
+  Next: `adb install -r`, then either the car or
+  `adb forward tcp:5277 tcp:5277` + `desktop-head-unit.exe --adb=5277` and walk
+  Home > Radio (Disconnect / tap-to-connect), Home > Messages > channel > reply icon.
+
+## Android Auto (2026-09-19, installed, verified on the Desktop Head Unit; no car yet)
+The app now has a head-unit UI via the Car App Library (`androidx.car.app:app:1.7.0`;
+1.8.0 is not released, only 1.8.0-rc01, so do not bump blindly) plus car-readable
+message notifications. Verified on the DHU against the phone's Android Auto 17.7 host:
+map with node markers + distances, Radio screen, Nodes list, node detail pane, Messages
+(sectioned), thread view, quick-reply list all render with no host errors. Not sent from
+the car (would broadcast on the public Primary channel). Later the same day the user ran
+it in the car: it worked (see round 2 above for what was missing).
+
+Two host-validation bugs found and fixed on the DHU, both invisible at compile time:
+- `PlaceListMapTemplate` rejects any non-browsable row without a DistanceSpan
+  ("All non-browsable rows must have a distance span"). All map rows are `setBrowsable(true)`.
+- The host's `ConstraintManager` reports a content limit of **1000** for lists on Android
+  Auto 17.7, and this mesh has ~197 positioned nodes. A template travels in one binder
+  transaction (~1 MB ceiling); 197 place rows at ~9 KB each made a 1.8 MB parcel,
+  `TransactionTooLargeException`, then "isn't responding" on the head unit and the host
+  killing the process (which also drops the BLE session). `contentLimit(type, cap)` now
+  clamps to `MAP_ROW_CAP = 24`, `LIST_ROW_CAP = 50`, `PANE_ROW_CAP = 6`.
+
+Phone-side setup already done on R5CN70YWT5Z (2026-09-19): Android Auto developer mode
+enabled, **Unknown sources ON**, head unit server started. The DHU (r2.1, Windows) was
+downloaded from Google's repository index (no sdkmanager on this PC) into
+`C:/Users/User/AppData/Local/Android/Sdk/extras/google/auto/`. To drive it from a script:
+`tail -f cmds.txt | desktop-head-unit.exe --adb=5277` after `adb forward tcp:5277 tcp:5277`,
+then append `tap x y` / `screenshot path.png` lines to cmds.txt (800x480 window; app
+launcher is the grid at 42,440; our icon sits in the dock).
+- **`auto/MeshCarAppService.kt`**: `CarAppService` + `Session`. Manifest category is
+  `androidx.car.app.category.POI` because that is the only category allowed to draw
+  places on the host's map (`PlaceListMapTemplate`, permission
+  `androidx.car.app.MAP_TEMPLATES`). Debug builds accept any host
+  (`ALLOW_ALL_HOSTS_VALIDATOR`, needed for the Desktop Head Unit); release uses the
+  library's `hosts_allowlist_sample`. The session runs the same one-shot
+  `autoConnectIfRemembered` the phone does, so plugging into the car reconnects the radio.
+- **`auto/CarScreens.kt`**: root `CarMapScreen` (nodes with positions as markers on the
+  host map, a "Radio" row with the link state, action strip -> Messages / Nodes);
+  `CarRadioScreen` (MessageTemplate with Reconnect); `CarNodesScreen` -> `CarNodeDetailScreen`
+  (PaneTemplate: last heard, signal, battery, position + distance from the car; actions
+  Message / Traceroute); `CarMessagesScreen` (sectioned Channels / Direct Messages) ->
+  `CarThreadScreen` (newest first, opening marks read) -> `CarQuickReplyScreen` (canned
+  texts; the head unit has no keyboard while driving). Row counts come from
+  `ConstraintManager`; all times in Room are already ms (no `* 1000`).
+- **`MessageNotifier`** rewritten as `NotificationCompat.MessagingStyle`, one notification
+  **per conversation** (id = hash of `channel:<n>` / `dm:<num>`, last 8 messages kept
+  in memory) with Reply (RemoteInput, `SEMANTIC_ACTION_REPLY`, mutable PendingIntent) and
+  Mark-as-read actions, both `setShowsUserInterface(false)`. That is what makes Android
+  Auto read the message aloud and take a voice reply. `MessageActionReceiver` sends the
+  reply over the mesh / marks read, then `dismiss(target)`; opening the thread on the
+  phone or car also dismisses. Behaviour change on the phone: a burst in one thread now
+  stacks into one notification instead of one per message.
+- **`AppContainer.autoConnectIfRemembered(context)` / `connectKnown(context, target)` /
+  `hasBlePermission(context)`** were lifted out of MainActivity so the car session can
+  share them. MainActivity just delegates.
+- `res/xml/automotive_app_desc.xml` declares `template` + `notification`.
+- Lint: the 2 errors are pre-existing `ProduceStateDoesNotAssignValue` in
+  MessagesScreen.kt:309 and NodeDetailScreen.kt:449; `ExportedService` on the car
+  service is expected (the host binds it).
+
+**In the car**: plug in; "Mangled Baby Ducks" is in the Android Auto launcher (Unknown
+sources is already on). **Do not "Quit developer mode"**: it drops Unknown sources, the host
+then hides the templated app, and the same icon opens Android Auto's built-in notification
+messaging view instead (last message, read-aloud, nothing tappable). That is what the user saw
+on 2026-09-20; re-enabled via adb the same day. Also seen that day: Android Auto's own
+projection process crashed at connect ("Unable to start Preflight UI"), not our app. If a fresh phone ever needs it again: Settings > Apps > Android
+Auto > Additional settings in the app > tap Version 10x > overflow > Developer settings >
+Unknown sources. Test traffic from Spiney Norman on COM3; a DM to `!0f352b79` currently
+NAKs with error 39 (key mismatch, see CLAUDE.md), so use a channel message or fix the
+key first. A real channel message did post as a MessagingStyle notification
+(category=msg, 2 actions) during this session.
+
+Still unverified: the template step quota under churn (row titles kept stable), voice
+reply end-to-end on a real head unit, and whether the foreground `RadioService` may be
+started from the host-bound session on a cold start (wrapped in `runCatching`).
+
 ## Cosmetic parity round (2026-08-25, built, NOT installed — phone was not attached)
 Display-only pass to match the iOS app's visible UI. No behavior or schema changes:
 - **Tab bar reordered to iOS ContentView order**: Messages, Nodes, Map, Settings,
@@ -142,8 +325,10 @@ Port of iOS `FavoriteNodeButton`/`IgnoreNodeButton` (client-mode favorite/ignore
   on PC serial COM14, but **COM14 IS NOT TO BE TOUCHED** (user instruction): opening it
   kicks the phone's BLE session. Reach SOBE only through the app. (COM14 was not even
   enumerated on 2026-08-19 evening; ports present were COM3, COM5, COM18.)
-- SOBE's node num is now **`!1eff739f`**. The **`!0f352b79`** node in mesh node DBs is a
-  stale duplicate carrying the same public key — address DM tests to `!1eff739f`.
+- SOBE's node num depends on firmware major: 2.8.x derives it from CRC32 of the public key
+  (**`!0f352b79`**), 2.7.x used the MAC-derived/legacy number (`!6bed6674`, earlier `!1eff739f`).
+  Since 2026-09-20 the radio runs 2.8.1 again, so it is **`!0f352b79`**; the other numbers are
+  stale entries in peers' node DBs carrying the same public key.
 - Test traffic sender: **Spiney Norman on COM3** (🦔_8e18 = 3C:DC:75:6F:8E:19).
   `set PYTHONIOENCODING=utf-8; meshtastic --port COM3 --sendtext ... --dest '!1eff739f' --ack`
   `meshtastic --port COM3 --nodes` is the quickest way to see whether a radio is alive.
