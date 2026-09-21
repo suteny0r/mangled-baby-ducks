@@ -130,13 +130,9 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun disconnect() {
-        viewModelScope.launch {
-            radio.disconnect()
-            RadioService.stop(getApplication())
-            // A deliberate disconnect stops auto-connect on the next launch, but the
-            // radio stays in the saved list so it can be picked without scanning.
-            container.clearAutoConnectTarget()
-        }
+        // A deliberate disconnect stops auto-connect on the next launch, but the
+        // radio stays in the saved list so it can be picked without scanning.
+        viewModelScope.launch { container.disconnectRadio(getApplication()) }
     }
 }
 
@@ -250,12 +246,17 @@ class MessagesViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun markChannelRead(channel: Int) {
-        viewModelScope.launch { db.messageDao().markChannelRead(channel) }
+        viewModelScope.launch {
+            db.messageDao().markChannelRead(channel)
+            // The conversation notification (also what Android Auto reads out) is stale now.
+            container.messageNotifier.dismiss(ThreadTarget.Channel(channel, ""))
+        }
     }
 
     fun markDmRead(peer: Long) {
         viewModelScope.launch {
             db.messageDao().markDmRead(container.radioManager.myNodeNum.value, peer)
+            container.messageNotifier.dismiss(ThreadTarget.Direct(peer, ""))
         }
     }
 

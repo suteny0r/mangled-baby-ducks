@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Read by Android Auto: this app draws templates (Car App Library) and posts
+     messaging notifications the car can read aloud and answer. -->
+<automotiveApp>
+    <uses name="template" />
+    <uses name="notification" />
+</automotiveApp>

@@ -20,6 +20,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!-- Android Auto: PlaceListMapTemplate (nodes on the host-drawn map) needs this. -->
+    <uses-permission android:name="androidx.car.app.MAP_TEMPLATES" />
 
     <application
         android:name=".MeshtasticApplication"
@@ -27,6 +29,14 @@
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.Meshtastic"
         android:supportsRtl="true">
+
+        <!-- Android Auto: template UI (Car App Library) plus car-readable message notifications. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+        <meta-data
+            android:name="androidx.car.app.minCarApiLevel"
+            android:value="1" />
 
         <activity
             android:name=".MainActivity"
@@ -42,5 +52,26 @@
             android:name=".radio.RadioService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice|location" />
+
+        <!-- Car App Library entry point. POI is the only category allowed to draw places
+             on the host map, which is how the node map reaches the dashboard. -->
+        <!-- Own label and icon: the host also lists this package as a notification-messaging app
+             under the application name, so the templated app must be distinguishable in the car
+             launcher, or the dock's "recent" slot resolves to the messaging entry. -->
+        <service
+            android:name=".auto.MeshCarAppService"
+            android:label="@string/car_app_name"
+            android:icon="@drawable/ic_car_launcher"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="androidx.car.app.CarAppService" />
+                <category android:name="androidx.car.app.category.POI" />
+            </intent-filter>
+        </service>
+
+        <!-- Reply / mark-as-read from a MessagingStyle notification (Android Auto voice reply). -->
+        <receiver
+            android:name=".radio.MessageActionReceiver"
+            android:exported="false" />
     </application>
 </manifest>

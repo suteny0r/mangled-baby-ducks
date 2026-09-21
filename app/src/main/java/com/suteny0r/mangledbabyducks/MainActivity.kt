@@ -2,7 +2,6 @@ package com.suteny0r.mangledbabyducks
 
 import android.Manifest
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -27,9 +26,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import com.suteny0r.mangledbabyducks.radio.RadioService
 import com.suteny0r.mangledbabyducks.ui.ConnectScreen
 import com.suteny0r.mangledbabyducks.ui.MapScreen
 import com.suteny0r.mangledbabyducks.ui.MessagesScreen
@@ -127,40 +124,10 @@ class MainActivity : ComponentActivity() {
         container.router.openThread(target)
     }
 
-    /**
-     * Reconnect to the last radio on app start, mirroring iOS's preferredPeripheral.
-     * onCreate, the permission result and every onResume all land here; RadioManager
-     * spends exactly one automatic attempt per process, so a radio that is off or out
-     * of range is not chased in the background — the Connect screen offers an explicit
-     * Reconnect instead.
-     */
+    /** See [AppContainer.autoConnectIfRemembered]; every lifecycle entry point lands here. */
     private fun autoConnectIfRemembered() {
-        val container = container
-        lifecycleScope.launch {
-            val target = container.rememberedRadio() ?: return@launch
-            val factory = container.connectionFactory(target) ?: return@launch
-            if (target.type == "ble" &&
-                (!hasBlePermission() || container.bleScanner.adapter?.isEnabled != true)
-            ) {
-                return@launch
-            }
-            val radio = container.radioManager
-            if (radio.isConnected || radio.isAttempting) return@launch
-            RadioService.start(this@MainActivity, target.label)
-            radio.autoConnect(target.label, container.presenceProbe(target), factory)
-            if (radio.isConnected) {
-                // Keeps "last used" ordering in the saved list honest.
-                container.rememberRadio(target.type, target.address, target.name)
-            }
-            // The service only earns its notification while a link is up or being made.
-            if (!radio.isConnected && !radio.isAttempting) RadioService.stop(this@MainActivity)
-        }
+        lifecycleScope.launch { container.autoConnectIfRemembered(this@MainActivity) }
     }
-
-    private fun hasBlePermission(): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
-            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) ==
-            PackageManager.PERMISSION_GRANTED
 
     private fun requestNeededPermissions() {
         val permissions = buildList {

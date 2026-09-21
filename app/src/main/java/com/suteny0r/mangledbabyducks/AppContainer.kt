@@ -1,6 +1,10 @@
 package com.suteny0r.mangledbabyducks
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
@@ -15,6 +19,7 @@ import com.suteny0r.mangledbabyducks.radio.PacketIngest
 import com.suteny0r.mangledbabyducks.radio.PresenceProbe
 import com.suteny0r.mangledbabyducks.radio.RadioConnection
 import com.suteny0r.mangledbabyducks.radio.RadioManager
+import com.suteny0r.mangledbabyducks.radio.RadioService
 import com.suteny0r.mangledbabyducks.radio.TcpConnection
 import com.suteny0r.mangledbabyducks.ui.Router
 import kotlinx.coroutines.flow.first
@@ -137,6 +142,62 @@ class AppContainer(context: Context) {
             prefs[PrefKeys.KNOWN_RADIOS] = encodeRadios((listOf(entry) + others).take(MAX_KNOWN_RADIOS))
         }
     }
+
+    /**
+     * Reconnect to the last radio, mirroring iOS's preferredPeripheral. Shared by
+     * MainActivity (onCreate, permission result, onResume) and the Android Auto session,
+     * which can start while the phone app is not on screen. RadioManager spends exactly
+     * one automatic attempt per process, so a radio that is off or out of range is not
+     * chased in the background; the Connect screen (phone or car) offers Reconnect.
+     */
+    suspend fun autoConnectIfRemembered(context: Context) {
+        val target = rememberedRadio() ?: return
+        val factory = connectionFactory(target) ?: return
+        if (target.type == "ble" &&
+            (!hasBlePermission(context) || bleScanner.adapter?.isEnabled != true)
+        ) {
+            return
+        }
+        val radio = radioManager
+        if (radio.isConnected || radio.isAttempting) return
+        // A car session is bound by the Android Auto host rather than started from an
+        // Activity; if the OS refuses the foreground service the link still gets tried.
+        runCatching { RadioService.start(context, target.label) }
+        radio.autoConnect(target.label, presenceProbe(target), factory)
+        if (radio.isConnected) {
+            // Keeps "last used" ordering in the saved list honest.
+            rememberRadio(target.type, target.address, target.name)
+        }
+        // The service only earns its notification while a link is up or being made.
+        if (!radio.isConnected && !radio.isAttempting) RadioService.stop(context)
+    }
+
+    /**
+     * Explicit reconnect to a saved radio (the car's Reconnect button and the phone's
+     * failed-state retry): bypasses the one-attempt auto-connect budget.
+     */
+    suspend fun connectKnown(context: Context, target: RememberedRadio) {
+        val factory = connectionFactory(target) ?: return
+        runCatching { RadioService.start(context, target.label) }
+        runCatching { radioManager.connect(target.label, presenceProbe(target), factory) }
+        if (radioManager.isConnected) rememberRadio(target.type, target.address, target.name)
+    }
+
+    /**
+     * A deliberate Disconnect, from the phone's Connect tab or the car's Radio screen:
+     * tear the link down, drop the foreground service, and stop auto-connecting on the
+     * next launch. The radio stays in the saved list.
+     */
+    suspend fun disconnectRadio(context: Context) {
+        radioManager.disconnect()
+        RadioService.stop(context)
+        clearAutoConnectTarget()
+    }
+
+    fun hasBlePermission(context: Context): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) ==
+            PackageManager.PERMISSION_GRANTED
 
     /**
      * Presence check for a saved radio: BLE waits for the advertisement before touching
