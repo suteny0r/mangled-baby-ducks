@@ -24,6 +24,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,6 +55,14 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
     val myInfo by vm.myInfo.collectAsState()
     val myNodeNum by vm.myNodeNum.collectAsState()
     val myBattery by vm.myBattery.collectAsState()
+    val lanDevices by vm.lanDevices.collectAsState()
+    val lanScanning by vm.lanScanning.collectAsState()
+
+    // Browse the LAN for the life of this screen, like the iOS Connect tab.
+    DisposableEffect(Unit) {
+        vm.startLanScan()
+        onDispose { vm.stopLanScan() }
+    }
 
     // Every in-progress state names its target: "Connecting…" with no device told the
     // user nothing about which radio was being reached.
@@ -168,6 +177,7 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
                             subtitle = buildList {
                                 add(radio.address)
                                 if (seen != null) add("in range  ${seen.rssi} dBm")
+                                if (radio.type == "tcp" && radio.address in lanDevices) add("on this network")
                                 if (radio.lastConnectedMs > 0) add("last used ${relativeTime(radio.lastConnectedMs)}")
                             }.joinToString("  •  "),
                             chevron = false,
@@ -229,9 +239,50 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
             }
         }
 
-        item { SectionHeader("Network", Modifier.padding(horizontal = 16.dp)) }
+        // Every radio found on this Wi-Fi (mDNS or the port sweep), saved ones included
+        // so the scan result is visible; the saved card also notes "on this network".
+        item {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SectionHeader("Network", Modifier.padding(start = 0.dp))
+                if (lanScanning) {
+                    Spacer(Modifier.width(8.dp))
+                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                }
+            }
+        }
+        val lanFound = lanDevices.values.sortedBy { it.name.lowercase() }
         item {
             GroupCard(Modifier.padding(horizontal = 16.dp)) {
+                if (lanFound.isEmpty()) {
+                    Text(
+                        if (lanScanning) "Looking for radios on this network…"
+                        else "No radios found on this network.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(16.dp),
+                    )
+                }
+                lanFound.forEachIndexed { index, device ->
+                    if (index > 0) RowDivider()
+                    val isLive = live && remembered?.type == "tcp" && remembered?.address == device.id
+                    NavRow(
+                        title = device.name,
+                        icon = Icons.Default.Wifi,
+                        subtitle = if (device.id in savedAddresses) "${device.id}  •  saved" else device.id,
+                        chevron = false,
+                        trailing = {
+                            if (isLive) {
+                                Text("Connected", style = MaterialTheme.typography.labelMedium, color = IosGreen)
+                            } else {
+                                TextButton(onClick = { vm.connectLan(device) }) { Text("Connect") }
+                            }
+                        },
+                    )
+                }
+                RowDivider()
                 Box(Modifier.padding(12.dp)) { TcpConnectRow(onConnect = vm::connectTcp) }
             }
         }
@@ -273,7 +324,7 @@ private fun TcpConnectRow(onConnect: (String, Int) -> Unit) {
         OutlinedTextField(
             value = host,
             onValueChange = { host = it },
-            label = { Text("Network radio (host[:port])") },
+            label = { Text("Add by address (host[:port])") },
             modifier = Modifier.weight(1f),
             singleLine = true,
         )

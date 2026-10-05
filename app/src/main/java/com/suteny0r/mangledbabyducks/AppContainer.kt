@@ -13,6 +13,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.suteny0r.mangledbabyducks.db.MeshDatabase
 import com.suteny0r.mangledbabyducks.radio.BleScanner
 import com.suteny0r.mangledbabyducks.radio.HardwareCatalog
+import com.suteny0r.mangledbabyducks.radio.LanScanner
 import com.suteny0r.mangledbabyducks.radio.LocationSharer
 import com.suteny0r.mangledbabyducks.radio.MeshProtocol
 import com.suteny0r.mangledbabyducks.radio.MessageNotifier
@@ -120,6 +121,7 @@ class AppContainer(context: Context) {
     val ingest = PacketIngest(database)
     val radioManager = RadioManager(database, ingest)
     val bleScanner = BleScanner(context)
+    val lanScanner = LanScanner(context)
     val messageNotifier = MessageNotifier(context, database, radioManager)
     val router = Router()
     val prefs = context.settingsDataStore

@@ -46,6 +46,14 @@ range, is relayed by them, and is readable by anyone holding the channel key. Di
 messages are additionally encrypted by the firmware to the recipient's public key. The
 developer has no control over, and no visibility into, what happens on the mesh.
 
+### Finding radios on your Wi-Fi
+
+While the Connect tab is open, the app looks for radios on your local network in two
+ways: it listens for multicast DNS announcements, and it tries the Meshtastic API port
+(4403) on every address of your phone's local subnet, briefly handshaking with anything
+that answers to read the radio's name. This traffic never leaves your local network, and
+nothing about it is sent to the developer.
+
 ### Your location
 
 The app asks for the precise location permission for two reasons:

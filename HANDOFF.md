@@ -79,6 +79,19 @@ for the Android app to look like them, with the app's own icon as the title-bar 
   flasher.meshtastic.org/img/devices/<image> (SVG) through Coil + coil-svg with the
   green check / gray X support seal and the support-level section title. New hosts are
   in docs/PRIVACY.md; Coil is in NOTICES.txt and About.
+- LAN discovery (user: "connect network has only direct entry... should scan"):
+  `radio/LanScanner.kt`, started/stopped with the Connect screen. Two sources merged:
+  NsdManager mDNS for `_meshtastic._tcp` (serial resolves, multicast lock held) and a
+  /24 sweep every 30 s that connects to port 4403, sends want_config and reads framed
+  FromRadio until my_info + its node_info (long name) or a 2.5 s budget. The sweep is
+  needed: the Heltec V4 "Spanky Ham" (192.168.20.129, fw 2.7.17) does not answer mDNS,
+  and neither did anything else on the LAN from the PC. The firmware takes ONE TCP
+  client, so the sweep excludes the host of the live TCP link (ConnectViewModel passes
+  it); a brief probe of any other radio is harmless. Network card lists every found
+  radio (saved ones tagged "saved", live one "Connected"); saved TCP rows add "on this
+  network". Manual entry stays as "Add by address". New permissions:
+  ACCESS_WIFI_STATE, CHANGE_WIFI_MULTICAST_STATE, ACCESS_NETWORK_STATE; the sweep is
+  described in docs/PRIVACY.md.
 - Known rough edges: the Nodes row has no distance/bearing line (needs my position),
   and the tap helper `tap.py "Connect"` matches "Connected" first; tap the tab by
   coordinates (930,2060 on the Note 20) instead.

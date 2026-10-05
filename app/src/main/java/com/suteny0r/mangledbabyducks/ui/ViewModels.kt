@@ -16,6 +16,7 @@ import com.suteny0r.mangledbabyducks.db.NodeWithUser
 import com.suteny0r.mangledbabyducks.db.UserEntity
 import com.suteny0r.mangledbabyducks.radio.ChannelCodec
 import com.suteny0r.mangledbabyducks.radio.DiscoveredDevice
+import com.suteny0r.mangledbabyducks.radio.LanScanner
 import com.suteny0r.mangledbabyducks.radio.RadioService
 import com.suteny0r.mangledbabyducks.radio.RadioState
 import com.suteny0r.mangledbabyducks.radio.TcpConnection
@@ -73,6 +74,41 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private var scanJob: Job? = null
+
+    // LAN discovery runs while the Connect screen is visible (iOS browses Bonjour
+    // continuously on that tab); results are keyed host:port to match saved radios.
+    private val _lanDevices = MutableStateFlow<Map<String, LanScanner.LanDevice>>(emptyMap())
+    val lanDevices: StateFlow<Map<String, LanScanner.LanDevice>> = _lanDevices.asStateFlow()
+    private val _lanScanning = MutableStateFlow(false)
+    val lanScanning: StateFlow<Boolean> = _lanScanning.asStateFlow()
+    private var lanJob: Job? = null
+
+    fun startLanScan() {
+        if (lanJob?.isActive == true) return
+        _lanScanning.value = true
+        lanJob = viewModelScope.launch {
+            // Never probe the radio we are talking to over TCP: the firmware takes one
+            // client, and the sweep's handshake would steal that slot.
+            val live = remembered.value?.takeIf { it.type == "tcp" && radio.isConnected }
+                ?.address?.substringBefore(':')
+            try {
+                container.lanScanner.discover(exclude = setOfNotNull(live)).collect { _lanDevices.value = it }
+            } catch (_: Exception) {
+            } finally {
+                _lanScanning.value = false
+            }
+        }
+    }
+
+    fun stopLanScan() {
+        lanJob?.cancel()
+        lanJob = null
+        _lanScanning.value = false
+    }
+
+    fun connectLan(device: LanScanner.LanDevice) {
+        connectTcp(device.host, device.port)
+    }
 
     fun toggleScan() {
         if (_scanning.value) {
