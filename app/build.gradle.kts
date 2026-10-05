@@ -1,4 +1,5 @@
 import com.google.protobuf.gradle.id
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -16,13 +17,33 @@ android {
         applicationId = "com.suteny0r.mangledbabyducks"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
+    }
+
+    // Release signing comes from local.properties (untracked): release.store.file,
+    // release.store.password, release.key.alias, release.key.password. Without them the
+    // release build is unsigned, which is fine for CI compile checks.
+    val localProps = Properties().apply {
+        val f = rootProject.file("local.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    val releaseStore = localProps.getProperty("release.store.file")?.let { file(it) }
+    if (releaseStore != null && releaseStore.exists()) {
+        signingConfigs {
+            create("release") {
+                storeFile = releaseStore
+                storePassword = localProps.getProperty("release.store.password")
+                keyAlias = localProps.getProperty("release.key.alias")
+                keyPassword = localProps.getProperty("release.key.password")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfigs.findByName("release")?.let { signingConfig = it }
         }
     }
     compileOptions {
