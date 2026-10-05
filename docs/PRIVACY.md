@@ -74,7 +74,15 @@ app sends no other data to them.
 - Satellite imagery: Esri World Imagery (server.arcgisonline.com). See Esri's privacy
   statement at https://www.esri.com/en-us/privacy/overview.
 
-If you never open the Map tab, the app makes no internet requests at all.
+### Hardware catalog
+
+To show a node's hardware model with its product image, the app downloads the public
+device catalog from the Meshtastic project (api.meshtastic.org) about once every two days
+and loads product images from the Meshtastic web flasher (flasher.meshtastic.org). These
+requests carry your IP address and nothing else: no node numbers, names or positions are
+sent. The catalog is cached on your device.
+
+If you never open the Map tab, the only internet requests are the hardware catalog ones.
 
 ### Links you open
 
@@ -109,7 +117,7 @@ settings, and you can exclude the app or disable backup in Android settings.
 |---|---|
 | Bluetooth scan and connect | Find and talk to your mesh radio |
 | Precise location | Required for Bluetooth scanning; optionally shares your GPS on the mesh |
-| Internet | Map tiles only |
+| Internet | Map tiles and the hardware catalog |
 | Notifications | Show incoming messages |
 | Foreground service (connected device, location) | Keep the radio link alive while the app is in the background |
 

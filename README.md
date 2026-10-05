@@ -51,7 +51,7 @@ from Swift to Kotlin; each ported class names its Swift original in its KDoc. Th
 unmodified in `app/src/main/proto`.
 
 Third-party components and their licenses (MapLibre Native, Protocol Buffers, AndroidX,
-Kotlin, ZXing) are listed in [NOTICE](NOTICE) and in
+Kotlin, ZXing, Coil) are listed in [NOTICE](NOTICE) and in
 `app/src/main/assets/NOTICES.txt`.
 
 Map data: © [OpenFreeMap](https://openfreemap.org), © [OpenMapTiles](https://openmaptiles.org),

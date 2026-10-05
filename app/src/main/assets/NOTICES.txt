@@ -34,6 +34,9 @@ full license texts follow.
   ZXing ("Zebra Crossing")            Apache License 2.0
     Copyright 2007 ZXing authors
     https://github.com/zxing/zxing
+  Coil (coil-compose, coil-svg)       Apache License 2.0
+    Copyright 2024 Coil Contributors
+    https://github.com/coil-kt/coil
 
 Map data and imagery
   Streets:   (c) OpenFreeMap  https://openfreemap.org
@@ -113,7 +116,7 @@ standalone and requires a support library to be linked with it.  This
 support library is itself covered by the above license.
 
 --------------------------------------------------------------------------
-Apache License 2.0 (AndroidX, Jetpack Compose, Kotlin, kotlinx.coroutines, ZXing)
+Apache License 2.0 (AndroidX, Jetpack Compose, Kotlin, kotlinx.coroutines, ZXing, Coil)
 --------------------------------------------------------------------------
 
                                  Apache License

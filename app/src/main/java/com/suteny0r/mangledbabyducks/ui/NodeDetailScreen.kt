@@ -32,6 +32,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Message
 import androidx.compose.material.icons.filled.ArrowBackIosNew
 import androidx.compose.material.icons.filled.Battery5Bar
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Star
@@ -99,6 +101,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -107,6 +110,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import coil.ImageLoader
+import coil.compose.AsyncImage
+import coil.decode.SvgDecoder
 import com.google.protobuf.ByteString
 import com.suteny0r.mangledbabyducks.container
 import com.suteny0r.mangledbabyducks.db.NodeWithUser
@@ -114,6 +120,7 @@ import com.suteny0r.mangledbabyducks.db.PositionEntity
 import com.suteny0r.mangledbabyducks.db.TelemetryEntity
 import com.suteny0r.mangledbabyducks.db.TracerouteEntity
 import com.suteny0r.mangledbabyducks.db.nodeNumString
+import com.suteny0r.mangledbabyducks.radio.HardwareCatalog
 import com.suteny0r.mangledbabyducks.radio.RadioState
 import com.suteny0r.mangledbabyducks.ui.theme.IosGreen
 import com.suteny0r.mangledbabyducks.ui.theme.IosOrange
@@ -132,6 +139,7 @@ class NodeDetailViewModel(app: Application) : AndroidViewModel(app) {
     private val db = container.database
 
     fun node(num: Long) = db.nodeDao().nodeWithUserFlow(num)
+    val hardware: StateFlow<Map<Int, HardwareCatalog.Info>> = container.hardwareCatalog.byModel
     fun deviceMetrics(num: Long) =
         db.telemetryDao().history(num, 0, System.currentTimeMillis() - 48 * 3600_000L)
     fun environmentMetrics(num: Long) =
@@ -265,6 +273,7 @@ fun NodeDetailScreen(
             vm.keyAcceptResult.value = null
         }
     }
+    val hardware by vm.hardware.collectAsState()
     val metrics by vm.deviceMetrics(nodeNum).collectAsState(initial = emptyList())
     val envMetrics by vm.environmentMetrics(nodeNum).collectAsState(initial = emptyList())
     val position by vm.latestPosition(nodeNum).collectAsState(initial = null)
@@ -294,27 +303,21 @@ fun NodeDetailScreen(
                 .padding(bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            // MARK: Hardware (NodeInfoItem.swift). No hardware catalog images on this side,
-            // so the card carries the model name and a chip glyph.
-            SectionHeader("Hardware")
+            // MARK: Hardware (NodeInfoItem.swift): catalog image, model name, support rosette.
+            val info = user?.let { hardware[it.hwModelId] }
+            SectionHeader(
+                when {
+                    user?.hwModel == "UNSET" || info == null -> "Hardware"
+                    user?.hwModel == "PORTDUINO" -> "Community Hardware"
+                    else -> info.sectionTitle
+                },
+            )
             GroupCard {
-                Column(
-                    Modifier.fillMaxWidth().padding(vertical = 20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Icon(
-                        Icons.Outlined.Memory,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(96.dp),
-                    )
-                    Text(
-                        user?.hwDisplayName ?: user?.hwModel ?: "Unknown",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
-                }
+                HardwareCard(
+                    imageUrl = info?.imageUrl,
+                    name = info?.displayName ?: user?.hwDisplayName ?: user?.hwModel ?: "Unknown",
+                    supported = info?.activelySupported,
+                )
             }
 
             // MARK: Node
@@ -435,6 +438,53 @@ fun NodeDetailScreen(
                 onAfterRemove = onBack,
             )
         }
+    }
+}
+
+/** NodeInfoHardwareSection: the product image with the support seal, the model name under it. */
+@Composable
+private fun HardwareCard(imageUrl: String?, name: String, supported: Boolean?) {
+    val context = LocalContext.current
+    // The flasher serves SVG; Coil needs the SVG decoder registered for those.
+    val loader = remember(context) {
+        ImageLoader.Builder(context).components { add(SvgDecoder.Factory()) }.build()
+    }
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(Modifier.fillMaxWidth().height(260.dp)) {
+            if (imageUrl != null) {
+                AsyncImage(
+                    model = imageUrl,
+                    imageLoader = loader,
+                    contentDescription = name,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp),
+                )
+            } else {
+                Icon(
+                    Icons.Outlined.Memory,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(96.dp).align(Alignment.Center),
+                )
+            }
+            if (supported != null) {
+                Icon(
+                    if (supported) Icons.Filled.Verified else Icons.Filled.Cancel,
+                    contentDescription = if (supported) "Actively supported" else "Not actively supported",
+                    tint = if (supported) IosGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 24.dp).size(34.dp),
+                )
+            }
+        }
+        Text(
+            name,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(top = 8.dp),
+        )
     }
 }
 

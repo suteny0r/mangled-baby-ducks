@@ -2,47 +2,60 @@ package com.suteny0r.mangledbabyducks.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.Reply
+import androidx.compose.material.icons.filled.ArrowBackIosNew
+import androidx.compose.material.icons.filled.ArrowCircleUp
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.Person
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -57,17 +70,39 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.suteny0r.mangledbabyducks.container
+import com.suteny0r.mangledbabyducks.db.ChannelEntity
 import com.suteny0r.mangledbabyducks.db.MessageEntity
+import com.suteny0r.mangledbabyducks.db.UserEntity
+import com.suteny0r.mangledbabyducks.db.nodeNumString
 import com.suteny0r.mangledbabyducks.radio.MeshProtocol
+import com.suteny0r.mangledbabyducks.ui.theme.IosGreen
+import com.suteny0r.mangledbabyducks.ui.theme.IosOrange
+import com.suteny0r.mangledbabyducks.ui.theme.IosRed
 import kotlinx.coroutines.flow.Flow
+
+/*
+ * Port of the iOS Messages stack: Messages.swift (two-row sidebar), ChannelList.swift and
+ * UserList.swift (conversation rows), ChannelMessageList / UserMessageList (the thread),
+ * ChannelMessageRow / UserMessageRow + MessageText (bubbles), TapbackResponses, and
+ * TextMessageField (the composer).
+ */
 
 /** Canonical tapback set from the iOS MessagingEnums; arbitrary emoji also arrive fine. */
 private val TAPBACKS = listOf("👋", "❤️", "👍", "👎", "🤣", "‼️", "❓", "💩")
+
+/** CircleText(..., color: .accentColor).brightness(0.2): the lighter accent for channel avatars. */
+private const val CHANNEL_AVATAR_NUM = 0x5E8BE6L
+
+/** CircleText(..., color: .accentColor) at full strength: the thread's principal avatar. */
+private const val ACCENT_NUM = 0x2855A8L
 
 private val ThreadSaver = Saver<ThreadTarget?, String>(
     save = {
@@ -110,7 +145,7 @@ fun MessagesScreen(vm: MessagesViewModel = viewModel()) {
     when (val thread = openThread) {
         null -> ThreadList(vm, onOpen = { openThread = it })
         is ThreadTarget.Channel -> ThreadView(
-            title = thread.name,
+            target = thread,
             messages = vm.channelMessages(thread.index),
             tapbacks = vm.channelTapbacks(thread.index),
             vm = vm,
@@ -121,7 +156,7 @@ fun MessagesScreen(vm: MessagesViewModel = viewModel()) {
             onBack = { openThread = null },
         )
         is ThreadTarget.Direct -> ThreadView(
-            title = thread.name,
+            target = thread,
             messages = vm.directMessages(thread.peerNum),
             tapbacks = vm.directTapbacks(thread.peerNum),
             vm = vm,
@@ -133,6 +168,9 @@ fun MessagesScreen(vm: MessagesViewModel = viewModel()) {
         )
     }
 }
+
+// ---------------------------------------------------------------------------------------
+// Sidebar + conversation lists
 
 @Composable
 private fun ThreadList(vm: MessagesViewModel, onOpen: (ThreadTarget) -> Unit) {
@@ -146,30 +184,30 @@ private fun ThreadList(vm: MessagesViewModel, onOpen: (ThreadTarget) -> Unit) {
 
     section?.let { open ->
         BackHandler { section = null }
+        val channelPreviews by vm.channelPreviews.collectAsState()
+        val dmPreviews by vm.dmPreviews.collectAsState()
+        val unreadChannelSet by vm.unreadChannelSet.collectAsState()
+        val unreadDmSet by vm.unreadDmSet.collectAsState()
         Column(Modifier.fillMaxSize()) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(start = 4.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
-            ) {
-                IconButton(onClick = { section = null }) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                }
-                Text(
-                    if (open == "channels") "Channels" else "Direct Messages",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f),
-                )
-                ConnectedDevicePill()
-            }
+            // ChannelList / UserList: round back button, then the large title.
+            RoundBackButton(onBack = { section = null }, modifier = Modifier.padding(start = 12.dp, top = 8.dp))
+            Text(
+                if (open == "channels") "Channels" else "Direct Messages",
+                style = MaterialTheme.typography.headlineLarge,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 8.dp),
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             LazyColumn(Modifier.fillMaxSize()) {
                 if (open == "channels") {
                     items(channels, key = { "c${it.index}" }) { channel ->
-                        val name = channel.name?.ifEmpty { "Primary Channel" } ?: "Primary Channel"
+                        val name = channelDisplayName(channel)
                         ConversationRow(
-                            avatar = { NodeAvatar(channel.index.toString(), 0x5E8BE6L, 52.dp) },
+                            unread = channel.index in unreadChannelSet,
+                            avatar = { NodeAvatar(channel.index.toString(), CHANNEL_AVATAR_NUM, 46.dp) },
+                            lock = channelLock(channel),
                             name = name,
-                            detail = "Channel ${channel.index}",
+                            preview = channelPreviews[channel.index],
                             muted = channel.mute,
                             onClick = { onOpen(ThreadTarget.Channel(channel.index, name)) },
                         )
@@ -188,9 +226,11 @@ private fun ThreadList(vm: MessagesViewModel, onOpen: (ThreadTarget) -> Unit) {
                     items(contacts, key = { "u${it.num}" }) { user ->
                         val name = user.longName ?: "Node ${user.num}"
                         ConversationRow(
-                            avatar = { NodeAvatar(user.shortName, user.num, 52.dp) },
+                            unread = user.num in unreadDmSet,
+                            avatar = { NodeAvatar(user.shortName, user.num, 46.dp) },
+                            lock = userLock(user),
                             name = name,
-                            detail = user.lastMessage?.let { listTimestamp(it) },
+                            preview = dmPreviews[user.num],
                             muted = user.mute,
                             onClick = { onOpen(ThreadTarget.Direct(user.num, name)) },
                         )
@@ -202,8 +242,8 @@ private fun ThreadList(vm: MessagesViewModel, onOpen: (ThreadTarget) -> Unit) {
     }
 
     Column(Modifier.fillMaxSize()) {
-        // iOS navigationTitle("Messages"), logo at the leading edge.
-        AppHeader("Messages", large = false)
+        // Messages.swift: large title under the logo; no status pill on this tab.
+        AppHeader("Messages", showStatus = false)
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         SectionRow(
             icon = Icons.Outlined.Groups,
@@ -220,6 +260,26 @@ private fun ThreadList(vm: MessagesViewModel, onOpen: (ThreadTarget) -> Unit) {
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     }
+}
+
+private fun channelDisplayName(channel: ChannelEntity): String =
+    channel.name?.takeIf { it.isNotEmpty() }
+        ?: if (channel.role == 1) "Primary Channel" else "Channel ${channel.index}"
+
+private data class LockGlyph(val icon: ImageVector, val tint: Color)
+
+private val LockGold = Color(0xFFB8860B)
+
+/** ChannelLock: the default one-byte PSK is "open" (gold), a real key is closed green. */
+private fun channelLock(channel: ChannelEntity) =
+    if ((channel.psk?.size ?: 0) > 1) LockGlyph(Icons.Filled.Lock, IosGreen)
+    else LockGlyph(Icons.Filled.LockOpen, LockGold)
+
+/** UserList: green closed lock when PKI key matches, red key when it does not, open gold otherwise. */
+private fun userLock(user: UserEntity) = when {
+    user.pkiEncrypted && !user.keyMatch -> LockGlyph(Icons.Filled.Key, IosRed)
+    user.pkiEncrypted -> LockGlyph(Icons.Filled.Lock, IosGreen)
+    else -> LockGlyph(Icons.Filled.LockOpen, LockGold)
 }
 
 /** One of the two big sidebar rows: accent glyph, title2 text, unread badge, chevron. */
@@ -252,33 +312,79 @@ private fun SectionRow(icon: ImageVector, title: String, badge: Int, onClick: ()
     }
 }
 
+/**
+ * ChannelList / UserList row: unread dot, avatar, lock + bold name with the time at the
+ * trailing edge, the last message preview beneath, chevron.
+ */
 @Composable
 private fun ConversationRow(
+    unread: Boolean,
     avatar: @Composable () -> Unit,
+    lock: LockGlyph,
     name: String,
-    detail: String?,
+    preview: MessageEntity?,
     muted: Boolean,
     onClick: () -> Unit,
 ) {
-    ListItem(
-        headlineContent = { Text(name) },
-        leadingContent = avatar,
-        supportingContent = detail?.let { { Text(it) } },
-        trailingContent = {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(start = 12.dp, end = 12.dp, top = 14.dp, bottom = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .size(10.dp)
+                .background(if (unread) MaterialTheme.colorScheme.primary else Color.Transparent, CircleShape),
+        )
+        Spacer(Modifier.width(12.dp))
+        avatar()
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (muted) Icon(Icons.Filled.NotificationsOff, contentDescription = "muted", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.outline)
+                Icon(lock.icon, contentDescription = null, tint = lock.tint, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (muted) {
+                    Spacer(Modifier.width(6.dp))
+                    Icon(Icons.Filled.NotificationsOff, contentDescription = "muted", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                }
+                Spacer(Modifier.width(8.dp))
+                preview?.let {
+                    Text(
+                        listTimestamp(it.timestamp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-        },
-        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-        modifier = Modifier.clickable(onClick = onClick),
-    )
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, modifier = Modifier.padding(start = 84.dp))
+            preview?.payload?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.outline)
+    }
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 }
 
 /**
  * iOS list-row timestamp convention (ChannelList.makeChannelRow): time-of-day today,
- * literal "Yesterday", else MM/dd/YY.
+ * literal "Yesterday", else the date.
  */
 private fun listTimestamp(epochMillis: Long): String {
     val cal = java.util.Calendar.getInstance()
@@ -289,19 +395,38 @@ private fun listTimestamp(epochMillis: Long): String {
     val thenYear = then.get(java.util.Calendar.YEAR)
     return when {
         nowDay == thenDay && nowYear == thenYear ->
-            java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(epochMillis)
+            java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).format(epochMillis)
         nowYear == thenYear && nowDay - thenDay == 1 -> "Yesterday"
         else ->
-            java.text.SimpleDateFormat("MM/dd/yy", java.util.Locale.getDefault()).format(epochMillis)
+            java.text.SimpleDateFormat("M/d/yy", java.util.Locale.getDefault()).format(epochMillis)
     }
 }
 
+/** "Oct 4, 2026 at 9:51 PM": the centered header above a message after a 60 minute gap. */
+private fun headerTimestamp(epochMillis: Long): String =
+    java.text.SimpleDateFormat("MMM d, yyyy 'at' h:mm a", java.util.Locale.getDefault()).format(epochMillis)
+
+@Composable
+fun RoundBackButton(onBack: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = modifier.size(44.dp),
+    ) {
+        IconButton(onClick = onBack) {
+            Icon(Icons.Filled.ArrowBackIosNew, contentDescription = "Back", modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// Thread
+
 private data class ReplyContext(val messageId: Long, val preview: String)
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ThreadView(
-    title: String,
+    target: ThreadTarget,
     messages: Flow<List<MessageEntity>>,
     tapbacks: Flow<List<MessageEntity>>,
     vm: MessagesViewModel,
@@ -314,213 +439,320 @@ private fun ThreadView(
     val myNum by vm.myNodeNum.collectAsState()
     val listState = rememberLazyListState()
     var replyTo by remember { mutableStateOf<ReplyContext?>(null) }
+    var query by rememberSaveable { mutableStateOf("") }
 
     val byId = remember(list) { list.associateBy { it.messageId } }
     val tapbacksByTarget = remember(tapbackList) { tapbackList.groupBy { it.replyId } }
+    val shown = remember(list, query) {
+        if (query.isBlank()) list else list.filter { it.payload?.contains(query, ignoreCase = true) == true }
+    }
 
     LaunchedEffect(Unit) { onOpened() }
     LaunchedEffect(list.size) {
-        if (list.isNotEmpty()) listState.animateScrollToItem(list.size - 1)
+        if (list.isNotEmpty() && query.isBlank()) listState.animateScrollToItem(list.size - 1)
     }
 
     Column(Modifier.fillMaxSize().imePadding()) {
-        TopAppBar(
-            title = { Text(title) },
-            navigationIcon = {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+        // ChannelMessageList toolbar: back, the channel / peer avatar as the principal
+        // item, ConnectedDevice at the trailing edge.
+        Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            RoundBackButton(onBack, Modifier.align(Alignment.CenterStart))
+            Box(Modifier.align(Alignment.Center)) {
+                when (target) {
+                    is ThreadTarget.Channel -> NodeAvatar(target.index.toString(), ACCENT_NUM, 44.dp)
+                    is ThreadTarget.Direct -> {
+                        val peer by produceState<UserEntity?>(initialValue = null, target.peerNum) {
+                            value = vm.userFor(target.peerNum)
+                        }
+                        NodeAvatar(peer?.shortName, target.peerNum, 44.dp)
+                    }
+                }
+            }
+            ConnectedDevicePill(Modifier.align(Alignment.CenterEnd))
+        }
+        // MessageSearchBar: "Find in conversation".
+        TextField(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = { Text("Find in conversation") },
+            singleLine = true,
+            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+            trailingIcon = {
+                if (query.isNotEmpty()) {
+                    IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Close, contentDescription = "Clear search") }
                 }
             },
+            shape = RoundedCornerShape(22.dp),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                focusedIndicatorColor = Color.Transparent,
+                unfocusedIndicatorColor = Color.Transparent,
+                disabledIndicatorColor = Color.Transparent,
+            ),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
         )
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = PaddingValues(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         ) {
-            items(list, key = { it.messageId }) { message ->
-                MessageBubble(
+            itemsIndexed(shown, key = { _, m -> m.messageId }) { index, message ->
+                val previous = shown.getOrNull(index - 1)
+                MessageRow(
                     message = message,
+                    previous = previous,
                     mine = message.fromNum == myNum,
+                    isDirect = target is ThreadTarget.Direct,
                     vm = vm,
                     repliedPreview = if (message.replyId > 0) {
-                        byId[message.replyId]?.payload ?: "(original message unavailable)"
+                        byId[message.replyId]?.payload ?: "EMPTY MESSAGE"
                     } else null,
                     tapbacks = tapbacksByTarget[message.messageId].orEmpty(),
                     onTapback = { emoji -> onSend(emoji, message.messageId, true) },
                     onReply = {
-                        replyTo = ReplyContext(
-                            message.messageId,
-                            (message.payload ?: "").take(80),
-                        )
+                        replyTo = ReplyContext(message.messageId, (message.payload ?: "").take(80))
                     },
                 )
             }
         }
-        replyTo?.let { ctx ->
-            Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
-                Row(
-                    Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "Replying to: ${ctx.preview}",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                    )
-                    IconButton(onClick = { replyTo = null }) {
-                        Icon(Icons.Default.Close, contentDescription = "Cancel reply")
-                    }
-                }
-            }
-        }
-        Composer(onSend = { text ->
-            onSend(text, replyTo?.messageId ?: 0, false)
-            replyTo = null
-        })
+        Composer(
+            replyTo = replyTo,
+            onCancelReply = { replyTo = null },
+            onSend = { text ->
+                onSend(text, replyTo?.messageId ?: 0, false)
+                replyTo = null
+            },
+        )
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+/**
+ * ChannelMessageRow / UserMessageRow: optional timestamp header, the quoted reply above,
+ * then avatar (others) + sender caption + bubble + tapback pill + delivery status.
+ */
 @Composable
-private fun MessageBubble(
+private fun MessageRow(
     message: MessageEntity,
+    previous: MessageEntity?,
     mine: Boolean,
+    isDirect: Boolean,
     vm: MessagesViewModel,
     repliedPreview: String?,
     tapbacks: List<MessageEntity>,
     onTapback: (String) -> Unit,
     onReply: () -> Unit,
 ) {
-    val senderName by produceState(initialValue = if (mine) "You" else "…", message.fromNum) {
-        value = if (mine) "You"
-        else vm.userFor(message.fromNum)?.let { it.longName ?: "Node ${it.num}" }
-            ?: "Node ${message.fromNum}"
+    val sender by produceState<UserEntity?>(initialValue = null, message.fromNum) {
+        value = vm.userFor(message.fromNum)
     }
-    var menuOpen by remember { mutableStateOf(false) }
-
-    Column(
-        Modifier.fillMaxWidth(),
-        horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
-    ) {
-        Box {
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = if (mine) MaterialTheme.colorScheme.primaryContainer
-                    else MaterialTheme.colorScheme.surfaceVariant,
-                ),
-                modifier = Modifier
-                    .widthIn(max = 300.dp)
-                    .combinedClickable(onClick = {}, onLongClick = { menuOpen = true }),
+    Column(Modifier.fillMaxWidth().padding(bottom = 14.dp)) {
+        // displayTimestamp(aboveMessage:): a header when more than 60 minutes passed.
+        if (previous != null && message.timestamp - previous.timestamp > 3_600_000L) {
+            Text(
+                headerTimestamp(message.timestamp),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                textAlign = TextAlign.Center,
+            )
+        }
+        repliedPreview?.let { quoted ->
+            Row(
+                Modifier.fillMaxWidth().padding(start = if (mine) 50.dp else 60.dp, end = if (mine) 0.dp else 50.dp, bottom = 4.dp),
+                horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    if (!mine) {
-                        Text(senderName, style = MaterialTheme.typography.labelSmall)
-                    }
-                    repliedPreview?.let {
-                        Surface(
-                            tonalElevation = 4.dp,
-                            shape = MaterialTheme.shapes.small,
-                        ) {
-                            Text(
-                                it,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 2,
-                                modifier = Modifier.padding(6.dp),
-                            )
-                        }
-                    }
-                    Text(message.payload ?: "", style = MaterialTheme.typography.bodyMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(relativeTime(message.timestamp), style = MaterialTheme.typography.labelSmall)
-                        if (mine) {
-                            Text(
-                                when {
-                                    message.realAck -> "✓✓"
-                                    message.receivedAck -> "✓"
-                                    message.ackError != 0 -> "✗"
-                                    else -> "…"
-                                },
-                                style = MaterialTheme.typography.labelSmall,
-                            )
-                        }
-                    }
-                }
-            }
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                Row(Modifier.padding(horizontal = 8.dp)) {
-                    TAPBACKS.forEach { emoji ->
-                        Text(
-                            emoji,
-                            style = MaterialTheme.typography.titleLarge,
-                            modifier = Modifier
-                                .padding(4.dp)
-                                .clickable {
-                                    menuOpen = false
-                                    onTapback(emoji)
-                                },
-                        )
-                    }
-                }
-                DropdownMenuItem(
-                    text = { Text("Reply") },
-                    onClick = {
-                        menuOpen = false
-                        onReply()
-                    },
+                Text(
+                    quoted,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .border(0.5.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(18.dp))
+                        .padding(10.dp),
+                )
+                Icon(
+                    Icons.AutoMirrored.Filled.Reply,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 8.dp).size(22.dp),
                 )
             }
         }
-        if (tapbacks.isNotEmpty()) {
-            val grouped = tapbacks.groupBy { it.payload ?: "" }
-            Surface(
-                tonalElevation = 2.dp,
-                shape = MaterialTheme.shapes.small,
-                modifier = Modifier.padding(top = 2.dp),
-            ) {
-                Row(Modifier.padding(horizontal = 6.dp, vertical = 2.dp)) {
-                    grouped.forEach { (emoji, senders) ->
-                        Text(
-                            if (senders.size > 1) "$emoji${senders.size}" else emoji,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(horizontal = 2.dp),
-                        )
-                    }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+            if (mine) {
+                Spacer(Modifier.width(50.dp).weight(1f))
+            } else {
+                NodeAvatar(sender?.shortName, message.fromNum, 50.dp, Modifier.padding(end = 10.dp, bottom = 6.dp))
+            }
+            Column(horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
+                if (!mine) {
+                    Text(
+                        "${sender?.longName ?: "Unknown"} (${sender?.userId ?: nodeNumString(message.fromNum)})",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
+                Bubble(message, mine, onTapback, onReply)
+                if (tapbacks.isNotEmpty()) {
+                    TapbackPill(tapbacks, vm)
+                }
+                if (mine) {
+                    DeliveryStatus(message, isDirect)
+                }
+            }
+            if (!mine) Spacer(Modifier.width(50.dp).weight(1f))
+        }
+    }
+}
+
+/** MessageText: 15 pt corner radius, accent with white text for ours, gray bubble for theirs. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun Bubble(message: MessageEntity, mine: Boolean, onTapback: (String) -> Unit, onReply: () -> Unit) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Box {
+        Text(
+            message.payload ?: "EMPTY MESSAGE",
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (mine) Color.White else MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier
+                .widthIn(max = 300.dp)
+                .background(
+                    if (mine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                    RoundedCornerShape(15.dp),
+                )
+                .combinedClickable(onClick = {}, onLongClick = { menuOpen = true })
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+        )
+        // MessageContextMenuItems: the tapback strip, then Reply.
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            Row(Modifier.padding(horizontal = 8.dp)) {
+                TAPBACKS.forEach { emoji ->
+                    Text(
+                        emoji,
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier
+                            .padding(4.dp)
+                            .clickable {
+                                menuOpen = false
+                                onTapback(emoji)
+                            },
+                    )
+                }
+            }
+            DropdownMenuItem(
+                text = { Text("Reply") },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.Reply, contentDescription = null) },
+                onClick = {
+                    menuOpen = false
+                    onReply()
+                },
+            )
+        }
+    }
+}
+
+/** TapbackResponses: a bordered pill of emoji over the sender's short name. */
+@Composable
+private fun TapbackPill(tapbacks: List<MessageEntity>, vm: MessagesViewModel) {
+    Row(
+        Modifier
+            .padding(top = 4.dp)
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        tapbacks.forEach { tb ->
+            val from by produceState<UserEntity?>(initialValue = null, tb.fromNum) { value = vm.userFor(tb.fromNum) }
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(40.dp)) {
+                Text(tb.payload ?: "", fontSize = 20.sp, maxLines = 1)
+                Text(
+                    from?.shortName ?: "?",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
             }
         }
     }
 }
 
+/** MessageDeliveryStatusLabel under our own bubbles. */
 @Composable
-private fun Composer(onSend: (String) -> Unit) {
+private fun DeliveryStatus(message: MessageEntity, isDirect: Boolean) {
+    val secondary = MaterialTheme.colorScheme.onSurfaceVariant
+    val (icon, text, tint) = when {
+        message.ackError != 0 -> Triple(Icons.Filled.Error, "Not delivered", IosOrange)
+        message.realAck -> Triple(Icons.Filled.CheckCircle, if (isDirect) "Delivered" else "Delivered to mesh", secondary)
+        message.receivedAck && isDirect -> Triple(Icons.Filled.Error, "Relayed, not confirmed by recipient", IosOrange)
+        message.receivedAck -> Triple(Icons.Filled.CheckCircle, "Delivered to mesh", secondary)
+        else -> Triple(Icons.Filled.Schedule, "Sending...", IosOrange)
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(12.dp))
+        Spacer(Modifier.width(3.dp))
+        Text(text, style = MaterialTheme.typography.labelSmall, color = tint)
+    }
+}
+
+/** TextMessageField: a capsule text field, an up-arrow send button once there is text. */
+@Composable
+private fun Composer(replyTo: ReplyContext?, onCancelReply: () -> Unit, onSend: (String) -> Unit) {
     var text by remember { mutableStateOf("") }
     val bytes = text.encodeToByteArray().size
-    Row(
-        Modifier.fillMaxWidth().padding(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        OutlinedTextField(
-            value = text,
-            onValueChange = { candidate ->
-                // Enforce the 200-byte wire limit on UTF-8 size, not char count.
-                if (candidate.encodeToByteArray().size <= MeshProtocol.MAX_TEXT_BYTES) text = candidate
-            },
-            modifier = Modifier.weight(1f),
-            placeholder = { Text("Message") },
-            supportingText = { Text("$bytes/${MeshProtocol.MAX_TEXT_BYTES}") },
-            maxLines = 4,
-        )
-        IconButton(
-            enabled = text.isNotBlank(),
-            onClick = {
-                onSend(text.trim())
-                text = ""
-            },
-        ) {
-            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (replyTo != null) {
+                IconButton(onClick = onCancelReply) {
+                    Icon(Icons.Filled.Cancel, contentDescription = "Cancel reply", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(32.dp))
+                }
+                Text("Reply", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(end = 8.dp))
+            }
+            OutlinedTextField(
+                value = text,
+                onValueChange = { candidate ->
+                    // Enforce the 200-byte wire limit on UTF-8 size, not char count.
+                    if (candidate.encodeToByteArray().size <= MeshProtocol.MAX_TEXT_BYTES) text = candidate
+                },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("Message") },
+                maxLines = 4,
+                shape = RoundedCornerShape(20.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                    focusedBorderColor = MaterialTheme.colorScheme.outline,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+                ),
+            )
+            if (text.isNotBlank()) {
+                IconButton(onClick = {
+                    onSend(text.trim())
+                    text = ""
+                }) {
+                    Icon(
+                        Icons.Filled.ArrowCircleUp,
+                        contentDescription = "Send",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(36.dp),
+                    )
+                }
+            }
+        }
+        if (text.isNotEmpty()) {
+            Text(
+                "$bytes / ${MeshProtocol.MAX_TEXT_BYTES}",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (bytes >= MeshProtocol.MAX_TEXT_BYTES) IosRed else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.End).padding(top = 2.dp),
+            )
         }
     }
 }

@@ -75,9 +75,12 @@ private val THIRD_PARTY = listOf(
     Credit("Kotlin and kotlinx.coroutines", "Apache License 2.0",
         "https://github.com/Kotlin/kotlinx.coroutines"),
     Credit("ZXing", "Apache License 2.0", "https://github.com/zxing/zxing"),
+    Credit("Coil", "Apache License 2.0", "https://github.com/coil-kt/coil"),
 )
 
 private val MAP_DATA = listOf(
+    Credit("Meshtastic device catalog", "Hardware names and product images, fetched from the Meshtastic project",
+        "https://github.com/meshtastic/web-flasher"),
     Credit("OpenFreeMap", "Street tiles and glyphs", "https://openfreemap.org"),
     Credit("OpenMapTiles", "Vector tile schema", "https://openmaptiles.org"),
     Credit("OpenStreetMap contributors", "Map data, ODbL",

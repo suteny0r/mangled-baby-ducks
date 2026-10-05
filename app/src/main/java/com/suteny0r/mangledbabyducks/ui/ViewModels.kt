@@ -237,6 +237,22 @@ class MessagesViewModel(app: Application) : AndroidViewModel(app) {
 
     val myNodeNum: StateFlow<Long> = container.radioManager.myNodeNum
 
+    /** Row previews: newest message per channel and per DM peer, unread flags per thread. */
+    val channelPreviews: StateFlow<Map<Int, MessageEntity>> = db.messageDao().channelPreviews()
+        .map { list -> list.associateBy { it.channel } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+    val dmPreviews: StateFlow<Map<Long, MessageEntity>> = combine(
+        db.messageDao().dmPreviews(), container.radioManager.myNodeNum,
+    ) { list, me ->
+        list.associateBy { if (it.fromNum == me) (it.toNum ?: it.fromNum) else it.fromNum }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+    val unreadChannelSet: StateFlow<Set<Int>> = db.messageDao().unreadChannelIndexes()
+        .map { it.toSet() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+    val unreadDmSet: StateFlow<Set<Long>> = db.messageDao().unreadDmPeers()
+        .map { it.toSet() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+
     fun channelMessages(channel: Int) = db.messageDao().channelMessages(channel)
 
     fun directMessages(peer: Long) =

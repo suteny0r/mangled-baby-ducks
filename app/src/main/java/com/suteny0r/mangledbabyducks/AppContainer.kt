@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.suteny0r.mangledbabyducks.db.MeshDatabase
 import com.suteny0r.mangledbabyducks.radio.BleScanner
+import com.suteny0r.mangledbabyducks.radio.HardwareCatalog
 import com.suteny0r.mangledbabyducks.radio.LocationSharer
 import com.suteny0r.mangledbabyducks.radio.MeshProtocol
 import com.suteny0r.mangledbabyducks.radio.MessageNotifier
@@ -123,6 +124,8 @@ class AppContainer(context: Context) {
     val router = Router()
     val prefs = context.settingsDataStore
     val locationSharer = LocationSharer(context, radioManager, prefs)
+    /** Device catalog for the node detail hardware card; refreshes at most every 48 h. */
+    val hardwareCatalog = HardwareCatalog(context).also { it.refresh() }
 
     suspend fun rememberedRadio(): RememberedRadio? = prefs.data.first().rememberedRadio()
 

@@ -120,6 +120,27 @@ interface MessageDao {
     @Query("SELECT COUNT(*) FROM messages WHERE read = 0 AND isEmoji = 0 AND toNum IS NOT NULL")
     fun unreadDirectCount(): Flow<Int>
 
+    /** Newest text message per channel (ChannelList.swift row preview + time). */
+    @Query(
+        "SELECT * FROM messages m WHERE toNum IS NULL AND isEmoji = 0 AND timestamp = " +
+            "(SELECT MAX(timestamp) FROM messages WHERE toNum IS NULL AND isEmoji = 0 AND channel = m.channel)"
+    )
+    fun channelPreviews(): Flow<List<MessageEntity>>
+
+    /** Newest text message per DM peer, either direction (UserList.swift row preview). */
+    @Query(
+        "SELECT * FROM messages m WHERE toNum IS NOT NULL AND isEmoji = 0 AND timestamp = " +
+            "(SELECT MAX(timestamp) FROM messages WHERE toNum IS NOT NULL AND isEmoji = 0 AND " +
+            "((fromNum = m.fromNum AND toNum = m.toNum) OR (fromNum = m.toNum AND toNum = m.fromNum)))"
+    )
+    fun dmPreviews(): Flow<List<MessageEntity>>
+
+    @Query("SELECT DISTINCT channel FROM messages WHERE read = 0 AND isEmoji = 0 AND toNum IS NULL")
+    fun unreadChannelIndexes(): Flow<List<Int>>
+
+    @Query("SELECT DISTINCT fromNum FROM messages WHERE read = 0 AND isEmoji = 0 AND toNum IS NOT NULL")
+    fun unreadDmPeers(): Flow<List<Long>>
+
     @Query("UPDATE messages SET read = 1 WHERE toNum IS NULL AND channel = :channel")
     suspend fun markChannelRead(channel: Int)
 

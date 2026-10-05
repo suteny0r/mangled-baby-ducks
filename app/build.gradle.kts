@@ -70,6 +70,8 @@ dependencies {
     implementation(libs.protobuf.kotlin.lite)
     implementation(libs.maplibre.sdk)
     implementation(libs.androidx.car.app)
+    implementation(libs.coil.compose)
+    implementation(libs.coil.svg)
     implementation(libs.zxing.core)
     implementation(libs.kotlinx.coroutines.android)
     debugImplementation(libs.androidx.compose.ui.tooling)

@@ -64,6 +64,21 @@ for the Android app to look like them, with the app's own icon as the title-bar 
   history, S&F config, ignore, delete) and Administration. Charts moved into the log
   sub-pages (`DetailLog`); Position Log uses the new `PositionDao.history`; Node Map
   uses `Router.openMapNode` -> MapScreen flies to the node.
+- Messages (m1-m3 screenshots): Messages tab is the large title with no status pill;
+  Channels / Direct Messages lists have the round back button, large title, and
+  ChannelList/UserList rows (unread dot, index or node avatar, lock glyph by PSK length or
+  PKI state, bold name, time, last-message preview; `channelPreviews` / `dmPreviews` /
+  `unreadChannelIndexes` / `unreadDmPeers` DAO queries). Thread: back + principal avatar
+  + status pill, "Find in conversation" filter, 50 dp sender avatars, "Long (!id)"
+  caption, 15 dp bubbles (accent/white for ours, gray for theirs), quoted reply above with
+  the reply arrow, bordered tapback pill (emoji over short name), delivery status line,
+  hour-gap timestamp headers, capsule composer with the up-arrow send button.
+- Hardware card (user asked for the product images): `radio/HardwareCatalog.kt` fetches
+  api.meshtastic.org/resource/deviceHardware (cached 48 h in cacheDir), resolves one
+  entry per hwModel like HardwareCatalogResolver, and the card loads
+  flasher.meshtastic.org/img/devices/<image> (SVG) through Coil + coil-svg with the
+  green check / gray X support seal and the support-level section title. New hosts are
+  in docs/PRIVACY.md; Coil is in NOTICES.txt and About.
 - Known rough edges: the Nodes row has no distance/bearing line (needs my position),
   and the tap helper `tap.py "Connect"` matches "Connected" first; tap the tab by
   coordinates (930,2060 on the Note 20) instead.
