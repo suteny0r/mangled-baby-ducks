@@ -111,6 +111,22 @@ for the Android app to look like them, with the app's own icon as the title-bar 
   and the tap helper `tap.py "Connect"` matches "Connected" first; tap the tab by
   coordinates (930,2060 on the Note 20) instead.
 
+## Release 0.2.0 (2026-10-04, tag v0.2.0, GitHub release with both APKs)
+- Version lives in `app/build.gradle.kts` (versionCode 2, versionName 0.2.0). Tag is
+  `v<versionName>`; the About screen's source link plus the tag is the GPL source offer.
+- Release signing: keystore `C:/Users/User/.android/mangled-baby-ducks-release.jks`
+  (PKCS12, alias `mangledbabyducks`, RSA 4096, valid 30 years, CN=Mangled Baby Ducks).
+  Credentials are in the untracked `local.properties` (`release.store.file`,
+  `release.store.password`, `release.key.alias`, `release.key.password`); the build
+  script signs release when those exist and leaves it unsigned otherwise. BACK UP the
+  keystore and local.properties: a lost key means a new Play listing (or Play App
+  Signing key reset).
+- Recipe: bump version, commit, `git tag -a vX.Y.Z`, push both, `gradlew
+  :app:assembleDebug :app:assembleRelease`, verify with
+  `build-tools/35.0.0/apksigner verify --print-certs` and `aapt dump badging`, then
+  `gh release create vX.Y.Z <apks> --title X.Y.Z --notes-file notes.md`.
+- Play upload is still manual (needs an AAB: `:app:bundleRelease`, same signing).
+
 ## Licensing, trademark and attribution for a Play release (2026-10-04, installed and clicked through)
 Prompted by a release-risk review. The app is a derivative of GPL-3.0 Meshtastic-Apple and
 bundles GPL-3.0 protobufs, and until this round the repo had no license at all.
