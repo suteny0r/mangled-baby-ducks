@@ -107,6 +107,13 @@ for the Android app to look like them, with the app's own icon as the title-bar 
   Florida only.
 - DB pull recipe (debug build): `adb exec-out run-as com.suteny0r.mangledbabyducks cat
   databases/mesh.db` (plus -wal and -shm) then sqlite3 on the PC.
+- RX/TX activity lights (user: omitted from the iOS header). Port of
+  RXTXIndicatorWidget.swift + LEDIndicator: inside ConnectedDevicePill, left of the link
+  icon, an up arrow with a green LED (packets to the radio) and a down arrow with a red
+  LED (packets from it); each flashes on and eases out over 300 ms whenever
+  `RadioManager.packetsSent` / `packetsReceived` ticks (counted in `send()` and on every
+  ConnectionEvent.Data). Tap: sends a heartbeat when connected (so the lights blink on
+  demand, as iOS does) and toggles the "Packet Count" popup with both totals.
 - Known rough edges: the Nodes row has no distance/bearing line (needs my position),
   and the tap helper `tap.py "Connect"` matches "Connected" first; tap the tab by
   coordinates (930,2060 on the Note 20) instead.

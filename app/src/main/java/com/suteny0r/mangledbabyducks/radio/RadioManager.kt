@@ -80,6 +80,15 @@ class RadioManager(
     private val _deviceName = MutableStateFlow<String?>(null)
     val deviceName: StateFlow<String?> = _deviceName.asStateFlow()
 
+    /**
+     * AccessoryManager.packetsSent / packetsReceived: one tick per ToRadio written and
+     * per FromRadio read, for the RX/TX activity lights in the header.
+     */
+    private val _packetsSent = MutableStateFlow(0)
+    val packetsSent: StateFlow<Int> = _packetsSent.asStateFlow()
+    private val _packetsReceived = MutableStateFlow(0)
+    val packetsReceived: StateFlow<Int> = _packetsReceived.asStateFlow()
+
     /** Inbound messages worth notifying about (already stored). */
     val incomingMessages = MutableSharedFlow<MessageEntity>(extraBufferCapacity = 64)
 
@@ -348,7 +357,10 @@ class RadioManager(
         if (source !== connection) return
         lastRxMs = System.currentTimeMillis()
         when (event) {
-            is ConnectionEvent.Data -> processFromRadio(event.fromRadio)
+            is ConnectionEvent.Data -> {
+                _packetsReceived.value++
+                processFromRadio(event.fromRadio)
+            }
             is ConnectionEvent.LogMessage -> Log.d(TAG, "radio: ${event.message}")
             is ConnectionEvent.RssiUpdate -> {}
             is ConnectionEvent.Disconnected -> {
@@ -1144,6 +1156,7 @@ class RadioManager(
     private suspend fun send(build: (MeshProtos.ToRadio.Builder) -> MeshProtos.ToRadio.Builder) {
         val conn = connection ?: throw RadioException("Not connected")
         conn.send(build(MeshProtos.ToRadio.newBuilder()).build())
+        _packetsSent.value++
     }
 
     companion object {

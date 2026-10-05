@@ -1,6 +1,11 @@
 package com.suteny0r.mangledbabyducks.ui
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -18,6 +23,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Battery0Bar
 import androidx.compose.material.icons.filled.Battery2Bar
 import androidx.compose.material.icons.filled.Battery4Bar
@@ -40,9 +47,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,8 +65,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
 import com.suteny0r.mangledbabyducks.R
 import com.suteny0r.mangledbabyducks.container
 import com.suteny0r.mangledbabyducks.radio.RadioState
@@ -63,6 +76,7 @@ import com.suteny0r.mangledbabyducks.ui.theme.IosGreen
 import com.suteny0r.mangledbabyducks.ui.theme.IosRed
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.launch
 import kotlin.math.pow
 
 /*
@@ -114,6 +128,7 @@ fun ConnectedDevicePill(modifier: Modifier = Modifier) {
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
         ) {
+            RxTxIndicator(connected)
             Box(
                 Modifier
                     .size(30.dp)
@@ -143,6 +158,85 @@ fun ConnectedDevicePill(modifier: Modifier = Modifier) {
             }
         }
     }
+}
+
+/**
+ * RXTXIndicatorWidget.swift: two tiny LEDs, green for packets to the radio (TX) and red
+ * for packets from it (RX), each flashing when its counter moves. Tapping it sends a
+ * heartbeat (so the lights blink on demand) and opens the packet-count popup.
+ */
+@Composable
+private fun RxTxIndicator(connected: Boolean) {
+    val radio = LocalContext.current.container.radioManager
+    val sent by radio.packetsSent.collectAsState()
+    val received by radio.packetsReceived.collectAsState()
+    val scope = rememberCoroutineScope()
+    var popup by remember { mutableStateOf(false) }
+    val arrow = MaterialTheme.colorScheme.onSurfaceVariant
+
+    Box {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .clickable {
+                    if (connected) scope.launch { runCatching { radio.sendHeartbeat() } }
+                    popup = !popup
+                },
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                Icon(Icons.Filled.ArrowUpward, contentDescription = "Sent", tint = arrow, modifier = Modifier.size(9.dp))
+                LedIndicator(flash = sent, color = IosGreen)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                Icon(Icons.Filled.ArrowDownward, contentDescription = "Received", tint = arrow, modifier = Modifier.size(9.dp))
+                LedIndicator(flash = received, color = IosRed)
+            }
+        }
+        if (popup) {
+            Popup(alignment = Alignment.TopEnd, offset = IntOffset(0, 80), onDismissRequest = { popup = false }) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    shadowElevation = 6.dp,
+                    modifier = Modifier.clickable { popup = false },
+                ) {
+                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Packet Count", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                        HorizontalDivider()
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                            LedIndicator(flash = sent, color = IosGreen)
+                            Icon(Icons.Filled.ArrowUpward, contentDescription = null, tint = arrow, modifier = Modifier.size(9.dp))
+                            Text("To Radio (TX): $sent", style = MaterialTheme.typography.labelSmall)
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                            LedIndicator(flash = received, color = IosRed)
+                            Icon(Icons.Filled.ArrowDownward, contentDescription = null, tint = arrow, modifier = Modifier.size(9.dp))
+                            Text("From Radio (RX): $received", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** LEDIndicator: lights fully on every change of [flash], then eases out over 300 ms. */
+@Composable
+private fun LedIndicator(flash: Int, color: Color) {
+    val brightness = remember { Animatable(0f) }
+    LaunchedEffect(flash) {
+        if (flash == 0) return@LaunchedEffect
+        brightness.snapTo(1f)
+        brightness.animateTo(0f, tween(300, easing = FastOutLinearInEasing))
+    }
+    val ring = if (isSystemInDarkTheme()) Color.White else Color.Black
+    Box(
+        Modifier
+            .size(9.dp)
+            .background(color.copy(alpha = brightness.value), CircleShape)
+            .border(0.5.dp, ring, CircleShape),
+    )
 }
 
 /**
