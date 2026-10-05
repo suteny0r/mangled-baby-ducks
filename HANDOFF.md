@@ -118,9 +118,8 @@ for the Android app to look like them, with the app's own icon as the title-bar 
   our sends use the phone clock, so any skew between the two interleaves them.
   `PacketIngest.arrivalTime` now stamps a live packet with the phone clock and keeps
   rx_time only when it is more than 10 min old (a store-and-forward replay keeps its
-  place). Every bubble now shows "h:mm a" (or "M/d, h:mm a") under it; ours shares the
-  line with the delivery status. iOS shows only the hour-gap headers; the per-bubble
-  time is a user request.
+  place). Per-bubble times were added and then removed at the user's request: the iOS
+  hour-gap headers are the only timestamps, and that is the wanted behavior.
 - To verify: install, open a thread, send from Spiney Norman on COM3 to !0f352b79, and
   check the new bubble lands last with a time under it.
 

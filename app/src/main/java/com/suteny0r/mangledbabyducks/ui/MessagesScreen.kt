@@ -401,16 +401,6 @@ private fun listTimestamp(epochMillis: Long): String {
     }
 }
 
-/** Per-bubble time: "9:51 PM" today, otherwise "10/4, 9:51 PM". */
-private fun bubbleTime(epochMillis: Long): String {
-    val cal = java.util.Calendar.getInstance()
-    val then = (cal.clone() as java.util.Calendar).apply { timeInMillis = epochMillis }
-    val sameDay = cal.get(java.util.Calendar.DAY_OF_YEAR) == then.get(java.util.Calendar.DAY_OF_YEAR) &&
-        cal.get(java.util.Calendar.YEAR) == then.get(java.util.Calendar.YEAR)
-    val pattern = if (sameDay) "h:mm a" else "M/d, h:mm a"
-    return java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault()).format(epochMillis)
-}
-
 /** "Oct 4, 2026 at 9:51 PM": the centered header above a message after a 60 minute gap. */
 private fun headerTimestamp(epochMillis: Long): String =
     java.text.SimpleDateFormat("MMM d, yyyy 'at' h:mm a", java.util.Locale.getDefault()).format(epochMillis)
@@ -614,18 +604,8 @@ private fun MessageRow(
                 if (tapbacks.isNotEmpty()) {
                     TapbackPill(tapbacks, vm)
                 }
-                // Every bubble carries its time (user request; iOS shows only the
-                // hour-gap headers). Ours shares the line with the delivery status.
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
-                    Text(
-                        bubbleTime(message.timestamp),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    if (mine) {
-                        Spacer(Modifier.width(8.dp))
-                        DeliveryStatus(message, isDirect)
-                    }
+                if (mine) {
+                    DeliveryStatus(message, isDirect)
                 }
             }
             if (!mine) Spacer(Modifier.width(50.dp).weight(1f))
@@ -717,7 +697,7 @@ private fun DeliveryStatus(message: MessageEntity, isDirect: Boolean) {
         message.receivedAck -> Triple(Icons.Filled.CheckCircle, "Delivered to mesh", secondary)
         else -> Triple(Icons.Filled.Schedule, "Sending...", IosOrange)
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
         Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(12.dp))
         Spacer(Modifier.width(3.dp))
         Text(text, style = MaterialTheme.typography.labelSmall, color = tint)
