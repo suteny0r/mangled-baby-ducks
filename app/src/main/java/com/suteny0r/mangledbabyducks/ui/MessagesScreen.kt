@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Groups
@@ -446,6 +447,10 @@ private fun ThreadView(
     val listState = rememberLazyListState()
     var replyTo by remember { mutableStateOf<ReplyContext?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
+    // The delivery dialog is opened by the user from a message and held here, not in
+    // the row: LazyColumn discards a row's state when it scrolls off, which happened
+    // whenever a new message auto-scrolled the thread while the dialog was up.
+    var statusFor by rememberSaveable { mutableStateOf<Long?>(null) }
 
     val byId = remember(list) { list.associateBy { it.messageId } }
     val tapbacksByTarget = remember(tapbackList) { tapbackList.groupBy { it.replyId } }
@@ -532,6 +537,25 @@ private fun ThreadView(
                     onReply = {
                         replyTo = ReplyContext(message.messageId, (message.payload ?: "").take(80))
                     },
+                    onShowStatus = { statusFor = message.messageId },
+                    onRetry = { vm.retry(message) },
+                )
+            }
+        }
+        statusFor?.let { id ->
+            // The row's message is looked up fresh so the dialog reflects the latest ack,
+            // and it closes on its own once a retry has deleted the message.
+            val message = byId[id]
+            if (message == null) {
+                statusFor = null
+            } else {
+                DeliveryDialog(
+                    status = deliveryOf(message, target is ThreadTarget.Direct, now),
+                    onRetry = {
+                        statusFor = null
+                        vm.retry(message)
+                    },
+                    onDismiss = { statusFor = null },
                 )
             }
         }
@@ -562,7 +586,10 @@ private fun MessageRow(
     tapbacks: List<MessageEntity>,
     onTapback: (String) -> Unit,
     onReply: () -> Unit,
+    onShowStatus: () -> Unit,
+    onRetry: () -> Unit,
 ) {
+    val status = if (mine) deliveryOf(message, isDirect, now) else null
     val sender by produceState<UserEntity?>(initialValue = null, message.fromNum) {
         value = vm.userFor(message.fromNum)
     }
@@ -618,12 +645,12 @@ private fun MessageRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Bubble(message, mine, onTapback, onReply)
+                Bubble(message, mine, onTapback, onReply, onRetry = if (status?.canRetry == true) onRetry else null)
                 if (tapbacks.isNotEmpty()) {
                     TapbackPill(tapbacks, vm)
                 }
-                if (mine) {
-                    DeliveryStatus(message, isDirect, now, onRetry = { vm.retry(message) })
+                if (status != null) {
+                    DeliveryStatus(status, onClick = onShowStatus)
                 }
             }
             if (!mine) Spacer(Modifier.width(50.dp).weight(1f))
@@ -634,7 +661,13 @@ private fun MessageRow(
 /** MessageText: 15 pt corner radius, accent with white text for ours, gray bubble for theirs. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Bubble(message: MessageEntity, mine: Boolean, onTapback: (String) -> Unit, onReply: () -> Unit) {
+private fun Bubble(
+    message: MessageEntity,
+    mine: Boolean,
+    onTapback: (String) -> Unit,
+    onReply: () -> Unit,
+    onRetry: (() -> Unit)? = null,
+) {
     var menuOpen by remember { mutableStateOf(false) }
     Box {
         Text(
@@ -674,6 +707,16 @@ private fun Bubble(message: MessageEntity, mine: Boolean, onTapback: (String) ->
                     onReply()
                 },
             )
+            if (onRetry != null) {
+                DropdownMenuItem(
+                    text = { Text("Try Again") },
+                    leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
+                    onClick = {
+                        menuOpen = false
+                        onRetry()
+                    },
+                )
+            }
         }
     }
 }
@@ -752,39 +795,37 @@ private fun deliveryOf(message: MessageEntity, isDirect: Boolean, now: Long): De
 private fun routingErrorLabel(code: Int): String =
     MeshProtos.Routing.Error.forNumber(code)?.name?.lowercase()?.replace('_', ' ') ?: "error $code"
 
-/** MessageDeliveryStatusLabel + RetryButton: tap the status for details and Try Again. */
+/** MessageDeliveryStatusLabel: the badge under our bubble; a tap asks the thread for the dialog. */
 @Composable
-private fun DeliveryStatus(message: MessageEntity, isDirect: Boolean, now: Long, onRetry: () -> Unit) {
-    val status = deliveryOf(message, isDirect, now)
-    var showDetails by remember { mutableStateOf(false) }
+private fun DeliveryStatus(status: Delivery, onClick: () -> Unit) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .padding(top = 2.dp)
-            .clickable { showDetails = true },
+            .clickable(onClick = onClick),
     ) {
         Icon(status.icon, contentDescription = null, tint = status.tint, modifier = Modifier.size(12.dp))
         Spacer(Modifier.width(3.dp))
         Text(status.text, style = MaterialTheme.typography.labelSmall, color = status.tint)
     }
-    if (showDetails) {
-        AlertDialog(
-            onDismissRequest = { showDetails = false },
-            title = { Text(status.text) },
-            text = { Text(status.detail) },
-            confirmButton = {
-                if (status.canRetry) {
-                    TextButton(onClick = {
-                        showDetails = false
-                        onRetry()
-                    }) { Text("Try Again") }
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDetails = false }) { Text(if (status.canRetry) "Cancel" else "OK") }
-            },
-        )
-    }
+}
+
+/** RetryButton.swift's alert: the status, its detail, and Try Again when a resend makes sense. */
+@Composable
+private fun DeliveryDialog(status: Delivery, onRetry: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(status.text) },
+        text = { Text(status.detail) },
+        confirmButton = {
+            if (status.canRetry) {
+                TextButton(onClick = onRetry) { Text("Try Again") }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(if (status.canRetry) "Cancel" else "OK") }
+        },
+    )
 }
 
 /** TextMessageField: a capsule text field, an up-arrow send button once there is text. */

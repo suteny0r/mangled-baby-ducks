@@ -132,6 +132,11 @@ for the Android app to look like them, with the app's own icon as the title-bar 
   "Try Again", which deletes the row (`MessageDao.delete`) and re-sends the text as a
   new packet (`MessagesViewModel.retry`). The thread re-evaluates every 30 s so the
   flip happens without leaving. Verified on the stuck 8:10 AM channel message.
+  The dialog's open state is held by ThreadView (message id), NOT the row: LazyColumn
+  discards a row's remember state when it scrolls off, and a new channel message
+  auto-scrolls the thread, which closed the dialog under the user. The dialog looks the
+  message up fresh each composition (status updates live; closes if retry deleted it).
+  "Try Again" is also in the bubble's long-press menu when the badge is retryable.
 
 ## Release 0.2.0 (2026-10-04, tag v0.2.0, GitHub release with both APKs)
 - Version lives in `app/build.gradle.kts` (versionCode 2, versionName 0.2.0). Tag is
