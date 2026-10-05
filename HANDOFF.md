@@ -16,6 +16,18 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Back from a thread skipped a level (2026-10-05, installed)
+
+- `ThreadList` held the open section ("channels" / "direct") in its own `rememberSaveable`.
+  Opening a thread swaps `ThreadList` out through the `when`, discarding that state, so
+  Back rebuilt the list at `section == null`: the two-row sidebar, one level too far up.
+- `section` and the conversation list's `LazyListState` are now hoisted into
+  `MessagesScreen`, which stays composed while a thread is open. The scroll-to-top on a
+  contact search moved up with them so it fires on a search change, not on every return.
+- Third instance of the same trap (Nodes list, thread scroll, this): state remembered in a
+  composable that an early return or a `when` takes out of composition is gone. Hoist it
+  above the branch.
+
 ## Node detail from a message avatar + mesh notification icon (2026-10-05, installed)
 
 - Tapping a sender avatar in a channel or DM thread pushes `NodeDetailScreen` inside the

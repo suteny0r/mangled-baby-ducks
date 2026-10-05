@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -137,6 +138,18 @@ fun MessagesScreen(vm: MessagesViewModel = viewModel()) {
     var openThread by rememberSaveable(stateSaver = ThreadSaver) {
         mutableStateOf<ThreadTarget?>(null)
     }
+    // Which conversation list is open (Channels / Direct Messages), and where it is
+    // scrolled. Both live here rather than in ThreadList: opening a thread takes that
+    // composable out of composition, which discarded the state and made Back from a
+    // thread land on the two-row sidebar instead of the list it was opened from.
+    var section by rememberSaveable { mutableStateOf<String?>(null) }
+    val sectionListState = rememberLazyListState()
+    // LazyColumn anchors on item keys, so changing the search leaves the list parked on
+    // whichever row was visible rather than at the first match; iOS starts at the top of
+    // every result set. Driven from here so that coming back from a thread, which does
+    // not change the search, leaves the list where it was.
+    val contactSearch by vm.contactSearch.collectAsState()
+    LaunchedEffect(contactSearch) { sectionListState.scrollToItem(0) }
 
     // Consume cross-tab navigation (node list "message" button, notification taps)
     // exactly once.
@@ -152,7 +165,13 @@ fun MessagesScreen(vm: MessagesViewModel = viewModel()) {
         BackHandler { openThread = null }
     }
     when (val thread = openThread) {
-        null -> ThreadList(vm, onOpen = { openThread = it })
+        null -> ThreadList(
+            vm = vm,
+            section = section,
+            onSection = { section = it },
+            listState = sectionListState,
+            onOpen = { openThread = it },
+        )
         is ThreadTarget.Channel -> ThreadView(
             target = thread,
             messages = vm.channelMessages(thread.index),
@@ -182,17 +201,22 @@ fun MessagesScreen(vm: MessagesViewModel = viewModel()) {
 // Sidebar + conversation lists
 
 @Composable
-private fun ThreadList(vm: MessagesViewModel, onOpen: (ThreadTarget) -> Unit) {
+private fun ThreadList(
+    vm: MessagesViewModel,
+    section: String?,
+    onSection: (String?) -> Unit,
+    listState: LazyListState,
+    onOpen: (ThreadTarget) -> Unit,
+) {
     val channels by vm.channels.collectAsState()
     val contacts by vm.contacts.collectAsState()
     val unreadChannels by vm.unreadChannels.collectAsState()
     val unreadDirect by vm.unreadDirect.collectAsState()
     // Messages.swift: the sidebar is two rows, Channels and Direct Messages, and each
-    // opens its own list (ChannelList / UserList). Held in local state like the thread.
-    var section by rememberSaveable { mutableStateOf<String?>(null) }
-
+    // opens its own list (ChannelList / UserList). The open section is hoisted to
+    // MessagesScreen so a thread opened from it can come back to it.
     section?.let { open ->
-        BackHandler { section = null }
+        BackHandler { onSection(null) }
         val channelPreviews by vm.channelPreviews.collectAsState()
         val dmPreviews by vm.dmPreviews.collectAsState()
         val unreadChannelSet by vm.unreadChannelSet.collectAsState()
@@ -217,14 +241,9 @@ private fun ThreadList(vm: MessagesViewModel, onOpen: (ThreadTarget) -> Unit) {
             )
         }
         val contactSearch by vm.contactSearch.collectAsState()
-        val listState = rememberLazyListState()
-        // LazyColumn anchors on item keys, so changing the search leaves the list parked
-        // on whichever row was visible rather than at the first match. iOS starts at the
-        // top of every result set.
-        LaunchedEffect(contactSearch) { listState.scrollToItem(0) }
         Column(Modifier.fillMaxSize()) {
             // ChannelList / UserList: round back button, then the large title.
-            RoundBackButton(onBack = { section = null }, modifier = Modifier.padding(start = 12.dp, top = 8.dp))
+            RoundBackButton(onBack = { onSection(null) }, modifier = Modifier.padding(start = 12.dp, top = 8.dp))
             Text(
                 // UserList.navigationTitle is "Contacts (<count shown>)", so it tracks the
                 // search as well as the node DB.
@@ -299,14 +318,14 @@ private fun ThreadList(vm: MessagesViewModel, onOpen: (ThreadTarget) -> Unit) {
             icon = Icons.Outlined.Groups,
             title = "Channels",
             badge = unreadChannels,
-            onClick = { section = "channels" },
+            onClick = { onSection("channels") },
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         SectionRow(
             icon = Icons.Outlined.Person,
             title = "Direct Messages",
             badge = unreadDirect,
-            onClick = { section = "direct" },
+            onClick = { onSection("direct") },
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     }
