@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -462,7 +461,10 @@ private fun ThreadView(
         if (list.isNotEmpty() && query.isBlank()) listState.animateScrollToItem(list.size - 1)
     }
 
-    Column(Modifier.fillMaxSize().imePadding()) {
+    // No imePadding here: the activity does not draw edge to edge, so the window itself
+    // shrinks for the keyboard. Padding on top of that pushed the header and the whole
+    // list off the top of the screen while typing.
+    Column(Modifier.fillMaxSize()) {
         // ChannelMessageList toolbar: back, the channel / peer avatar as the principal
         // item, ConnectedDevice at the trailing edge.
         Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
