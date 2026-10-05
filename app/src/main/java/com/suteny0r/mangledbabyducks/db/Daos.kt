@@ -180,6 +180,10 @@ interface PositionDao {
     @Query("SELECT * FROM positions WHERE latest = 1")
     fun latestPositions(): Flow<List<PositionEntity>>
 
+    /** Position Log: every retained fix for one node, newest first. */
+    @Query("SELECT * FROM positions WHERE nodeNum = :nodeNum ORDER BY time DESC LIMIT 200")
+    fun history(nodeNum: Long): Flow<List<PositionEntity>>
+
     @Query("DELETE FROM positions WHERE latest = 0 AND time < :cutoff")
     suspend fun prune(cutoff: Long)
 

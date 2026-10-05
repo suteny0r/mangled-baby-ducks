@@ -6,75 +6,126 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.util.Base64
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Message
-import androidx.compose.material.icons.filled.RemoveCircle
+import androidx.compose.material.icons.filled.ArrowBackIosNew
+import androidx.compose.material.icons.filled.Battery5Bar
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.outlined.RemoveCircle
+import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.outlined.Air
+import androidx.compose.material.icons.outlined.AccountCircle
+import androidx.compose.material.icons.outlined.Badge
+import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.CellTower
+import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.DeleteForever
+import androidx.compose.material.icons.outlined.Grain
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Key
+import androidx.compose.material.icons.outlined.Map
+import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.NotificationsNone
+import androidx.compose.material.icons.outlined.NotificationsOff
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.PhonelinkErase
+import androidx.compose.material.icons.outlined.Place
+import androidx.compose.material.icons.outlined.PowerSettingsNew
+import androidx.compose.material.icons.outlined.QrCode2
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.RemoveCircleOutline
+import androidx.compose.material.icons.outlined.Route
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.Sensors
+import androidx.compose.material.icons.outlined.Smartphone
+import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.StarOutline
+import androidx.compose.material.icons.outlined.StickyNote2
+import androidx.compose.material.icons.outlined.SwapHoriz
+import androidx.compose.material.icons.outlined.Sync
+import androidx.compose.material.icons.outlined.Tag
+import androidx.compose.material.icons.outlined.Thermostat
+import androidx.compose.material.icons.outlined.WaterDrop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.google.protobuf.ByteString
-import org.meshtastic.proto.AdminProtos
-import org.meshtastic.proto.MeshProtos
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.google.protobuf.ByteString
 import com.suteny0r.mangledbabyducks.container
+import com.suteny0r.mangledbabyducks.db.NodeWithUser
+import com.suteny0r.mangledbabyducks.db.PositionEntity
+import com.suteny0r.mangledbabyducks.db.TelemetryEntity
+import com.suteny0r.mangledbabyducks.db.TracerouteEntity
+import com.suteny0r.mangledbabyducks.db.nodeNumString
 import com.suteny0r.mangledbabyducks.radio.RadioState
+import com.suteny0r.mangledbabyducks.ui.theme.IosGreen
+import com.suteny0r.mangledbabyducks.ui.theme.IosOrange
+import com.suteny0r.mangledbabyducks.ui.theme.IosRed
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import com.suteny0r.mangledbabyducks.db.NodeWithUser
-import com.suteny0r.mangledbabyducks.db.nodeNumString
-import com.suteny0r.mangledbabyducks.db.TelemetryEntity
-import com.suteny0r.mangledbabyducks.db.TracerouteEntity
 import kotlinx.coroutines.launch
+import org.meshtastic.proto.AdminProtos
+import org.meshtastic.proto.MeshProtos
 
 class NodeDetailViewModel(app: Application) : AndroidViewModel(app) {
     private val container = app.container
@@ -86,6 +137,7 @@ class NodeDetailViewModel(app: Application) : AndroidViewModel(app) {
     fun environmentMetrics(num: Long) =
         db.telemetryDao().history(num, 1, System.currentTimeMillis() - 48 * 3600_000L)
     fun latestPosition(num: Long) = db.positionDao().latestFlow(num)
+    fun positionHistory(num: Long) = db.positionDao().history(num)
     fun latestDevice(num: Long) = db.telemetryDao().latestDeviceMetrics(num)
     fun traceroutes(num: Long) = db.tracerouteDao().forNode(num)
 
@@ -96,6 +148,11 @@ class NodeDetailViewModel(app: Application) : AndroidViewModel(app) {
     /** Tap a completed traceroute card: show its path on the map. */
     fun openRoute(route: TracerouteEntity) {
         container.router.openRoute(route)
+    }
+
+    /** "Node Map" log row: the Map tab, centered on this node. */
+    fun openOnMap(num: Long) {
+        container.router.openMapNode(num)
     }
 
     suspend fun nameFor(num: Long): String =
@@ -176,7 +233,19 @@ class NodeDetailViewModel(app: Application) : AndroidViewModel(app) {
         if (isSelf) nodeNum else container.radioManager.myNodeNum.value
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** The log sub-pages reachable from the Logs section (iOS pushes these on the stack). */
+private enum class DetailLog(val title: String) {
+    DEVICE("Device Metrics Log"),
+    ENVIRONMENT("Environment Metrics Log"),
+    POSITION("Position Log"),
+    TRACEROUTE("Trace Route Log"),
+}
+
+/**
+ * Port of NodeDetail.swift (+ NodeInfoItem.swift for the hardware card, BatteryGauge,
+ * the compact weather widgets): an inset-grouped list with the sections Hardware, Node,
+ * Environment, Logs, Actions, Administration under an inline centered title.
+ */
 @Composable
 fun NodeDetailScreen(
     nodeNum: Long,
@@ -192,7 +261,7 @@ fun NodeDetailScreen(
     val keyAcceptResult by vm.keyAcceptResult.collectAsState()
     LaunchedEffect(keyAcceptResult) {
         keyAcceptResult?.let {
-            android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_LONG).show()
+            Toast.makeText(context, it, Toast.LENGTH_LONG).show()
             vm.keyAcceptResult.value = null
         }
     }
@@ -201,303 +270,564 @@ fun NodeDetailScreen(
     val position by vm.latestPosition(nodeNum).collectAsState(initial = null)
     val traceroutes by vm.traceroutes(nodeNum).collectAsState(initial = emptyList())
     val device by vm.latestDevice(nodeNum).collectAsState(initial = null)
-    val userId = entry?.user?.userId ?: "!%08x".format(nodeNum)
+    val user = entry?.user
+    val node = entry?.node
+    val title = user?.longName ?: "Node $nodeNum"
+    val userId = user?.userId ?: nodeNumString(nodeNum)
+
+    var log by rememberSaveable { mutableStateOf<DetailLog?>(null) }
+    log?.let { open ->
+        BackHandler { log = null }
+        LogPage(open, nodeNum, metrics, envMetrics, traceroutes, vm, onBack = { log = null })
+        return
+    }
+
+    var relativeDates by rememberSaveable { mutableStateOf(true) }
 
     Column(Modifier.fillMaxSize()) {
-        TopAppBar(
-            title = { Text(entry?.user?.longName ?: "Node $nodeNum") },
-            navigationIcon = {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                }
-            },
-            actions = {
-                IconButton(
-                    onClick = onToggleFavorite,
-                    modifier = Modifier.semantics { contentDescription = if (entry?.node?.favorite == true) "Unfavorite" else "Favorite" },
-                ) {
-                    Icon(
-                        imageVector = if (entry?.node?.favorite == true) Icons.Filled.Star else Icons.Outlined.StarOutline,
-                        contentDescription = null,
-                        tint = if (entry?.node?.favorite == true) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (!isSelf) {
-                    IconButton(
-                        onClick = onToggleIgnore,
-                        modifier = Modifier.semantics { contentDescription = if (entry?.node?.ignored == true) "Unignore" else "Ignore" },
-                    ) {
-                        Icon(
-                            imageVector = if (entry?.node?.ignored == true) Icons.Filled.RemoveCircle else Icons.Outlined.RemoveCircle,
-                            contentDescription = null,
-                            tint = if (entry?.node?.ignored == true) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                IconButton(onClick = onMessage) {
-                    Icon(Icons.AutoMirrored.Outlined.Message, contentDescription = "Message")
-                }
-            },
-        )
+        DetailHeader(title, onBack)
         Column(
             Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            // iOS Section("Node") header above the identity rows.
-            Text("Node", style = MaterialTheme.typography.titleMedium)
-            Card(Modifier.fillMaxWidth()) {
-                Column {
-                    val user = entry?.user
-                    val node = entry?.node
-                    ListItem(
-                        headlineContent = { Text("Name") },
-                        supportingContent = { Text(entry?.user?.longName ?: "Node $nodeNum") },
-                        trailingContent = if (!isSelf) {
-                            { CopyButton(context, entry?.user?.longName ?: "Node $nodeNum") }
-                        } else {
-                            null
-                        },
+            // MARK: Hardware (NodeInfoItem.swift). No hardware catalog images on this side,
+            // so the card carries the model name and a chip glyph.
+            SectionHeader("Hardware")
+            GroupCard {
+                Column(
+                    Modifier.fillMaxWidth().padding(vertical = 20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Icon(
+                        Icons.Outlined.Memory,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(96.dp),
                     )
-                    HorizontalDivider()
-                    ListItem(
-                        headlineContent = { Text("Node Number") },
-                        supportingContent = { Text(nodeNum.toString()) },
-                        trailingContent = { CopyButton(context, nodeNum.toString()) },
+                    Text(
+                        user?.hwDisplayName ?: user?.hwModel ?: "Unknown",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 8.dp),
                     )
-                    HorizontalDivider()
-                    ListItem(
-                        headlineContent = { Text("User Id") },
-                        supportingContent = { Text(userId) },
-                    )
-                    HorizontalDivider()
-                    ListItem(
-                        headlineContent = { Text("Identity") },
-                        supportingContent = {
-                            Text(
-                                listOfNotNull(
-                                    user?.shortName?.let { "$it" },
-                                    user?.hwModel,
-                                    user?.role?.let { roleLabel(it) },
-                                    if (user?.isLicensed == true) "licensed" else null,
-                                ).joinToString("  •  ").ifEmpty { "unknown" },
-                            )
-                        },
-                    )
-                    HorizontalDivider()
-                    ListItem(
-                        headlineContent = { Text("Link") },
-                        supportingContent = {
-                            Text(
-                                listOfNotNull(
-                                    node?.lastHeard?.let { "heard ${relativeTime(it)}" },
-                                    node?.firstHeard?.let { "first heard ${relativeTime(it)}" },
-                                    node?.snr?.takeIf { it != 0f }?.let { "SNR %.1f".format(it) },
-                                    node?.rssi?.takeIf { it != 0 }?.let { "RSSI $it" },
-                                    node?.hopsAway?.takeIf { it >= 0 }
-                                        ?.let { if (it == 0) "direct" else "$it hops" },
-                                    if (node?.viaMqtt == true) "via MQTT" else null,
-                                ).joinToString("  •  ").ifEmpty { "—" },
-                            )
-                        },
-                    )
-                    val battery = device?.batteryLevel
-                    if (battery != null) {
-                        HorizontalDivider()
-                        ListItem(
-                            headlineContent = { Text("Battery") },
-                            trailingContent = {
-                                Text("${battery.coerceIn(0, 100)}%")
-                            },
-                        )
+                }
+            }
+
+            // MARK: Node
+            SectionHeader("Node")
+            GroupCard {
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    NodeAvatar(user?.shortName, nodeNum, 75.dp)
+                    if (node != null && node.snr != 0f && !node.viaMqtt && node.hopsAway == 0 && !isSelf) {
+                        SignalColumn(node.snr, node.rssi)
                     }
-                    val uptime = device?.uptimeSeconds
-                    if (uptime != null && uptime > 0) {
-                        HorizontalDivider()
-                        ListItem(
-                            headlineContent = { Text("Uptime") },
-                            trailingContent = { Text(uptimeLabel(uptime)) },
-                        )
+                    if (device != null) {
+                        BatteryGauge(device?.batteryLevel, device?.voltage)
                     }
-                    HorizontalDivider()
-                    ListItem(
-                        headlineContent = { Text("Position") },
-                        supportingContent = {
-                            Text(
-                                position?.let {
-                                    val parts = buildList {
-                                        add("%.5f, %.5f".format(it.latitude, it.longitude))
-                                        if (it.altitude != 0) add("${it.altitude} m")
-                                        if (it.satsInView > 0) add("${it.satsInView} sats")
-                                        if (it.speed > 0) add("${it.speed} km/h")
-                                        if (it.heading in 1..359) add("${it.heading}°")
-                                        add(relativeTime(it.time))
-                                    }
-                                    parts.joinToString("  •  ")
-                                } ?: "no position",
-                            )
-                        },
-                    )
-                    val publicKey = user?.publicKey
-                    if (publicKey != null) {
-                        HorizontalDivider()
-                        ListItem(
-                            headlineContent = { Text("Public Key") },
-                            supportingContent = { Text(Base64.encodeToString(publicKey, Base64.NO_WRAP)) },
-                            trailingContent = { CopyButton(context, Base64.encodeToString(publicKey, Base64.NO_WRAP)) },
-                        )
-                    }
-                    if (entry?.user?.pkiEncrypted == true && entry?.user?.keyMatch == true) {
-                        HorizontalDivider()
-                        ListItem(
-                            headlineContent = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        Icons.Filled.Lock,
-                                        contentDescription = null,
-                                        tint = Color(0xFF2E7D32),
-                                        modifier = Modifier.size(20.dp).padding(end = 8.dp),
-                                    )
-                                    Text("Signed node")
-                                }
-                            },
-                            supportingContent = { Text("Verified automatically") },
-                        )
-                    }
-                    if (entry?.user?.keyMatch == false) {
-                        HorizontalDivider()
-                        val newKey = entry?.user?.newPublicKey
-                        var confirmAccept by remember { mutableStateOf(false) }
-                        ListItem(
-                            headlineContent = {
-                                Text("Key mismatch", color = MaterialTheme.colorScheme.error)
-                            },
-                            supportingContent = {
-                                Text(
-                                    if (newKey != null) {
-                                        "This node is announcing a different public key " +
-                                            "(${keyFingerprint(newKey)}). Accept it only if you know the " +
-                                            "node was reset or re-flashed."
-                                    } else {
-                                        "This node's public key changed; DMs may fail until re-verified."
-                                    }
-                                )
-                            },
-                            trailingContent = if (newKey != null) {
-                                { TextButton(onClick = { confirmAccept = true }) { Text("Accept") } }
-                            } else {
-                                null
-                            },
-                        )
-                        if (confirmAccept && newKey != null) {
-                            AlertDialog(
-                                onDismissRequest = { confirmAccept = false },
-                                title = { Text("Accept new key?") },
-                                text = {
-                                    Text(
-                                        "Trusted key ${publicKey?.let { keyFingerprint(it) } ?: "none"} will be " +
-                                            "replaced by ${keyFingerprint(newKey)}. The radio forgets this node " +
-                                            "and re-learns it from its next announcement. If you did not expect " +
-                                            "this node to change keys, cancel: it could be an impostor."
-                                    )
-                                },
-                                confirmButton = {
-                                    TextButton(onClick = {
-                                        confirmAccept = false
-                                        vm.acceptNewKey(nodeNum)
-                                    }) { Text("Accept new key") }
-                                },
-                                dismissButton = {
-                                    TextButton(onClick = { confirmAccept = false }) { Text("Cancel") }
-                                },
-                            )
+                }
+                if (user?.keyMatch == false) {
+                    KeyMismatchRow(nodeNum, user.publicKey, user.newPublicKey, vm)
+                }
+                DetailRow(Icons.Outlined.AccountCircle, "Name", title)
+                RowDivider()
+                DetailRow(Icons.Outlined.Tag, "Node Number", nodeNum.toString()) {
+                    CopyButton(context, nodeNum.toString())
+                }
+                RowDivider()
+                DetailRow(Icons.Outlined.Person, "User Id", userId)
+                if (node?.hasXeddsaSigned == true) {
+                    RowDivider()
+                    DetailRow(Icons.Filled.VerifiedUser, "Signed node", "Verified automatically", iconTint = IosGreen)
+                }
+                val publicKey = user?.publicKey
+                if (publicKey != null && user.keyMatch) {
+                    RowDivider()
+                    DetailRow(Icons.Filled.Lock, "Public Key", null, iconTint = IosGreen) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Outlined.Key, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                            CopyButton(context, Base64.encodeToString(publicKey, Base64.NO_WRAP))
                         }
                     }
                 }
+                node?.firmwareVersion?.takeIf { it.isNotBlank() }?.let {
+                    RowDivider()
+                    DetailRow(Icons.Outlined.Memory, "Firmware Version", it)
+                }
+                RowDivider()
+                DetailRow(Icons.Outlined.Smartphone, "Role", roleLabel(user?.role ?: 0))
+                node?.nodeStatus?.takeIf { it.isNotBlank() }?.let {
+                    RowDivider()
+                    DetailRow(Icons.Outlined.StickyNote2, "Status Message", it)
+                }
+                if (user?.unmessagable == true) {
+                    RowDivider()
+                    DetailRow(Icons.Outlined.PhonelinkErase, "Messaging", "Unmonitored")
+                }
+                device?.uptimeSeconds?.takeIf { it > 0 }?.let {
+                    RowDivider()
+                    DetailRow(Icons.Filled.CheckCircle, "Uptime", uptimeFull(it), iconTint = IosGreen)
+                }
+                node?.firstHeard?.takeIf { it > 0 }?.let {
+                    RowDivider()
+                    DetailRow(
+                        Icons.Outlined.Schedule, "First heard",
+                        if (relativeDates) relativeLong(it) else absoluteTime(it),
+                        iconTint = IosOrange,
+                        onClick = { relativeDates = !relativeDates },
+                    )
+                }
+                node?.lastHeard?.takeIf { it > 0 }?.let {
+                    RowDivider()
+                    DetailRow(
+                        Icons.Outlined.History, "Last heard",
+                        if (relativeDates) relativeLong(it) else absoluteTime(it),
+                        onClick = { relativeDates = !relativeDates },
+                    )
+                }
+            }
+
+            // MARK: Environment (compact weather widgets)
+            val env = envMetrics.lastOrNull()
+            if (env != null && (env.temperature != null || env.relativeHumidity != null ||
+                    env.barometricPressure != null || env.windSpeed != null)
+            ) {
+                SectionHeader("Environment")
+                GroupCard {
+                    EnvironmentGrid(env)
+                }
+            }
+
+            // MARK: Logs
+            SectionHeader("Logs")
+            GroupCard {
+                NavRow("Device Metrics Log", Icons.Outlined.Smartphone, enabled = metrics.isNotEmpty()) { log = DetailLog.DEVICE }
+                RowDivider()
+                NavRow("Node Map", Icons.Outlined.Map, enabled = position != null) { vm.openOnMap(nodeNum) }
+                RowDivider()
+                NavRow("Position Log", Icons.Outlined.Place, iconTint = IosRed, enabled = position != null) { log = DetailLog.POSITION }
+                RowDivider()
+                NavRow("Environment Metrics Log", Icons.Outlined.Cloud, enabled = envMetrics.isNotEmpty()) { log = DetailLog.ENVIRONMENT }
+                RowDivider()
+                NavRow("Air Quality Metrics Log", Icons.Outlined.Grain, enabled = false) {}
+                RowDivider()
+                NavRow("Trace Route Log", Icons.Outlined.Route, enabled = true) { log = DetailLog.TRACEROUTE }
+                RowDivider()
+                NavRow("Power Metrics Log", Icons.Outlined.Bolt, iconTint = Color(0xFFC9A227), enabled = false) {}
+                RowDivider()
+                NavRow("Detection Sensor Log", Icons.Outlined.Sensors, enabled = false) {}
+                RowDivider()
+                NavRow("Local Stats Log", Icons.Outlined.BarChart, enabled = false) {}
             }
 
             NodeActions(
                 nodeNum = nodeNum, isSelf = isSelf, entry = entry, vm = vm,
+                onMessage = onMessage,
+                onToggleFavorite = onToggleFavorite,
+                onToggleIgnore = onToggleIgnore,
                 onAfterRemove = onBack,
             )
+        }
+    }
+}
 
-            if (metrics.isNotEmpty()) {
-                Text("Battery (48h)", style = MaterialTheme.typography.titleMedium)
-                Card(Modifier.fillMaxWidth()) {
-                    MetricChart(
-                        points = metrics.mapNotNull { m ->
-                            m.batteryLevel?.let { m.time to it.coerceAtMost(100).toFloat() }
-                        },
-                        unit = "%",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(140.dp)
-                            .padding(12.dp),
-                    )
-                }
-                Text("Channel utilization (48h)", style = MaterialTheme.typography.titleMedium)
-                Card(Modifier.fillMaxWidth()) {
-                    MetricChart(
-                        points = metrics.mapNotNull { m ->
-                            m.channelUtilization?.let { m.time to it }
-                        },
-                        unit = "%",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(140.dp)
-                            .padding(12.dp),
-                    )
-                }
-            }
+// ---------------------------------------------------------------------------------------
+// Header and rows
 
-            if (envMetrics.isNotEmpty()) {
-                Text("Temperature (48h)", style = MaterialTheme.typography.titleMedium)
-                Card(Modifier.fillMaxWidth()) {
-                    MetricChart(
-                        points = envMetrics.mapNotNull { m ->
-                            m.temperature?.let { m.time to it }
-                        },
-                        unit = "°C",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(140.dp)
-                            .padding(12.dp),
-                    )
-                }
-                val humidity = envMetrics.mapNotNull { m ->
-                    m.relativeHumidity?.let { m.time to it }
-                }
-                if (humidity.size >= 2) {
-                    Text("Humidity (48h)", style = MaterialTheme.typography.titleMedium)
-                    Card(Modifier.fillMaxWidth()) {
-                        MetricChart(
-                            points = humidity,
-                            unit = "%",
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(140.dp)
-                                .padding(12.dp),
-                        )
-                    }
-                }
-            }
-
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text("Traceroute", style = MaterialTheme.typography.titleMedium)
-                Button(onClick = { vm.runTraceroute(nodeNum) }) { Text("Run") }
-            }
-            if (traceroutes.isEmpty()) {
-                Text("No traceroutes yet", style = MaterialTheme.typography.bodyMedium)
-            }
-            traceroutes.forEach { route ->
-                TracerouteCard(route, vm)
+/** Inline centered title with the round back button iOS draws at the leading edge. */
+@Composable
+private fun DetailHeader(title: String, onBack: () -> Unit) {
+    Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.align(Alignment.CenterStart).size(44.dp),
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.Filled.ArrowBackIosNew, contentDescription = "Back", modifier = Modifier.size(20.dp))
             }
         }
+        Text(
+            title,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.align(Alignment.Center).padding(horizontal = 56.dp),
+        )
+    }
+}
+
+/** iOS `Label { } icon: { }` + trailing value row. */
+@Composable
+private fun DetailRow(
+    icon: ImageVector,
+    label: String,
+    value: String?,
+    iconTint: Color = MaterialTheme.colorScheme.primary,
+    onClick: (() -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .let { if (onClick != null) it.clickable(onClick = onClick) else it }
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(26.dp))
+        Spacer(Modifier.width(16.dp))
+        Text(label, style = MaterialTheme.typography.bodyLarge)
+        Spacer(Modifier.weight(1f).width(12.dp))
+        if (value != null) {
+            Text(
+                value,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.End,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(2f, fill = false),
+            )
+        }
+        trailing?.invoke()
+    }
+}
+
+/** An Actions / Administration row: accent-colored label, no chevron (iOS Button in a List). */
+@Composable
+private fun ActionRow(
+    icon: ImageVector,
+    label: String,
+    enabled: Boolean = true,
+    destructive: Boolean = false,
+    iconTint: Color? = null,
+    onClick: () -> Unit,
+) {
+    val color = when {
+        !enabled -> MaterialTheme.colorScheme.onSurfaceVariant
+        destructive -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.primary
+    }
+    ListItem(
+        headlineContent = { Text(label, color = color) },
+        leadingContent = {
+            Icon(icon, contentDescription = null, tint = iconTint ?: color, modifier = Modifier.size(26.dp))
+        },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier.clickable(enabled = enabled, onClick = onClick),
+    )
+}
+
+@Composable
+private fun KeyMismatchRow(nodeNum: Long, publicKey: ByteArray?, newKey: ByteArray?, vm: NodeDetailViewModel) {
+    var confirmAccept by remember { mutableStateOf(false) }
+    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.Top) {
+        Icon(Icons.Outlined.Key, contentDescription = null, tint = IosRed, modifier = Modifier.size(26.dp))
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Public Key Mismatch", style = MaterialTheme.typography.titleMedium, color = IosRed)
+            Text(
+                "Verify who you are messaging with by comparing public keys in person or over " +
+                    "the phone. The most recent public key for this node does not match the " +
+                    "previously recorded key." +
+                    if (newKey != null) " Accept the new key (${keyFingerprint(newKey)}) only if you know the node was reset or re-flashed." else "",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (newKey != null) {
+                TextButton(onClick = { confirmAccept = true }) { Text("Accept new key") }
+            }
+        }
+    }
+    RowDivider()
+    if (confirmAccept && newKey != null) {
+        AlertDialog(
+            onDismissRequest = { confirmAccept = false },
+            title = { Text("Accept new key?") },
+            text = {
+                Text(
+                    "Trusted key ${publicKey?.let { keyFingerprint(it) } ?: "none"} will be " +
+                        "replaced by ${keyFingerprint(newKey)}. The radio forgets this node " +
+                        "and re-learns it from its next announcement. If you did not expect " +
+                        "this node to change keys, cancel: it could be an impostor."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmAccept = false
+                    vm.acceptNewKey(nodeNum)
+                }) { Text("Accept new key") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmAccept = false }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// Gauges
+
+/** LoRaSignalStrengthIndicator + the SNR / RSSI captions under it. */
+@Composable
+private fun SignalColumn(snr: Float, rssi: Int) {
+    // Three-level approximation of getLoRaSignalStrength (which is preset-aware on iOS).
+    val level = when {
+        snr >= -7f && rssi >= -115 -> 2
+        snr >= -15f && rssi >= -126 -> 1
+        else -> 0
+    }
+    val color = when (level) { 2 -> IosGreen; 1 -> IosOrange; else -> IosRed }
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            for (bar in 0..2) {
+                Box(
+                    Modifier
+                        .width(8.dp)
+                        .height((12 + bar * 8).dp)
+                        .background(color.copy(alpha = if (bar <= level) 1f else 0.3f), RoundedCornerShape(3.dp)),
+                )
+            }
+        }
+        Text(
+            "Signal " + when (level) { 2 -> "Good"; 1 -> "Fair"; else -> "Bad" },
+            style = MaterialTheme.typography.labelMedium,
+        )
+        Text("SNR %.2fdB".format(snr), style = MaterialTheme.typography.labelSmall, color = color)
+        Text("RSSI ${rssi}dB", style = MaterialTheme.typography.labelSmall, color = if (rssi >= -115) IosGreen else if (rssi >= -126) IosOrange else IosRed)
+    }
+}
+
+/** BatteryGauge.swift: a 270 degree arc colored red to green, percent in the centre, voltage below. */
+@Composable
+private fun BatteryGauge(level: Int?, voltage: Float?) {
+    val pct = (level ?: 0).coerceIn(0, 100)
+    val plugged = (level ?: 0) > 100
+    val track = MaterialTheme.colorScheme.surfaceVariant
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(Modifier.size(84.dp), contentAlignment = Alignment.Center) {
+            Canvas(Modifier.fillMaxSize()) {
+                val stroke = Stroke(width = 9.dp.toPx(), cap = StrokeCap.Round)
+                val inset = stroke.width / 2
+                val arcSize = Size(size.width - stroke.width, size.height - stroke.width)
+                val topLeft = Offset(inset, inset)
+                drawArc(track, 135f, 270f, false, topLeft, arcSize, style = stroke)
+                val sweep = 270f * (if (plugged) 1f else pct / 100f)
+                // Red at empty through orange to green at full, drawn as short segments.
+                val steps = (sweep / 4f).toInt().coerceAtLeast(1)
+                for (i in 0 until steps) {
+                    val start = 135f + i * (sweep / steps)
+                    val f = (i + 0.5f) / steps * (sweep / 270f)
+                    val c = if (f < 0.5f) lerp(IosRed, IosOrange, f * 2f) else lerp(IosOrange, IosGreen, (f - 0.5f) * 2f)
+                    drawArc(c, start, sweep / steps + 1.5f, false, topLeft, arcSize, style = Stroke(width = stroke.width, cap = StrokeCap.Butt))
+                }
+            }
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    if (plugged) "PWR" else "$pct%",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Icon(Icons.Filled.Battery5Bar, contentDescription = null, modifier = Modifier.size(16.dp))
+            }
+        }
+        voltage?.takeIf { it > 0f }?.let {
+            Text("%.2f V".format(it), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** Two-column grid of the iOS compact weather widgets. */
+@Composable
+private fun EnvironmentGrid(env: TelemetryEntity) {
+    val tiles = buildList<@Composable () -> Unit> {
+        env.temperature?.let { t ->
+            add { EnvTile(Icons.Outlined.Thermostat, "TEMP", "%.0f°".format(t)) }
+        }
+        env.relativeHumidity?.let { h ->
+            val dew = env.temperature?.let { t -> dewPoint(t, h) }
+            add { EnvTile(Icons.Outlined.WaterDrop, "HUMIDITY", "%.0f%%".format(h), dew?.let { "The dew point is %.0f° right now.".format(it) }) }
+        }
+        env.barometricPressure?.let { p ->
+            add { EnvTile(Icons.Outlined.Speed, "PRESSURE", "%.2f".format(p), (if (p <= 1009.144f) "LOW" else "HIGH") + "\nhPa") }
+        }
+        env.windSpeed?.let { w ->
+            val gust = env.windGust?.takeIf { it > 0f }?.let { "Gusts %.0f m/s".format(it) }
+            add { EnvTile(Icons.Outlined.Air, "WIND", "%.0f m/s".format(w), listOfNotNull(env.windDirection?.let { cardinal(it) }, gust).joinToString("\n")) }
+        }
+    }
+    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        tiles.chunked(2).forEach { pair ->
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                pair.forEach { tile -> Box(Modifier.weight(1f)) { tile() } }
+                if (pair.size == 1) Spacer(Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun EnvTile(icon: ImageVector, label: String, value: String, sub: String? = null) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f), RoundedCornerShape(18.dp))
+            .padding(16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Text(value, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 6.dp))
+        sub?.let {
+            Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+        }
+    }
+}
+
+private fun dewPoint(tempC: Float, rh: Float): Float {
+    val a = 17.62f; val b = 243.12f
+    val gamma = (a * tempC / (b + tempC)) + kotlin.math.ln((rh / 100f).coerceAtLeast(0.01f))
+    return b * gamma / (a - gamma)
+}
+
+private fun cardinal(deg: Int): String {
+    val names = listOf("North", "Northeast", "East", "Southeast", "South", "Southwest", "West", "Northwest")
+    return names[((deg % 360 + 360) % 360 + 22) / 45 % 8]
+}
+
+// ---------------------------------------------------------------------------------------
+// Log pages
+
+@Composable
+private fun LogPage(
+    log: DetailLog,
+    nodeNum: Long,
+    metrics: List<TelemetryEntity>,
+    envMetrics: List<TelemetryEntity>,
+    traceroutes: List<TracerouteEntity>,
+    vm: NodeDetailViewModel,
+    onBack: () -> Unit,
+) {
+    Column(Modifier.fillMaxSize()) {
+        DetailHeader(log.title, onBack)
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            when (log) {
+                DetailLog.DEVICE -> {
+                    ChartCard("Battery (48h)", metrics.mapNotNull { m -> m.batteryLevel?.let { m.time to it.coerceAtMost(100).toFloat() } }, "%")
+                    ChartCard("Channel utilization (48h)", metrics.mapNotNull { m -> m.channelUtilization?.let { m.time to it } }, "%")
+                    ChartCard("Air util TX (48h)", metrics.mapNotNull { m -> m.airUtilTx?.let { m.time to it } }, "%")
+                    SectionHeader("Readings")
+                    GroupCard {
+                        metrics.asReversed().take(30).forEachIndexed { i, m ->
+                            if (i > 0) RowDivider()
+                            LogLine(
+                                absoluteTime(m.time),
+                                listOfNotNull(
+                                    m.batteryLevel?.let { "$it%" },
+                                    m.voltage?.let { "%.2f V".format(it) },
+                                    m.channelUtilization?.let { "ch %.1f%%".format(it) },
+                                    m.airUtilTx?.let { "air %.1f%%".format(it) },
+                                ).joinToString("  •  "),
+                            )
+                        }
+                    }
+                }
+                DetailLog.ENVIRONMENT -> {
+                    ChartCard("Temperature (48h)", envMetrics.mapNotNull { m -> m.temperature?.let { m.time to it } }, "°C")
+                    ChartCard("Humidity (48h)", envMetrics.mapNotNull { m -> m.relativeHumidity?.let { m.time to it } }, "%")
+                    ChartCard("Pressure (48h)", envMetrics.mapNotNull { m -> m.barometricPressure?.let { m.time to it } }, " hPa")
+                    SectionHeader("Readings")
+                    GroupCard {
+                        envMetrics.asReversed().take(30).forEachIndexed { i, m ->
+                            if (i > 0) RowDivider()
+                            LogLine(
+                                absoluteTime(m.time),
+                                listOfNotNull(
+                                    m.temperature?.let { "%.1f°C".format(it) },
+                                    m.relativeHumidity?.let { "%.0f%%".format(it) },
+                                    m.barometricPressure?.let { "%.1f hPa".format(it) },
+                                    m.windSpeed?.let { "wind %.1f m/s".format(it) },
+                                ).joinToString("  •  "),
+                            )
+                        }
+                    }
+                }
+                DetailLog.POSITION -> {
+                    val history by vm.positionHistory(nodeNum).collectAsState(initial = emptyList())
+                    GroupCard {
+                        if (history.isEmpty()) {
+                            Text("No positions recorded", modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        history.forEachIndexed { i, p ->
+                            if (i > 0) RowDivider()
+                            PositionLine(p)
+                        }
+                    }
+                }
+                DetailLog.TRACEROUTE -> {
+                    Button(onClick = { vm.runTraceroute(nodeNum) }) { Text("Run trace route") }
+                    if (traceroutes.isEmpty()) {
+                        Text("No traceroutes yet", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    traceroutes.forEach { route -> TracerouteCard(route, vm) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LogLine(time: String, detail: String) {
+    Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+        Text(time, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(detail, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun PositionLine(p: PositionEntity) {
+    LogLine(
+        absoluteTime(p.time),
+        buildList {
+            add("%.5f, %.5f".format(p.latitude, p.longitude))
+            if (p.altitude != 0) add("${p.altitude} m")
+            if (p.satsInView > 0) add("${p.satsInView} sats")
+            if (p.speed > 0) add("${p.speed} km/h")
+            if (p.heading in 1..359) add("${p.heading}°")
+        }.joinToString("  •  "),
+    )
+}
+
+@Composable
+private fun ChartCard(title: String, points: List<Pair<Long, Float>>, unit: String) {
+    SectionHeader(title)
+    GroupCard {
+        MetricChart(
+            points = points,
+            unit = unit,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(150.dp)
+                .padding(12.dp),
+        )
     }
 }
 
@@ -518,10 +848,7 @@ private fun TracerouteCard(route: TracerouteEntity, vm: NodeDetailViewModel) {
             }
         }
     }
-    val cardModifier = Modifier
-        .fillMaxWidth()
-        .let { if (route.response) it.clickable { vm.openRoute(route) } else it }
-    Card(cardModifier) {
+    GroupCard(Modifier.let { if (route.response) it.clickable { vm.openRoute(route) } else it }) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(relativeTime(route.time), style = MaterialTheme.typography.labelSmall)
             Text(text, style = MaterialTheme.typography.bodySmall)
@@ -591,6 +918,9 @@ private fun MetricChart(
     }
 }
 
+// ---------------------------------------------------------------------------------------
+// Actions and Administration
+
 private data class ConfirmableAction(
     val message: String,
     val confirmLabel: String = "Yes",
@@ -599,21 +929,19 @@ private data class ConfirmableAction(
 )
 
 /**
- * Node actions, ordered like the iOS NodeDetail sections: Actions first
- * (mute, share QR, exchanges, stats, history), then Administration
- * (metadata refresh, power off, reboot). Destructive / remote calls
- * (shutdown, reboot, remove) require explicit confirmation behind the
- * canonical "Are you sure?" dialog; the read-only requests are idempotent
- * and go direct. Port of the node-detail action sheet in NodeView.swift +
- * NodeDetail.administrationSection.
+ * NodeDetail.actionsSection + administrationSection: accent-colored button rows with
+ * glyphs. Destructive / remote calls (shutdown, reboot, remove) sit behind the canonical
+ * "Are you sure?" dialog; the read-only requests are idempotent and go direct.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NodeActions(
     nodeNum: Long,
     isSelf: Boolean,
     entry: NodeWithUser?,
     vm: NodeDetailViewModel,
+    onMessage: () -> Unit,
+    onToggleFavorite: () -> Unit,
+    onToggleIgnore: () -> Unit,
     onAfterRemove: () -> Unit,
 ) {
     val connected by vm.radioAvailable.collectAsState()
@@ -624,105 +952,93 @@ private fun NodeActions(
     }
     val confirmPending = remember { mutableStateOf<ConfirmableAction?>(null) }
     val shareQr = remember { mutableStateOf<NodeWithUser?>(null) }
+    val favorite = entry?.node?.favorite == true
+    val ignored = entry?.node?.ignored == true
 
-    // MARK: Actions (iOS NodeDetail actionsSection)
-    Text("Actions", style = MaterialTheme.typography.titleMedium)
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (!connected) {
-                Text(
-                    "Radio disconnected: actions require a live uplink.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-            ListItem(
-                headlineContent = { Text(if (muted) "Unmute notifications" else "Mute notifications") },
-                supportingContent = {
-                    Text(if (muted) "muted" else "unmuted; tap to toggle")
-                },
-                modifier = Modifier.clickable { vm.setMute(nodeNum, !muted) },
+    SectionHeader("Actions")
+    GroupCard {
+        if (!connected) {
+            Text(
+                "Radio disconnected: mesh actions need a live link.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp),
             )
-            if (entry?.user?.unmessagable == false) {
-                ActionButton(label = "Share Contact QR", enabled = true) {
-                    shareQr.value = entry
+        }
+        ActionRow(
+            if (muted) Icons.Outlined.NotificationsOff else Icons.Outlined.NotificationsNone,
+            if (muted) "Unmute notifications" else "Mute notifications",
+        ) { vm.setMute(nodeNum, !muted) }
+        if (entry?.user?.unmessagable == false) {
+            RowDivider()
+            ActionRow(Icons.Outlined.QrCode2, "Share Contact QR") { shareQr.value = entry }
+        }
+        RowDivider()
+        ActionRow(
+            if (favorite) Icons.Filled.Star else Icons.Outlined.StarOutline,
+            if (favorite) "Remove from favorites" else "Add to favorites",
+            iconTint = Color(0xFFB8860B),
+            onClick = onToggleFavorite,
+        )
+        if (!isSelf) {
+            if (entry?.user?.unmessagable != true) {
+                RowDivider()
+                ActionRow(Icons.AutoMirrored.Outlined.Message, "Message", onClick = onMessage)
+            }
+            RowDivider()
+            ActionRow(Icons.Outlined.SwapHoriz, "Exchange Positions", enabled = connected) { vm.sendPosition(target = nodeNum) }
+            RowDivider()
+            ActionRow(Icons.Outlined.BarChart, "Request Local Stats", enabled = connected) { vm.localStats(target = nodeNum, key = entry?.user?.publicKey) }
+            RowDivider()
+            ActionRow(Icons.Outlined.Badge, "Exchange User Info", enabled = connected) { vm.exchangeUser(target = nodeNum) }
+            RowDivider()
+            ActionRow(Icons.Outlined.Route, "Trace Route", enabled = connected) { vm.runTraceroute(nodeNum) }
+            RowDivider()
+            ActionRow(Icons.Outlined.History, "Client History", enabled = connected) { vm.sfHistory(target = nodeNum) }
+            RowDivider()
+            ActionRow(Icons.Outlined.CellTower, "Store & Forward Config", enabled = connected) { vm.sfConfig(target = nodeNum) }
+            RowDivider()
+            ActionRow(
+                Icons.Outlined.RemoveCircleOutline,
+                if (ignored) "Stop ignoring" else "Ignore Node",
+                onClick = onToggleIgnore,
+            )
+            RowDivider()
+            ActionRow(Icons.Outlined.DeleteForever, "Delete Node", enabled = connected, destructive = true) {
+                confirmPending.value = ConfirmableAction(
+                    message = "Remove ${nodeNumString(nodeNum)} from ${nodeNumString(myNum)}'s node database?",
+                    confirmLabel = "Delete Node",
+                    destructive = true,
+                ) {
+                    vm.remove(target = myNum, removed = nodeNum); onAfterRemove()
                 }
             }
-            ActionButton(label = "Exchange Positions", enabled = connected) {
-                vm.sendPosition(target = nodeNum)
-            }
-            ActionButton(label = "Request Local Stats", enabled = connected) {
-                vm.localStats(target = nodeNum, key = entry?.user?.publicKey)
-            }
-            ActionButton(label = "Exchange User Info", enabled = connected) {
-                vm.exchangeUser(target = nodeNum)
-            }
-            ActionButton(label = "Client History", enabled = connected) {
-                vm.sfHistory(target = nodeNum)
-            }
-            ActionButton(label = "Store & Forward: config", enabled = connected) {
-                vm.sfConfig(target = nodeNum)
-            }
-            if (!isSelf) {
-                ActionButton(
-                    label = "Delete Node",
-                    enabled = connected,
-                    destructive = true,
-                    onClick = {
-                        confirmPending.value = ConfirmableAction(
-                            message = "Remove ${nodeNumString(nodeNum)} from ${nodeNumString(myNum)}'s node database?",
-                            confirmLabel = "Delete Node",
-                            destructive = true,
-                        ) {
-                            vm.remove(target = myNum, removed = nodeNum); onAfterRemove()
-                        }
-                    },
-                )
-            }
         }
     }
 
-    // MARK: Administration (iOS NodeDetail administrationSection)
-    Text("Administration", style = MaterialTheme.typography.titleMedium)
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            ActionButton(label = "Refresh device metadata", enabled = connected) {
-                vm.deviceMetadata(target = nodeNum)
-            }
-            ActionButton(
-                label = "Power Off",
-                enabled = connected,
+    SectionHeader("Administration")
+    GroupCard {
+        ActionRow(Icons.Outlined.Refresh, "Refresh device metadata", enabled = connected) { vm.deviceMetadata(target = nodeNum) }
+        RowDivider()
+        ActionRow(Icons.Outlined.PowerSettingsNew, "Power Off", enabled = connected) {
+            confirmPending.value = ConfirmableAction(
+                message = if (isSelf) "Shut down this radio? It will power off after 5 s."
+                else "Shutdown ${nodeNumString(nodeNum)}? It will power off after 5 s.",
+                confirmLabel = "Shutdown Node?",
                 destructive = true,
-                onClick = {
-                    confirmPending.value = ConfirmableAction(
-                        message = if (isSelf) {
-                            "Shut down this radio? It will power off after 5 s."
-                        } else {
-                            "Shutdown ${nodeNumString(nodeNum)}? It will power off after 5 s."
-                        },
-                        confirmLabel = "Shutdown Node?",
-                        destructive = true,
-                    ) { vm.shutdown(target = myNum) }
-                },
-            )
-            ActionButton(
-                label = "Reboot",
-                enabled = connected,
+            ) { vm.shutdown(target = myNum) }
+        }
+        RowDivider()
+        ActionRow(Icons.Outlined.Sync, "Reboot", enabled = connected) {
+            confirmPending.value = ConfirmableAction(
+                message = if (isSelf) "Reboot this radio? It will reboot after 5 s."
+                else "Reboot ${nodeNumString(nodeNum)}? It will reboot after 5 s.",
+                confirmLabel = "Reboot node?",
                 destructive = true,
-                onClick = {
-                    confirmPending.value = ConfirmableAction(
-                        message = if (isSelf) {
-                            "Reboot this radio? It will reboot after 5 s."
-                        } else {
-                            "Reboot ${nodeNumString(nodeNum)}? It will reboot after 5 s."
-                        },
-                        confirmLabel = "Reboot node?",
-                        destructive = true,
-                    ) { vm.reboot(target = myNum) }
-                },
-            )
+            ) { vm.reboot(target = myNum) }
         }
     }
+
     confirmPending.value?.let { act ->
         // Canonical iOS confirm shape: title "Are you sure?" (titleVisibility .visible),
         // destructive-role button whose label names the action.
@@ -751,6 +1067,9 @@ private fun NodeActions(
         ShareContactQRDialog(entry = entry, onDismiss = { shareQr.value = null })
     }
 }
+
+// ---------------------------------------------------------------------------------------
+// Helpers
 
 /** Short, human-comparable form of a 32-byte key: first 8 base64 characters. */
 private fun keyFingerprint(key: ByteArray): String =
@@ -831,20 +1150,6 @@ private fun ShareContactQRDialog(entry: NodeWithUser, onDismiss: () -> Unit) {
     )
 }
 
-@Composable
-private fun ActionButton(label: String, enabled: Boolean, destructive: Boolean = false, onClick: () -> Unit) {
-    OutlinedButton(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
-        Text(
-            label,
-            color = when {
-                !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                destructive -> MaterialTheme.colorScheme.error
-                else -> MaterialTheme.colorScheme.primary
-            },
-        )
-    }
-}
-
 /** DeviceRole enum name for a stored role ordinal (config.proto Role enum). */
 fun roleLabel(role: Int): String = when (role) {
     0 -> "Client"
@@ -875,13 +1180,47 @@ fun uptimeLabel(seconds: Int): String {
     }
 }
 
+/** iOS `.components(style: .narrow)`: "1w 2d 23h 26m 54s". */
+fun uptimeFull(seconds: Int): String {
+    val w = seconds / 604800
+    val d = (seconds % 604800) / 86400
+    val h = (seconds % 86400) / 3600
+    val m = (seconds % 3600) / 60
+    val s = seconds % 60
+    return listOfNotNull(
+        if (w > 0) "${w}w" else null,
+        if (d > 0 || w > 0) "${d}d" else null,
+        if (h > 0 || d > 0 || w > 0) "${h}h" else null,
+        "${m}m",
+        "${s}s",
+    ).joinToString(" ")
+}
+
+/** RelativeDateTimeFormatter(.full) style: "19 seconds ago", "2 months ago". */
+fun relativeLong(epochMs: Long): String {
+    val sec = ((System.currentTimeMillis() - epochMs) / 1000).coerceAtLeast(0)
+    fun plural(n: Long, unit: String) = "$n $unit${if (n == 1L) "" else "s"} ago"
+    return when {
+        sec < 60 -> plural(sec, "second")
+        sec < 3600 -> plural(sec / 60, "minute")
+        sec < 86400 -> plural(sec / 3600, "hour")
+        sec < 7 * 86400 -> plural(sec / 86400, "day")
+        sec < 30 * 86400 -> plural(sec / (7 * 86400), "week")
+        sec < 365 * 86400 -> plural(sec / (30 * 86400), "month")
+        else -> plural(sec / (365 * 86400), "year")
+    }
+}
+
+fun absoluteTime(epochMs: Long): String =
+    java.text.SimpleDateFormat("M/d/yyyy, h:mm:ss a", java.util.Locale.getDefault()).format(epochMs)
+
 /** Small tap-to-copy affordance for identity rows (node number, public key). */
 @Composable
 fun CopyButton(context: Context, text: String) {
     val clipboard = context.getSystemService(ClipboardManager::class.java)
     Text(
         "Copy",
-        style = MaterialTheme.typography.labelMedium,
+        style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.primary,
         modifier = Modifier
             .clickable {

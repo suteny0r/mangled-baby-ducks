@@ -25,6 +25,8 @@ class Router {
     val activeRoute = MutableStateFlow<TracerouteEntity?>(null)
     /** One-shot: the top-left logo opens Settings > About (iOS deep link settings/about). */
     val pendingAbout = MutableStateFlow(false)
+    /** One-shot: node detail's "Node Map" row; the Map tab centers on this node. */
+    val pendingMapNode = MutableStateFlow<Long?>(null)
 
     fun openThread(target: ThreadTarget) {
         pendingThread.value = target
@@ -43,6 +45,11 @@ class Router {
 
     fun clearRoute() {
         activeRoute.value = null
+    }
+
+    fun openMapNode(num: Long) {
+        pendingMapNode.value = num
+        selectedTab.value = TAB_MAP
     }
 
     fun openAbout() {

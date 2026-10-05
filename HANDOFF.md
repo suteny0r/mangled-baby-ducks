@@ -52,6 +52,18 @@ for the Android app to look like them, with the app's own icon as the title-bar 
   BackHandler; with none open, MainActivity's handler jumps to the Nodes tab, and on the
   Nodes root it is disabled so the activity finishes. Verified: Messages -> back -> Nodes;
   detail -> back -> list; list -> back -> launcher.
+- Node detail (NodeDetail.swift, from screenshots d1-d4): round back button + centered
+  inline title; sections Hardware (chip glyph + model name; no hardware catalog images
+  on this side), Node (75 dp avatar, signal bars when direct, BatteryGauge arc with
+  voltage; icon rows Name / Node Number / User Id / Signed node / Public Key / Firmware /
+  Role / Status / Messaging / Uptime / First heard / Last heard; tap a date row to
+  toggle relative vs absolute), Environment (2-column weather tiles when env telemetry
+  exists), Logs (Device Metrics, Node Map, Position, Environment, Trace Route live;
+  Air Quality / Power / Detection / Local Stats rows present but disabled), Actions
+  (accent rows: mute, share QR, favorite, message, exchanges, trace route, client
+  history, S&F config, ignore, delete) and Administration. Charts moved into the log
+  sub-pages (`DetailLog`); Position Log uses the new `PositionDao.history`; Node Map
+  uses `Router.openMapNode` -> MapScreen flies to the node.
 - Known rough edges: the Nodes row has no distance/bearing line (needs my position),
   and the tap helper `tap.py "Connect"` matches "Connected" first; tap the tab by
   coordinates (930,2060 on the Note 20) instead.

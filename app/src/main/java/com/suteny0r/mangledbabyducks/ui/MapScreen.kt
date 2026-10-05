@@ -295,6 +295,22 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
         }
     }
 
+    // "Node Map" from node detail: fly to that node once its marker is known.
+    val pendingMapNode by router.pendingMapNode.collectAsState()
+    LaunchedEffect(pendingMapNode, nodes) {
+        val num = pendingMapNode ?: return@LaunchedEffect
+        val target = nodes.firstOrNull { it.nodeNum == num } ?: return@LaunchedEffect
+        router.pendingMapNode.value = null
+        mapView.getMapAsync { map ->
+            map.animateCamera(
+                CameraUpdateFactory.newLatLngZoom(
+                    LatLng(target.latitudeI / 1e7, target.longitudeI / 1e7),
+                    13.0,
+                ),
+            )
+        }
+    }
+
     // MapView needs the host lifecycle forwarded manually under Compose.
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
