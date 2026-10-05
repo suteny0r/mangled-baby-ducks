@@ -8,6 +8,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -17,6 +18,7 @@ import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SmallFloatingActionButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -105,12 +107,22 @@ private val SATELLITE_STYLE_JSON = """
       "tiles": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
       "tileSize": 256,
       "maxzoom": 19,
-      "attribution": "Esri, Maxar, Earthstar Geographics"
+      "attribution": "Esri, Maxar, Earthstar Geographics, and the GIS User Community"
     }
   },
   "layers": [{"id": "sat", "type": "raster", "source": "sat"}]
 }
 """.trimIndent()
+
+/**
+ * Visible attribution per layer. The openfreemap style declares no source attribution,
+ * so MapLibre's own "i" control would show nothing for streets; OpenFreeMap, OpenMapTiles
+ * and OpenStreetMap (ODbL) all require on-map credit, as does Esri for World Imagery.
+ */
+private const val STREETS_ATTRIBUTION = "© OpenFreeMap © OpenMapTiles Data from OpenStreetMap"
+private const val STREETS_ATTRIBUTION_URL = "https://www.openstreetmap.org/copyright"
+private const val SATELLITE_ATTRIBUTION = "Esri, Maxar, Earthstar Geographics, and the GIS User Community"
+private const val SATELLITE_ATTRIBUTION_URL = "https://www.esri.com"
 
 private const val SOURCE_ID = "mesh-nodes"
 private const val CIRCLE_LAYER_ID = "mesh-nodes-circles"
@@ -328,6 +340,27 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
                 .padding(12.dp),
         ) {
             Icon(Icons.Default.Layers, contentDescription = "Toggle satellite/streets")
+        }
+        // Bottom-end so it does not collide with MapLibre's own logo and "i" button at
+        // bottom-start. Tapping opens the data provider's copyright page.
+        Surface(
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+            shape = MaterialTheme.shapes.extraSmall,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(4.dp)
+                .clickable {
+                    openUrl(
+                        context,
+                        if (satellite) SATELLITE_ATTRIBUTION_URL else STREETS_ATTRIBUTION_URL,
+                    )
+                },
+        ) {
+            Text(
+                if (satellite) SATELLITE_ATTRIBUTION else STREETS_ATTRIBUTION,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            )
         }
         if (route.nodes.isNotEmpty()) {
             SmallFloatingActionButton(

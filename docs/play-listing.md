@@ -1,0 +1,75 @@
+# Google Play listing draft
+
+Rules this draft follows (Meshtastic trademark policy, https://meshtastic.org/docs/legal/trademark/):
+
+- "Meshtastic" never appears in the app title, short description, package name, developer
+  name, icon, feature graphic, or screenshots' captions.
+- It appears in the full description only as a factual compatibility statement, with the ®
+  symbol on first mention and the non-affiliation disclaimer.
+- No Meshtastic logo anywhere in the listing or the app.
+- The app is GPLv3, so the listing links to the source repository.
+
+## App name (30 chars max)
+
+Mangled Baby Ducks
+
+## Short description (80 chars max)
+
+Free, open-source client for LoRa mesh radios. Messages, nodes, map, Android Auto.
+
+## Full description (4000 chars max)
+
+Mangled Baby Ducks is a free, open-source Android client for LoRa mesh radios running
+Meshtastic® firmware. Connect over Bluetooth LE or Wi-Fi/TCP and keep the session alive in
+the background.
+
+Messaging
+• Channel and direct messages with delivery acks and failure reasons
+• Tapback reactions, per-conversation notifications, reply from the notification
+• Import and export channels with QR codes and share links
+
+Nodes
+• Live node list with signal, battery, distance, last heard
+• Favorites, ignore, search, node detail, traceroute
+• Public-key repair when a node has been re-flashed
+
+Map
+• Positioned nodes and waypoints on street or satellite imagery
+• Traceroute paths drawn on the map
+• Long-press to drop a waypoint
+
+Radio configuration
+• Edit every radio config section from the phone
+• Each section saves with one write so the radio reboots once
+
+Android Auto
+• Nodes on the car's map, messages with quick replies, voice replies through notifications
+
+Open source
+Mangled Baby Ducks is licensed under the GNU General Public License v3.0. Source code:
+https://github.com/suteny0r/mangled-baby-ducks
+
+Mangled Baby Ducks is an independent project. It is not affiliated with or endorsed by
+Meshtastic LLC or the Meshtastic project. Meshtastic® is a registered trademark of
+Meshtastic LLC.
+
+Map data © OpenFreeMap, © OpenMapTiles, © OpenStreetMap contributors. Satellite imagery:
+Esri World Imagery.
+
+## Store settings
+
+- Category: Communication
+- Price: Free, no ads, no in-app purchases
+- Privacy policy URL: required by Play for apps requesting location and Bluetooth. Publish
+  one (a page in this repository is enough) stating that location is sent only to the
+  user's own radio and the mesh, and that no data is sent to the developer.
+- Data safety form: declare location (shared with the mesh when the user enables sharing),
+  messages (stored on device only), no collection by the developer.
+- Website: https://github.com/suteny0r/mangled-baby-ducks
+
+## Release checklist
+
+1. Bump `versionCode` and `versionName` in `app/build.gradle.kts`.
+2. Tag the commit `v<versionName>` and push the tag. The in-app About screen points at
+   this repository as the GPLv3 source offer, so the tag must match the shipped build.
+3. Build a signed release bundle and upload.

@@ -16,6 +16,32 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Licensing, trademark and attribution for a Play release (2026-10-04, built, NOT installed, phone not attached)
+Prompted by a release-risk review. The app is a derivative of GPL-3.0 Meshtastic-Apple and
+bundles GPL-3.0 protobufs, and until this round the repo had no license at all.
+- Root `LICENSE` (verbatim GPLv3, byte-identical to gnu.org), root `NOTICE` (derivation
+  credits, trademark disclaimer), `README.md` (first one; license section is the source
+  offer), `docs/play-listing.md` (listing text that keeps "Meshtastic" out of the title,
+  short description and assets, plus the release checklist: tag `v<versionName>` per
+  Play build so the in-app source URL matches the shipped binary).
+- `ui/AboutScreen.kt` (new, no Swift original): Settings > "About and licenses". Version,
+  disclaimer with ® on first mention, GPL text and third-party notices read from
+  `app/src/main/assets/LICENSE.txt` and `NOTICES.txt`, source and issues links, credits
+  for Meshtastic-Apple, protobufs, MapLibre, protobuf, AndroidX, Kotlin, ZXing, map data.
+  `NOTICES.txt` carries the full BSD-2, BSD-3 and Apache-2.0 texts (Apache §4 and BSD
+  both require the text to ship with the binary).
+- Settings footer now reads "an independent client compatible with Meshtastic® devices.
+  Not affiliated with or endorsed by Meshtastic LLC."
+- Map: visible attribution chip at bottom-end that flips with the layer (OpenFreeMap /
+  OpenMapTiles / OpenStreetMap for streets, full Esri World Imagery string for satellite)
+  and opens the provider's copyright page. The openfreemap liberty style declares no
+  source attribution, so MapLibre's own "i" control showed nothing for streets.
+- Still open: Esri World Imagery is attributed but the user has to decide whether use
+  outside ArcGIS is acceptable under Esri's terms or drop the layer. Play also needs a
+  privacy policy URL (location + Bluetooth permissions); none is written yet.
+- Verified: builds clean. Not installed (phone not attached). About screen and map chip not yet
+  clicked through.
+
 ## Public-key self-healing, round 2 (2026-09-19 evening, INSTALLED; Accept test interrupted)
 Refined after reading meshtastic/firmware master (Router.cpp, ReliableRouter.cpp, NodeDB.cpp,
 NodeInfoModule.cpp, AdminModule.cpp). Facts that drove the design, worth keeping:

@@ -61,8 +61,26 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
     // Settings is a tab, not a nav graph, so a config section is a sub-screen held in
     // local state with the system back gesture wired to it.
     var section by rememberSaveable { mutableStateOf<ConfigSection?>(null) }
+    var showAbout by rememberSaveable { mutableStateOf(false) }
 
     val connected = state is RadioState.Subscribed
+
+    if (showAbout) {
+        BackHandler { showAbout = false }
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+            ) {
+                IconButton(onClick = { showAbout = false }) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                }
+                Text("About and licenses", style = MaterialTheme.typography.headlineSmall)
+            }
+            AboutScreen()
+        }
+        return
+    }
 
     section?.let { open ->
         BackHandler { section = null }
@@ -213,8 +231,16 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                 style = MaterialTheme.typography.bodySmall,
             )
         }
+        Card(Modifier.fillMaxWidth()) {
+            ListItem(
+                headlineContent = { Text("About and licenses") },
+                supportingContent = { Text("GPLv3, source code, third-party notices") },
+                modifier = Modifier.clickable { showAbout = true },
+            )
+        }
         Text(
-            "Mangled Baby Ducks, a meshtastic compatible node",
+            "Mangled Baby Ducks, an independent client compatible with Meshtastic® devices. " +
+                "Not affiliated with or endorsed by Meshtastic LLC.",
             style = MaterialTheme.typography.bodySmall,
         )
     }
