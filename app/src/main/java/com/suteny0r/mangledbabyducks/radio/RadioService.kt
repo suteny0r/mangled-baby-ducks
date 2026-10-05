@@ -54,7 +54,7 @@ class RadioService : Service() {
         return builder
             .setContentTitle(getString(R.string.app_name))
             .setContentText(deviceName?.let { "Connected to $it" } ?: "Connected")
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(contentIntent)
             .setOngoing(true)
             .build()

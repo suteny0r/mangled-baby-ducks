@@ -1,20 +1,37 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Monochrome layer for Android 13+ themed icons: the same mesh glyph the status bar
+     uses (ic_notification), scaled into the adaptive icon's 66dp safe zone. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path
-        android:fillColor="#1B1B1B"
-        android:pathData="M54,30 m-6,0 a6,6 0 1,1 12,0 a6,6 0 1,1 -12,0" />
-    <path
-        android:fillColor="#1B1B1B"
-        android:pathData="M34,72 m-6,0 a6,6 0 1,1 12,0 a6,6 0 1,1 -12,0" />
-    <path
-        android:fillColor="#1B1B1B"
-        android:pathData="M74,72 m-6,0 a6,6 0 1,1 12,0 a6,6 0 1,1 -12,0" />
-    <path
-        android:strokeColor="#1B1B1B"
-        android:strokeWidth="4"
-        android:pathData="M54,30 L34,72 M54,30 L74,72 M34,72 L74,72" />
+    <group
+        android:scaleX="2.75"
+        android:scaleY="2.75"
+        android:translateX="21"
+        android:translateY="21">
+        <path
+            android:strokeColor="#1B1B1B"
+            android:strokeWidth="1.1"
+            android:pathData="M4,7 L12,4 L20,8 L16,19 L7,17 Z M4,7 L12,11 M12,4 L12,11 M20,8 L12,11 M12,11 L7,17 M12,11 L16,19" />
+        <path
+            android:fillColor="#1B1B1B"
+            android:pathData="M12,11 m-2.4,0 a2.4,2.4 0 1,1 4.8,0 a2.4,2.4 0 1,1 -4.8,0" />
+        <path
+            android:fillColor="#1B1B1B"
+            android:pathData="M12,4 m-1.8,0 a1.8,1.8 0 1,1 3.6,0 a1.8,1.8 0 1,1 -3.6,0" />
+        <path
+            android:fillColor="#1B1B1B"
+            android:pathData="M4,7 m-1.8,0 a1.8,1.8 0 1,1 3.6,0 a1.8,1.8 0 1,1 -3.6,0" />
+        <path
+            android:fillColor="#1B1B1B"
+            android:pathData="M20,8 m-1.8,0 a1.8,1.8 0 1,1 3.6,0 a1.8,1.8 0 1,1 -3.6,0" />
+        <path
+            android:fillColor="#1B1B1B"
+            android:pathData="M7,17 m-1.8,0 a1.8,1.8 0 1,1 3.6,0 a1.8,1.8 0 1,1 -3.6,0" />
+        <path
+            android:fillColor="#1B1B1B"
+            android:pathData="M16,19 m-1.8,0 a1.8,1.8 0 1,1 3.6,0 a1.8,1.8 0 1,1 -3.6,0" />
+    </group>
 </vector>

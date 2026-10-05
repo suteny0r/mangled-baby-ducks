@@ -54,6 +54,18 @@ interface UserDao {
     @Query("SELECT * FROM users WHERE lastMessage IS NOT NULL ORDER BY lastMessage DESC")
     fun dmContacts(): Flow<List<UserEntity>>
 
+    /**
+     * UserList.swift's contact list: every known node, not just the ones already messaged,
+     * ordered the way its @Query is (lastMessage descending, then long name), so threads
+     * with history sort above the rest. Ignored nodes are dropped, as the iOS filter does.
+     */
+    @Query(
+        "SELECT u.* FROM users u LEFT JOIN nodes n ON n.num = u.num " +
+            "WHERE COALESCE(n.ignored, 0) = 0 " +
+            "ORDER BY u.lastMessage IS NULL, u.lastMessage DESC, LOWER(u.longName)"
+    )
+    fun allContacts(): Flow<List<UserEntity>>
+
     @Query("UPDATE users SET lastMessage = :time WHERE num = :num")
     suspend fun touchLastMessage(num: Long, time: Long)
 

@@ -132,30 +132,10 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
         // the logo with the ConnectedDevice pill at the trailing edge.
         AppHeader("Nodes (${nodes.size})", large = false)
         // iOS .searchable field: a gray rounded bar with the magnifier inside.
-        TextField(
+        SearchField(
             value = search,
             onValueChange = { vm.searchText.value = it },
-            placeholder = { Text("Find a node") },
-            singleLine = true,
-            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-            trailingIcon = {
-                if (search.isNotEmpty()) {
-                    IconButton(onClick = { vm.searchText.value = "" }) {
-                        Icon(Icons.Filled.Close, contentDescription = "Clear search")
-                    }
-                }
-            },
-            shape = RoundedCornerShape(12.dp),
-            colors = TextFieldDefaults.colors(
-                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                focusedIndicatorColor = Color.Transparent,
-                unfocusedIndicatorColor = Color.Transparent,
-                disabledIndicatorColor = Color.Transparent,
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp),
+            placeholder = "Find a node",
         )
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             FilterChip(

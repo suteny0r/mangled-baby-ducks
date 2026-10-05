@@ -71,6 +71,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -183,7 +184,7 @@ fun MessagesScreen(vm: MessagesViewModel = viewModel()) {
 @Composable
 private fun ThreadList(vm: MessagesViewModel, onOpen: (ThreadTarget) -> Unit) {
     val channels by vm.channels.collectAsState()
-    val contacts by vm.dmContacts.collectAsState()
+    val contacts by vm.contacts.collectAsState()
     val unreadChannels by vm.unreadChannels.collectAsState()
     val unreadDirect by vm.unreadDirect.collectAsState()
     // Messages.swift: the sidebar is two rows, Channels and Direct Messages, and each
@@ -215,17 +216,32 @@ private fun ThreadList(vm: MessagesViewModel, onOpen: (ThreadTarget) -> Unit) {
                 dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Cancel") } },
             )
         }
+        val contactSearch by vm.contactSearch.collectAsState()
+        val listState = rememberLazyListState()
+        // LazyColumn anchors on item keys, so changing the search leaves the list parked
+        // on whichever row was visible rather than at the first match. iOS starts at the
+        // top of every result set.
+        LaunchedEffect(contactSearch) { listState.scrollToItem(0) }
         Column(Modifier.fillMaxSize()) {
             // ChannelList / UserList: round back button, then the large title.
             RoundBackButton(onBack = { section = null }, modifier = Modifier.padding(start = 12.dp, top = 8.dp))
             Text(
-                if (open == "channels") "Channels" else "Direct Messages",
+                // UserList.navigationTitle is "Contacts (<count shown>)", so it tracks the
+                // search as well as the node DB.
+                if (open == "channels") "Channels" else "Contacts (${contacts.size})",
                 style = MaterialTheme.typography.headlineLarge,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 8.dp),
             )
+            if (open != "channels") {
+                SearchField(
+                    value = contactSearch,
+                    onValueChange = { vm.contactSearch.value = it },
+                    placeholder = "Find a contact",
+                )
+            }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            LazyColumn(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), state = listState) {
                 if (open == "channels") {
                     items(channels, key = { "c${it.index}" }) { channel ->
                         val name = channelDisplayName(channel)
@@ -246,7 +262,8 @@ private fun ThreadList(vm: MessagesViewModel, onOpen: (ThreadTarget) -> Unit) {
                     if (contacts.isEmpty()) {
                         item {
                             Text(
-                                "No conversations yet. Start one from the Nodes tab.",
+                                if (contactSearch.isNotBlank()) "No matching contacts"
+                                else "No contacts yet. Connect a radio to load its node list.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(16.dp),
@@ -489,6 +506,11 @@ private fun ThreadView(
     val tapbackList by tapbacks.collectAsState(initial = emptyList())
     val myNum by vm.myNodeNum.collectAsState()
     val listState = rememberLazyListState()
+    // Hoisted above the node-detail branch below, which returns early and takes the thread
+    // out of composition: state remembered further down would be discarded and the thread
+    // would come back scrolled to the bottom instead of where it was left.
+    var detailNode by rememberSaveable { mutableStateOf<Long?>(null) }
+    var lastScrolled by rememberSaveable { mutableStateOf(-1) }
     var replyTo by remember { mutableStateOf<ReplyContext?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
     // The delivery dialog is opened by the user from a message and held here, not in
@@ -504,8 +526,13 @@ private fun ThreadView(
     }
 
     LaunchedEffect(Unit) { onOpened() }
+    // Only a thread that actually grew scrolls to the end, so coming back from a node
+    // detail leaves the list where it was.
     LaunchedEffect(list.size) {
-        if (list.isNotEmpty() && query.isBlank()) listState.animateScrollToItem(list.size - 1)
+        if (list.isNotEmpty() && query.isBlank() && list.size != lastScrolled) {
+            lastScrolled = list.size
+            listState.animateScrollToItem(list.size - 1)
+        }
     }
     // Delivery status is derived from the send time, so re-evaluate it every half minute
     // and an unacknowledged send flips to "Not delivered" without leaving the thread.
@@ -515,6 +542,26 @@ private fun ThreadView(
             delay(30_000)
             now = System.currentTimeMillis()
         }
+    }
+
+    // ChannelMessageRow wraps the sender avatar in a NavigationLink to NodeDetail, pushed
+    // on the Messages stack: Back returns to this thread, not to the Nodes tab.
+    detailNode?.let { num ->
+        BackHandler { detailNode = null }
+        NodeDetailScreen(
+            nodeNum = num,
+            onBack = { detailNode = null },
+            onToggleFavorite = { vm.toggleFavorite(num) },
+            onToggleIgnore = { vm.toggleIgnored(num) },
+            isSelf = num == myNum,
+            onMessage = {
+                detailNode = null
+                if (target !is ThreadTarget.Direct || target.peerNum != num) {
+                    vm.openThread(ThreadTarget.Direct(num, "Node $num"))
+                }
+            },
+        )
+        return
     }
 
     // No imePadding here: the activity does not draw edge to edge, so the window itself
@@ -585,6 +632,7 @@ private fun ThreadView(
                     onShowStatus = { statusFor = message.messageId },
                     onRetry = { vm.retry(message) },
                     onDelete = { deleteFor = message.messageId },
+                    onOpenNode = { detailNode = message.fromNum },
                 )
             }
         }
@@ -648,6 +696,7 @@ private fun MessageRow(
     onShowStatus: () -> Unit,
     onRetry: () -> Unit,
     onDelete: () -> Unit,
+    onOpenNode: () -> Unit,
 ) {
     val status = if (mine) deliveryOf(message, isDirect, now) else null
     val sender by produceState<UserEntity?>(initialValue = null, message.fromNum) {
@@ -693,7 +742,15 @@ private fun MessageRow(
             if (mine) {
                 Spacer(Modifier.width(50.dp).weight(1f))
             } else {
-                NodeAvatar(sender?.shortName, message.fromNum, 50.dp, Modifier.padding(end = 10.dp, bottom = 6.dp))
+                NodeAvatar(
+                    sender?.shortName,
+                    message.fromNum,
+                    50.dp,
+                    Modifier
+                        .padding(end = 10.dp, bottom = 6.dp)
+                        .clip(CircleShape)
+                        .clickable(onClick = onOpenNode),
+                )
             }
             Column(horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
                 if (!mine) {

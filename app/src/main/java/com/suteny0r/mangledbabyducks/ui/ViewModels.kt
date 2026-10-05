@@ -314,6 +314,28 @@ class MessagesViewModel(app: Application) : AndroidViewModel(app) {
     val dmContacts: StateFlow<List<UserEntity>> = db.userDao().dmContacts()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /** UserList.swift .searchable("Find a contact"); matches the fields its filter does. */
+    val contactSearch = MutableStateFlow("")
+
+    /**
+     * Every contact a DM could be sent to: the whole node DB minus ignored nodes and our
+     * own radio, which iOS drops with `users.filter { $0.num != activeDeviceNum }`.
+     */
+    val contacts: StateFlow<List<UserEntity>> = combine(
+        db.userDao().allContacts(), container.radioManager.myNodeNum, contactSearch,
+    ) { users, me, query ->
+        val needle = query.trim().lowercase()
+        users.asSequence()
+            .filter { it.num != me }
+            .filter { user ->
+                needle.isEmpty() || sequenceOf(
+                    user.longName, user.shortName, user.userId,
+                    user.hwModel, user.hwDisplayName, user.num.toString(),
+                ).any { it?.lowercase()?.contains(needle) == true }
+            }
+            .toList()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val myNodeNum: StateFlow<Long> = container.radioManager.myNodeNum
 
     /** Row previews: newest message per channel and per DM peer, unread flags per thread. */
@@ -405,6 +427,31 @@ class MessagesViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     suspend fun userFor(num: Long): UserEntity? = db.userDao().get(num)
+
+    /**
+     * The message rows push NodeDetail (ChannelMessageRow's NavigationLink on the avatar),
+     * which needs the same favorite / ignore actions NodesScreen passes it. The current
+     * value is read from the row rather than hoisted, since the thread has no node list.
+     */
+    fun toggleFavorite(num: Long) {
+        viewModelScope.launch {
+            val next = !(db.nodeDao().get(num)?.favorite ?: false)
+            container.radioManager.setFavorite(num, next)
+            db.nodeDao().setFavorite(num, next)
+        }
+    }
+
+    fun toggleIgnored(num: Long) {
+        viewModelScope.launch {
+            val next = !(db.nodeDao().get(num)?.ignored ?: false)
+            container.radioManager.setIgnored(num, next)
+            db.nodeDao().setIgnored(num, next)
+        }
+    }
+
+    fun openThread(target: ThreadTarget) {
+        container.router.openThread(target)
+    }
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)

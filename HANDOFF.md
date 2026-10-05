@@ -16,6 +16,51 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Node detail from a message avatar + mesh notification icon (2026-10-05, installed)
+
+- Tapping a sender avatar in a channel or DM thread pushes `NodeDetailScreen` inside the
+  Messages tab, which is `ChannelMessageRow.swift`'s `NavigationLink(value: fromUser.num)`
+  around the `CircleText`. Back returns to the thread, not to the Nodes tab.
+- The thread keeps its scroll position across that excursion: `listState` and `detailNode`
+  are hoisted above the early return (same trap as the Nodes list), and the
+  scroll-to-bottom effect now fires only when the message count actually changed
+  (`lastScrolled`), not on every re-entry.
+- `MessagesViewModel` gained `toggleFavorite`, `toggleIgnored` and `openThread` so the
+  detail screen's actions work from a thread, where there is no node list to read the
+  current value from; both toggles read it from `nodeDao().get(num)`.
+- The status bar / notification small icon was still the old triangle glyph. New
+  `drawable/ic_notification.xml` (mesh constellation) is used by `MessageNotifier` and
+  `RadioService`, and `ic_launcher_foreground.xml` was rewritten as the same glyph, which
+  is now only the themed-icon monochrome layer.
+- A photo cannot be a notification small icon: Android renders it as an alpha mask and
+  tints it, so the launcher image collapses to a blob. The glyph is as close as it gets.
+- Still default: the shade avatars are grey circles, since `MessageNotifier` builds its
+  `Person` objects without icons.
+
+## Direct Messages is now the Contacts list (2026-10-05, installed and verified)
+User: the DM screen should be "Contacts (nnn)" with every known contact, history first,
+a last-message timestamp, and a search field, like UserList.swift (reference screenshot
+from the iPhone, 351 contacts).
+- `UserDao.allContacts()` (new): every user LEFT JOINed to nodes, ignored nodes dropped,
+  `ORDER BY lastMessage IS NULL, lastMessage DESC, LOWER(longName)` so threads with
+  history sort above the rest, which is the iOS @Query sort. The old
+  `dmContacts()` (history only) stays: Android Auto's `CarScreens` still uses it.
+- `MessagesViewModel.contacts` combines that with `myNodeNum` and the new
+  `contactSearch`, dropping our own radio the way iOS drops `activeDeviceNum`, and
+  matching the search against long name, short name, user id, hardware model and node
+  number (the fields `NodeFilterParameters.matches` uses).
+- The screen's title is "Contacts (N)" over the count actually shown, so it tracks the
+  search, and a "Find a contact" field sits under it. `ConversationRow` already drew the
+  iOS row (unread dot, avatar, lock glyph, name, timestamp, preview, chevron) and needed
+  no change; contacts with no history simply pass a null preview.
+- `SearchField` moved into Chrome.kt and is now shared with the Nodes list.
+- Not ported: the contact filter sheet (`NodeListFilter`) and the help sheet behind the
+  two floating buttons at the bottom of the iOS list.
+- Verified on the phone: 358 contacts, Spiney Norman and Spanky Ham on top with their
+  times and previews, the rest alphabetical; searching "0day" narrowed it to 4 including
+  a short-name match; opening a contact with no history gives an empty thread with the
+  composer.
+
 ## Connect tab rebuilt to match Connect.swift (2026-10-05, installed and verified)
 User: "the connect tab UI looks different than the iphone version" (reference: `1.jpg`).
 The working tree already had the ViewModel half of this (startScan/stopScan,
