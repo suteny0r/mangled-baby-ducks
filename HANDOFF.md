@@ -137,6 +137,12 @@ for the Android app to look like them, with the app's own icon as the title-bar 
   auto-scrolls the thread, which closed the dialog under the user. The dialog looks the
   message up fresh each composition (status updates live; closes if retry deleted it).
   "Try Again" is also in the bubble's long-press menu when the badge is retryable.
+- Delete messages (user asked whether iOS has it; it does, in ChannelList / UserList
+  contextMenu + MessageContextMenuItems): long-press a Channels or Direct Messages row
+  -> "Delete Messages" (only when the thread has any) -> "This conversation will be
+  deleted." confirm; long-press a bubble -> "Delete" -> confirm. Local only, like iOS:
+  `MessageDao.deleteChannelMessages` / `deleteDirectMessages` / `delete`; nothing goes
+  to the radio. Tapbacks on the deleted messages go with them.
 
 ## Release 0.2.0 (2026-10-04, tag v0.2.0, GitHub release with both APKs)
 - Version lives in `app/build.gradle.kts` (versionCode 2, versionName 0.2.0). Tag is

@@ -156,6 +156,14 @@ interface MessageDao {
     /** Retry drops the stuck row before re-sending the text as a new packet. */
     @Query("DELETE FROM messages WHERE messageId = :messageId")
     suspend fun delete(messageId: Long)
+
+    /** ChannelList "Delete Messages": this channel's local history, tapbacks included. */
+    @Query("DELETE FROM messages WHERE toNum IS NULL AND channel = :channel")
+    suspend fun deleteChannelMessages(channel: Int)
+
+    /** UserList "Delete Messages": every message to or from this node, tapbacks included. */
+    @Query("DELETE FROM messages WHERE toNum IS NOT NULL AND (fromNum = :peer OR toNum = :peer)")
+    suspend fun deleteDirectMessages(peer: Long)
 }
 
 @Dao

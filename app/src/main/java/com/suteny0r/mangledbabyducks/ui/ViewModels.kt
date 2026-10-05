@@ -323,6 +323,19 @@ class MessagesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Local purge only; nothing is sent to the radio or the mesh (UpdateSwiftData.swift). */
+    fun deleteChannelMessages(channel: Int) {
+        viewModelScope.launch { db.messageDao().deleteChannelMessages(channel) }
+    }
+
+    fun deleteDirectMessages(peer: Long) {
+        viewModelScope.launch { db.messageDao().deleteDirectMessages(peer) }
+    }
+
+    fun deleteMessage(messageId: Long) {
+        viewModelScope.launch { db.messageDao().delete(messageId) }
+    }
+
     /** RetryButton.swift: drop the stuck row and send the same text again as a new packet. */
     fun retry(message: MessageEntity) {
         viewModelScope.launch {

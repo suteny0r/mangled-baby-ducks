@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.AlertDialog
@@ -195,6 +196,25 @@ private fun ThreadList(vm: MessagesViewModel, onOpen: (ThreadTarget) -> Unit) {
         val dmPreviews by vm.dmPreviews.collectAsState()
         val unreadChannelSet by vm.unreadChannelSet.collectAsState()
         val unreadDmSet by vm.unreadDmSet.collectAsState()
+        // ChannelList / UserList confirmationDialog("This conversation will be deleted.").
+        var pendingDelete by remember { mutableStateOf<ThreadTarget?>(null) }
+        pendingDelete?.let { target ->
+            AlertDialog(
+                onDismissRequest = { pendingDelete = null },
+                title = { Text("This conversation will be deleted.") },
+                text = { Text("Only this phone's copy is removed. Other clients keep their history.") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        when (target) {
+                            is ThreadTarget.Channel -> vm.deleteChannelMessages(target.index)
+                            is ThreadTarget.Direct -> vm.deleteDirectMessages(target.peerNum)
+                        }
+                        pendingDelete = null
+                    }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                },
+                dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Cancel") } },
+            )
+        }
         Column(Modifier.fillMaxSize()) {
             // ChannelList / UserList: round back button, then the large title.
             RoundBackButton(onBack = { section = null }, modifier = Modifier.padding(start = 12.dp, top = 8.dp))
@@ -217,6 +237,9 @@ private fun ThreadList(vm: MessagesViewModel, onOpen: (ThreadTarget) -> Unit) {
                             preview = channelPreviews[channel.index],
                             muted = channel.mute,
                             onClick = { onOpen(ThreadTarget.Channel(channel.index, name)) },
+                            onDelete = if (channelPreviews[channel.index] != null) {
+                                { pendingDelete = ThreadTarget.Channel(channel.index, name) }
+                            } else null,
                         )
                     }
                 } else {
@@ -240,6 +263,9 @@ private fun ThreadList(vm: MessagesViewModel, onOpen: (ThreadTarget) -> Unit) {
                             preview = dmPreviews[user.num],
                             muted = user.mute,
                             onClick = { onOpen(ThreadTarget.Direct(user.num, name)) },
+                            onDelete = if (dmPreviews[user.num] != null) {
+                                { pendingDelete = ThreadTarget.Direct(user.num, name) }
+                            } else null,
                         )
                     }
                 }
@@ -323,6 +349,7 @@ private fun SectionRow(icon: ImageVector, title: String, badge: Int, onClick: ()
  * ChannelList / UserList row: unread dot, avatar, lock + bold name with the time at the
  * trailing edge, the last message preview beneath, chevron.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ConversationRow(
     unread: Boolean,
@@ -332,11 +359,28 @@ private fun ConversationRow(
     preview: MessageEntity?,
     muted: Boolean,
     onClick: () -> Unit,
+    onDelete: (() -> Unit)? = null,
 ) {
+    // iOS row contextMenu: Delete Messages (destructive) when the thread has any.
+    var menu by remember { mutableStateOf(false) }
+    Box {
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            if (onDelete != null) {
+                DropdownMenuItem(
+                    text = { Text("Delete Messages", color = MaterialTheme.colorScheme.error) },
+                    leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                    onClick = {
+                        menu = false
+                        onDelete()
+                    },
+                )
+            }
+        }
+    }
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = { if (onDelete != null) menu = true })
             .padding(start = 12.dp, end = 12.dp, top = 14.dp, bottom = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -451,6 +495,7 @@ private fun ThreadView(
     // the row: LazyColumn discards a row's state when it scrolls off, which happened
     // whenever a new message auto-scrolled the thread while the dialog was up.
     var statusFor by rememberSaveable { mutableStateOf<Long?>(null) }
+    var deleteFor by rememberSaveable { mutableStateOf<Long?>(null) }
 
     val byId = remember(list) { list.associateBy { it.messageId } }
     val tapbacksByTarget = remember(tapbackList) { tapbackList.groupBy { it.replyId } }
@@ -539,8 +584,22 @@ private fun ThreadView(
                     },
                     onShowStatus = { statusFor = message.messageId },
                     onRetry = { vm.retry(message) },
+                    onDelete = { deleteFor = message.messageId },
                 )
             }
+        }
+        deleteFor?.let { id ->
+            AlertDialog(
+                onDismissRequest = { deleteFor = null },
+                title = { Text("Are you sure you want to delete this message?") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        vm.deleteMessage(id)
+                        deleteFor = null
+                    }) { Text("Delete Message", color = MaterialTheme.colorScheme.error) }
+                },
+                dismissButton = { TextButton(onClick = { deleteFor = null }) { Text("Cancel") } },
+            )
         }
         statusFor?.let { id ->
             // The row's message is looked up fresh so the dialog reflects the latest ack,
@@ -588,6 +647,7 @@ private fun MessageRow(
     onReply: () -> Unit,
     onShowStatus: () -> Unit,
     onRetry: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     val status = if (mine) deliveryOf(message, isDirect, now) else null
     val sender by produceState<UserEntity?>(initialValue = null, message.fromNum) {
@@ -645,7 +705,7 @@ private fun MessageRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Bubble(message, mine, onTapback, onReply, onRetry = if (status?.canRetry == true) onRetry else null)
+                Bubble(message, mine, onTapback, onReply, onRetry = if (status?.canRetry == true) onRetry else null, onDelete = onDelete)
                 if (tapbacks.isNotEmpty()) {
                     TapbackPill(tapbacks, vm)
                 }
@@ -667,6 +727,7 @@ private fun Bubble(
     onTapback: (String) -> Unit,
     onReply: () -> Unit,
     onRetry: (() -> Unit)? = null,
+    onDelete: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     Box {
@@ -717,6 +778,14 @@ private fun Bubble(
                     },
                 )
             }
+            DropdownMenuItem(
+                text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                onClick = {
+                    menuOpen = false
+                    onDelete()
+                },
+            )
         }
     }
 }
