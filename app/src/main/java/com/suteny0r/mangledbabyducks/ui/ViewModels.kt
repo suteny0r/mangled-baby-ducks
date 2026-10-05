@@ -323,6 +323,24 @@ class MessagesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** RetryButton.swift: drop the stuck row and send the same text again as a new packet. */
+    fun retry(message: MessageEntity) {
+        viewModelScope.launch {
+            val text = message.payload ?: return@launch
+            db.messageDao().delete(message.messageId)
+            val to = message.toNum
+            if (to == null) {
+                container.radioManager.sendTextMessage(
+                    text, channel = message.channel, replyId = message.replyId, isEmoji = message.isEmoji,
+                )
+            } else {
+                container.radioManager.sendTextMessage(
+                    text, toNum = to, replyId = message.replyId, isEmoji = message.isEmoji,
+                )
+            }
+        }
+    }
+
     fun markDmRead(peer: Long) {
         viewModelScope.launch {
             db.messageDao().markDmRead(container.radioManager.myNodeNum.value, peer)

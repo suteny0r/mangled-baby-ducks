@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -53,6 +54,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
@@ -85,7 +87,9 @@ import com.suteny0r.mangledbabyducks.radio.MeshProtocol
 import com.suteny0r.mangledbabyducks.ui.theme.IosGreen
 import com.suteny0r.mangledbabyducks.ui.theme.IosOrange
 import com.suteny0r.mangledbabyducks.ui.theme.IosRed
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import org.meshtastic.proto.MeshProtos
 
 /*
  * Port of the iOS Messages stack: Messages.swift (two-row sidebar), ChannelList.swift and
@@ -102,6 +106,9 @@ private const val CHANNEL_AVATAR_NUM = 0x5E8BE6L
 
 /** CircleText(..., color: .accentColor) at full strength: the thread's principal avatar. */
 private const val ACCENT_NUM = 0x2855A8L
+
+/** MessageEntity.sendAckTimeout: generous so a slow multi-hop mesh does not trip it. */
+private const val SEND_ACK_TIMEOUT_MS = 5 * 60 * 1000L
 
 private val ThreadSaver = Saver<ThreadTarget?, String>(
     save = {
@@ -450,6 +457,15 @@ private fun ThreadView(
     LaunchedEffect(list.size) {
         if (list.isNotEmpty() && query.isBlank()) listState.animateScrollToItem(list.size - 1)
     }
+    // Delivery status is derived from the send time, so re-evaluate it every half minute
+    // and an unacknowledged send flips to "Not delivered" without leaving the thread.
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(30_000)
+            now = System.currentTimeMillis()
+        }
+    }
 
     // No imePadding here: the activity does not draw edge to edge, so the window itself
     // shrinks for the keyboard. Padding on top of that pushed the header and the whole
@@ -506,6 +522,7 @@ private fun ThreadView(
                     previous = previous,
                     mine = message.fromNum == myNum,
                     isDirect = target is ThreadTarget.Direct,
+                    now = now,
                     vm = vm,
                     repliedPreview = if (message.replyId > 0) {
                         byId[message.replyId]?.payload ?: "EMPTY MESSAGE"
@@ -539,6 +556,7 @@ private fun MessageRow(
     previous: MessageEntity?,
     mine: Boolean,
     isDirect: Boolean,
+    now: Long,
     vm: MessagesViewModel,
     repliedPreview: String?,
     tapbacks: List<MessageEntity>,
@@ -605,7 +623,7 @@ private fun MessageRow(
                     TapbackPill(tapbacks, vm)
                 }
                 if (mine) {
-                    DeliveryStatus(message, isDirect)
+                    DeliveryStatus(message, isDirect, now, onRetry = { vm.retry(message) })
                 }
             }
             if (!mine) Spacer(Modifier.width(50.dp).weight(1f))
@@ -686,21 +704,86 @@ private fun TapbackPill(tapbacks: List<MessageEntity>, vm: MessagesViewModel) {
     }
 }
 
-/** MessageDeliveryStatusLabel under our own bubbles. */
+/** MessageDeliveryStatus.swift: what the radio has told us about one of our sends. */
+private data class Delivery(
+    val icon: ImageVector,
+    val text: String,
+    val detail: String,
+    val tint: Color,
+    val canRetry: Boolean,
+)
+
+/**
+ * MessageEntity.deliveryStatus(isDirectMessage:). The radio acks or naks a wantAck
+ * message within its retransmit window; past [SEND_ACK_TIMEOUT_MS] with nothing back the
+ * ack never reached the app (weak or absent mesh, or we were disconnected when it
+ * arrived), so the row becomes retryable instead of an endless "Sending...".
+ */
 @Composable
-private fun DeliveryStatus(message: MessageEntity, isDirect: Boolean) {
+private fun deliveryOf(message: MessageEntity, isDirect: Boolean, now: Long): Delivery {
     val secondary = MaterialTheme.colorScheme.onSurfaceVariant
-    val (icon, text, tint) = when {
-        message.ackError != 0 -> Triple(Icons.Filled.Error, "Not delivered", IosOrange)
-        message.realAck -> Triple(Icons.Filled.CheckCircle, if (isDirect) "Delivered" else "Delivered to mesh", secondary)
-        message.receivedAck && isDirect -> Triple(Icons.Filled.Error, "Relayed, not confirmed by recipient", IosOrange)
-        message.receivedAck -> Triple(Icons.Filled.CheckCircle, "Delivered to mesh", secondary)
-        else -> Triple(Icons.Filled.Schedule, "Sending...", IosOrange)
+    return when {
+        message.receivedAck && isDirect && message.realAck -> Delivery(
+            Icons.Filled.CheckCircle, "Delivered", "The recipient confirmed this message.", secondary, false,
+        )
+        message.receivedAck && isDirect -> Delivery(
+            Icons.Filled.Error, "Relayed, not confirmed by recipient",
+            "A node relayed this message, but the recipient has not confirmed it.", IosOrange, true,
+        )
+        message.receivedAck -> Delivery(
+            Icons.Filled.CheckCircle, "Delivered to mesh", "A node on the mesh confirmed this message.", secondary, false,
+        )
+        message.ackError != 0 -> Delivery(
+            Icons.Filled.Error, "Not delivered: ${routingErrorLabel(message.ackError)}",
+            "The radio reported a delivery error.", IosOrange, true,
+        )
+        message.timestamp > 0 && now - message.timestamp > SEND_ACK_TIMEOUT_MS -> Delivery(
+            Icons.Filled.Error, "Not delivered",
+            "The mesh never acknowledged this message. Coverage may be weak or absent, or the app was disconnected when the reply came.",
+            IosOrange, true,
+        )
+        else -> Delivery(
+            Icons.Filled.Schedule, "Sending...", "Waiting for the mesh to acknowledge this message.", IosOrange, false,
+        )
     }
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(12.dp))
+}
+
+/** Routing.Error names as the iOS RoutingError descriptions read, lowercased. */
+private fun routingErrorLabel(code: Int): String =
+    MeshProtos.Routing.Error.forNumber(code)?.name?.lowercase()?.replace('_', ' ') ?: "error $code"
+
+/** MessageDeliveryStatusLabel + RetryButton: tap the status for details and Try Again. */
+@Composable
+private fun DeliveryStatus(message: MessageEntity, isDirect: Boolean, now: Long, onRetry: () -> Unit) {
+    val status = deliveryOf(message, isDirect, now)
+    var showDetails by remember { mutableStateOf(false) }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .padding(top = 2.dp)
+            .clickable { showDetails = true },
+    ) {
+        Icon(status.icon, contentDescription = null, tint = status.tint, modifier = Modifier.size(12.dp))
         Spacer(Modifier.width(3.dp))
-        Text(text, style = MaterialTheme.typography.labelSmall, color = tint)
+        Text(status.text, style = MaterialTheme.typography.labelSmall, color = status.tint)
+    }
+    if (showDetails) {
+        AlertDialog(
+            onDismissRequest = { showDetails = false },
+            title = { Text(status.text) },
+            text = { Text(status.detail) },
+            confirmButton = {
+                if (status.canRetry) {
+                    TextButton(onClick = {
+                        showDetails = false
+                        onRetry()
+                    }) { Text("Try Again") }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDetails = false }) { Text(if (status.canRetry) "Cancel" else "OK") }
+            },
+        )
     }
 }
 

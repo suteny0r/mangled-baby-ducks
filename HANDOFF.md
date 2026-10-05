@@ -120,8 +120,18 @@ for the Android app to look like them, with the app's own icon as the title-bar 
   rx_time only when it is more than 10 min old (a store-and-forward replay keeps its
   place). Per-bubble times were added and then removed at the user's request: the iOS
   hour-gap headers are the only timestamps, and that is the wanted behavior.
-- To verify: install, open a thread, send from Spiney Norman on COM3 to !0f352b79, and
-  check the new bubble lands last with a time under it.
+- Verified on the phone with DMs from Spanky Ham over TCP (COM3 was absent): Spanky,
+  phone reply, phone reply, Spanky, in that order, the last stamped by the phone clock.
+- Also fixed on the way: the thread view had `imePadding()` on top of the window's own
+  resize, so the keyboard pushed the header and list off the top; removed.
+- Stuck "Sending..." (user report, weak/absent coverage): ported
+  `MessageEntity.deliveryStatus` + `sendAckTimeout` (5 min) and `RetryButton.swift`.
+  No ack and no nak past 5 min renders "Not delivered"; a nak renders
+  "Not delivered: <routing error>"; a DM with only an implicit ack renders "Relayed,
+  not confirmed by recipient". Tapping the status opens the detail dialog with
+  "Try Again", which deletes the row (`MessageDao.delete`) and re-sends the text as a
+  new packet (`MessagesViewModel.retry`). The thread re-evaluates every 30 s so the
+  flip happens without leaving. Verified on the stuck 8:10 AM channel message.
 
 ## Release 0.2.0 (2026-10-04, tag v0.2.0, GitHub release with both APKs)
 - Version lives in `app/build.gradle.kts` (versionCode 2, versionName 0.2.0). Tag is

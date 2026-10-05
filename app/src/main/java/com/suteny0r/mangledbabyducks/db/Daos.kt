@@ -152,6 +152,10 @@ interface MessageDao {
 
     @Query("SELECT * FROM messages WHERE messageId = :messageId")
     suspend fun get(messageId: Long): MessageEntity?
+
+    /** Retry drops the stuck row before re-sending the text as a new packet. */
+    @Query("DELETE FROM messages WHERE messageId = :messageId")
+    suspend fun delete(messageId: Long)
 }
 
 @Dao
