@@ -8,7 +8,17 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.filled.Info
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -248,6 +258,11 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
     // Re-apply the style (and our layers on top of it) whenever the toggle flips.
     LaunchedEffect(satellite) {
         mapView.getMapAsync { map ->
+            // The attribution chip below replaces MapLibre's bottom-start logo and "i"
+            // button, which it would otherwise overlap. MapLibre itself is credited in
+            // Settings > About and licenses.
+            map.uiSettings.isLogoEnabled = false
+            map.uiSettings.isAttributionEnabled = false
             val builder = if (satellite) {
                 Style.Builder().fromJson(SATELLITE_STYLE_JSON)
             } else {
@@ -341,8 +356,18 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
         ) {
             Icon(Icons.Default.Layers, contentDescription = "Toggle satellite/streets")
         }
-        // Bottom-end so it does not collide with MapLibre's own logo and "i" button at
-        // bottom-start. Tapping opens the data provider's copyright page.
+        // Compact attribution: the full credit shows for 10 s after each layer change,
+        // then collapses to an info icon so it stops covering the map. The icon stays
+        // because OpenStreetMap and Esri both require credit on the map itself; tapping
+        // it re-expands the text, and tapping the text opens the provider's page.
+        var attributionExpanded by remember { mutableStateOf(true) }
+        LaunchedEffect(satellite) { attributionExpanded = true }
+        LaunchedEffect(attributionExpanded, satellite) {
+            if (attributionExpanded) {
+                delay(10_000)
+                attributionExpanded = false
+            }
+        }
         Surface(
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
             shape = MaterialTheme.shapes.extraSmall,
@@ -350,17 +375,37 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
                 .align(Alignment.BottomEnd)
                 .padding(4.dp)
                 .clickable {
-                    openUrl(
-                        context,
-                        if (satellite) SATELLITE_ATTRIBUTION_URL else STREETS_ATTRIBUTION_URL,
-                    )
+                    if (attributionExpanded) {
+                        openUrl(
+                            context,
+                            if (satellite) SATELLITE_ATTRIBUTION_URL else STREETS_ATTRIBUTION_URL,
+                        )
+                    } else {
+                        attributionExpanded = true
+                    }
                 },
         ) {
-            Text(
-                if (satellite) SATELLITE_ATTRIBUTION else STREETS_ATTRIBUTION,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+            ) {
+                Icon(
+                    Icons.Default.Info,
+                    contentDescription = "Map attribution",
+                    modifier = Modifier.size(16.dp),
+                )
+                AnimatedVisibility(
+                    visible = attributionExpanded,
+                    enter = fadeIn() + expandHorizontally(),
+                    exit = fadeOut(tween(600)) + shrinkHorizontally(tween(600)),
+                ) {
+                    Text(
+                        if (satellite) SATELLITE_ATTRIBUTION else STREETS_ATTRIBUTION,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(start = 4.dp, end = 2.dp),
+                    )
+                }
+            }
         }
         if (route.nodes.isNotEmpty()) {
             SmallFloatingActionButton(

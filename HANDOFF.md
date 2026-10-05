@@ -16,7 +16,7 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
-## Licensing, trademark and attribution for a Play release (2026-10-04, built, NOT installed, phone not attached)
+## Licensing, trademark and attribution for a Play release (2026-10-04, installed and clicked through)
 Prompted by a release-risk review. The app is a derivative of GPL-3.0 Meshtastic-Apple and
 bundles GPL-3.0 protobufs, and until this round the repo had no license at all.
 - Root `LICENSE` (verbatim GPLv3, byte-identical to gnu.org), root `NOTICE` (derivation
@@ -32,15 +32,18 @@ bundles GPL-3.0 protobufs, and until this round the repo had no license at all.
   both require the text to ship with the binary).
 - Settings footer now reads "an independent client compatible with Meshtastic® devices.
   Not affiliated with or endorsed by Meshtastic LLC."
-- Map: visible attribution chip at bottom-end that flips with the layer (OpenFreeMap /
-  OpenMapTiles / OpenStreetMap for streets, full Esri World Imagery string for satellite)
-  and opens the provider's copyright page. The openfreemap liberty style declares no
-  source attribution, so MapLibre's own "i" control showed nothing for streets.
+- Map: compact attribution chip at bottom-end. Full credit shows for 10 s after each
+  layer change (OpenFreeMap / OpenMapTiles / OpenStreetMap for streets, full Esri World
+  Imagery string for satellite), then collapses to an info icon; tap the icon to expand,
+  tap the text to open the provider's copyright page. MapLibre's own logo and "i"
+  button are disabled (the chip overlapped them, and the liberty style declares no
+  source attribution so the "i" showed nothing for streets). The user asked for a fade
+  after 10 s; the icon stays because OSM and Esri require credit on the map itself.
 - Still open: Esri World Imagery is attributed but the user has to decide whether use
   outside ArcGIS is acceptable under Esri's terms or drop the layer. Play also needs a
   privacy policy URL (location + Bluetooth permissions); none is written yet.
-- Verified: builds clean. Not installed (phone not attached). About screen and map chip not yet
-  clicked through.
+- Verified on the phone: Settings footer, About screen, GPL text view, third-party
+  notices view, map chip expanded and collapsed on both layers. No crashes in logcat.
 
 ## Public-key self-healing, round 2 (2026-09-19 evening, INSTALLED; Accept test interrupted)
 Refined after reading meshtastic/firmware master (Router.cpp, ReliableRouter.cpp, NodeDB.cpp,

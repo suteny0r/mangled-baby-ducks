@@ -66,19 +66,7 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
     val connected = state is RadioState.Subscribed
 
     if (showAbout) {
-        BackHandler { showAbout = false }
-        Column(Modifier.fillMaxSize()) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
-            ) {
-                IconButton(onClick = { showAbout = false }) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                }
-                Text("About and licenses", style = MaterialTheme.typography.headlineSmall)
-            }
-            AboutScreen()
-        }
+        AboutScreen(onBack = { showAbout = false })
         return
     }
 

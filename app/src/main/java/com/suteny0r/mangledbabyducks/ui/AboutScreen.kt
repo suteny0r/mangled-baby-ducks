@@ -85,8 +85,9 @@ private val MAP_DATA = listOf(
         "https://www.esri.com"),
 )
 
+/** Full-screen About page with its own back header; [onBack] returns to Settings. */
 @Composable
-fun AboutScreen() {
+fun AboutScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val version = remember {
         runCatching {
@@ -95,11 +96,14 @@ fun AboutScreen() {
     }
     var doc by rememberSaveable { mutableStateOf<AboutDoc?>(null) }
 
+    // One header at a time: a bundled document replaces the About page rather than
+    // stacking a second back arrow under the first.
     doc?.let { open ->
         BackHandler { doc = null }
         AssetTextScreen(open, onBack = { doc = null })
         return
     }
+    BackHandler(onBack = onBack)
 
     Column(
         Modifier
@@ -108,6 +112,12 @@ fun AboutScreen() {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            }
+            Text("About and licenses", style = MaterialTheme.typography.headlineSmall)
+        }
         Text("Mangled Baby Ducks", style = MaterialTheme.typography.titleLarge)
         Text("Version $version", style = MaterialTheme.typography.bodyMedium)
         Text(
@@ -206,12 +216,12 @@ private fun AssetTextScreen(doc: AboutDoc, onBack: () -> Unit) {
     Column(Modifier.fillMaxSize()) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp),
         ) {
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
             }
-            Text(doc.title, style = MaterialTheme.typography.titleMedium)
+            Text(doc.title, style = MaterialTheme.typography.titleLarge)
         }
         val body = text
         if (body == null) {
