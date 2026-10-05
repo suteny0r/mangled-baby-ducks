@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -194,25 +195,30 @@ private fun RxTxIndicator(connected: Boolean) {
             }
         }
         if (popup) {
-            Popup(alignment = Alignment.TopEnd, offset = IntOffset(0, 80), onDismissRequest = { popup = false }) {
+            // iOS popover: a small card hanging just under the widget, sized to its text.
+            Popup(alignment = Alignment.TopCenter, offset = IntOffset(0, 72), onDismissRequest = { popup = false }) {
                 Surface(
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(12.dp),
                     color = MaterialTheme.colorScheme.surface,
-                    shadowElevation = 6.dp,
-                    modifier = Modifier.clickable { popup = false },
+                    shadowElevation = 8.dp,
+                    modifier = Modifier
+                        .width(IntrinsicSize.Max)
+                        .clickable { popup = false },
                 ) {
-                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("Packet Count", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                        HorizontalDivider()
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                            LedIndicator(flash = sent, color = IosGreen)
-                            Icon(Icons.Filled.ArrowUpward, contentDescription = null, tint = arrow, modifier = Modifier.size(9.dp))
-                            Text("To Radio (TX): $sent", style = MaterialTheme.typography.labelSmall)
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                            LedIndicator(flash = received, color = IosRed)
-                            Icon(Icons.Filled.ArrowDownward, contentDescription = null, tint = arrow, modifier = Modifier.size(9.dp))
-                            Text("From Radio (RX): $received", style = MaterialTheme.typography.labelSmall)
+                    Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("Packet Count", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                LedIndicator(flash = sent, color = IosGreen)
+                                Icon(Icons.Filled.ArrowUpward, contentDescription = null, tint = arrow, modifier = Modifier.size(9.dp))
+                                Text("To Radio (TX): $sent", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                LedIndicator(flash = received, color = IosRed)
+                                Icon(Icons.Filled.ArrowDownward, contentDescription = null, tint = arrow, modifier = Modifier.size(9.dp))
+                                Text("From Radio (RX): $received", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                            }
                         }
                     }
                 }
