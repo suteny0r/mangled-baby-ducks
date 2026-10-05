@@ -16,6 +16,33 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Per-message security flags and badges (2026-10-05, installed and verified)
+
+- `messages` gained `pkiEncrypted` and `xeddsaSigned` behind `MIGRATION_5_6` (two more
+  additive ALTER TABLEs). Verified in place: user_version 6, 687 messages / 203 nodes /
+  362 users, nothing lost.
+- Ingest sets `xeddsaSigned = packet.xeddsaSigned && isBroadcast` (firmware only signs
+  broadcasts; our own broadcast test is the gate so a stray flag cannot shield a DM) and
+  `pkiEncrypted = packet.pkiEncrypted && sender is a known PKI user`. The Swift original
+  reads `fromUser?.pkiEncrypted ?? false && packet.pkiEncrypted`, where `&&` binds tighter
+  than `??`, so its packet term is dead; we implement the intent and say so at the site.
+- `RadioManager.sendTextMessage` marks our own DM row encrypted when we hold the
+  recipient's key. Still unported: the outbound `packet.pkiEncrypted` / `publicKey` that
+  iOS sets, which changes what the firmware is asked to do.
+- Message Details shows "Encrypted" and "Signed · verified" above Channel, and `Bubble`
+  draws MessageText's corner badges (white glyph on a green disc, bottom trailing). The
+  store-and-forward envelope and translate badges are not ported.
+- Verified encrypted end to end with a DM from Spiney Norman: stored pkiEncrypted=1,
+  xeddsaSigned=0, lock disc on the bubble, "Encrypted" + SNR/RSSI in the dialog. **The
+  signed shield is unverified**: no radio in range signs broadcasts (one node in the whole
+  DB has ever been seen signing), so that path has code but no evidence.
+- Old rows migrate in as false. These flags only exist in the packet at receive time, so
+  they are truthful only for traffic arriving after this build.
+- Fixed while testing: a DM thread opened before the handshake stayed empty forever.
+  `directMessages` / `directTapbacks` sampled `myNodeNum.value` once, so a thread opened at
+  0 queried node 0 for good. Both now `flatMapLatest` over `myNodeNum`; `markDmRead` waits
+  for a nonzero number.
+
 ## Delivery status matched to iOS, with the first real Room migration (2026-10-05, installed and verified)
 
 - `ui/RoutingError.kt` ports RoutingError.swift: per-error label, explanation and

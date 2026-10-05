@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -42,6 +43,7 @@ import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Info
@@ -846,6 +848,15 @@ private fun Bubble(
                 .combinedClickable(onClick = {}, onLongClick = { menuOpen = true })
                 .padding(horizontal = 12.dp, vertical = 10.dp),
         )
+        // MessageText.cornerBadges: a white glyph on a green disc, hung off the bubble's
+        // bottom trailing corner. Affirmative only, so plain traffic carries nothing.
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            modifier = Modifier.align(Alignment.BottomEnd).offset(x = 7.dp, y = 7.dp),
+        ) {
+            if (message.pkiEncrypted) CornerBadge(Icons.Filled.Lock, "Encrypted")
+            if (message.xeddsaSigned) CornerBadge(Icons.Filled.VerifiedUser, "Signed, verified")
+        }
         // MessageContextMenuItems: the tapback strip, then Reply.
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             Row(Modifier.padding(horizontal = 8.dp)) {
@@ -897,6 +908,29 @@ private fun Bubble(
                 },
             )
         }
+    }
+}
+
+/** One corner badge: the glyph knocked out of a filled green disc, as the SF palette style draws it. */
+@Composable
+private fun CornerBadge(icon: ImageVector, label: String) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(20.dp)
+            .background(IosGreen, CircleShape)
+            .border(1.5.dp, MaterialTheme.colorScheme.background, CircleShape),
+    ) {
+        Icon(icon, contentDescription = label, tint = Color.White, modifier = Modifier.size(12.dp))
+    }
+}
+
+/** A labelled line in the details dialog, the shape of SwiftUI's Label(_:systemImage:). */
+@Composable
+private fun IconLine(icon: ImageVector, text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Icon(icon, contentDescription = null, tint = IosGreen, modifier = Modifier.size(16.dp))
+        Text(text)
     }
 }
 
@@ -1028,6 +1062,14 @@ private fun MessageDetailsDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(detailTimestamp(message.timestamp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // The static header of the iOS context menu: Encrypted, Signed · verified,
+                // Channel. Affirmative only, as there it shows nothing for plain traffic.
+                if (message.pkiEncrypted) {
+                    IconLine(Icons.Filled.Lock, "Encrypted")
+                }
+                if (message.xeddsaSigned) {
+                    IconLine(Icons.Filled.VerifiedUser, "Signed · verified")
+                }
                 Text("Channel: ${message.channel}")
                 relay?.let {
                     // "Ack Relay:" once the recipient itself confirmed, plain "Relay:" while

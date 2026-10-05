@@ -216,6 +216,11 @@ class PacketIngest(private val db: MeshDatabase) {
         val to = packet.to.uint()
         val isBroadcast = to == MeshProtocol.BROADCAST_NUM
         val isFromSelf = from == myNum
+        // MeshPackets.swift:1437: a message counts as encrypted only when the sender is a
+        // PKI user we already hold a key for. (The Swift line reads
+        // `fromUser?.pkiEncrypted ?? false && packet.pkiEncrypted`, where && binds tighter
+        // than ??, so its packet term is dead; the packet is tested here as intended.)
+        val pkiEncrypted = packet.pkiEncrypted && db.userDao().get(from)?.pkiEncrypted == true
         val message = MessageEntity(
             messageId = messageId,
             fromNum = from,
@@ -229,6 +234,10 @@ class PacketIngest(private val db: MeshDatabase) {
             replyId = packet.decoded.replyId.uint(),
             snr = packet.rxSnr,
             rssi = packet.rxRssi,
+            pkiEncrypted = pkiEncrypted,
+            // Firmware only signs broadcasts; gate on our own broadcast test as well so a
+            // stray or spoofed flag can never put the verified shield on a DM.
+            xeddsaSigned = packet.xeddsaSigned && isBroadcast,
         )
         // Dedupe on messageId: the radio echoes our own TX back and a second insert
         // would reset read/ack state and fire a phantom notification.

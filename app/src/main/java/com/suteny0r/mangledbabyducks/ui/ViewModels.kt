@@ -301,6 +301,7 @@ class NodesViewModel(app: Application) : AndroidViewModel(app) {
     }
 }
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class MessagesViewModel(app: Application) : AndroidViewModel(app) {
     private val container = app.container
     private val db = container.database
@@ -357,13 +358,18 @@ class MessagesViewModel(app: Application) : AndroidViewModel(app) {
 
     fun channelMessages(channel: Int) = db.messageDao().channelMessages(channel)
 
-    fun directMessages(peer: Long) =
-        db.messageDao().directMessages(container.radioManager.myNodeNum.value, peer)
+    /**
+     * Keyed on our own node number as it changes, not on its value when the thread opened:
+     * a thread opened while the radio was down sampled 0 and stayed empty for good, even
+     * after the handshake supplied the real number.
+     */
+    fun directMessages(peer: Long) = container.radioManager.myNodeNum
+        .flatMapLatest { db.messageDao().directMessages(it, peer) }
 
     fun channelTapbacks(channel: Int) = db.messageDao().channelTapbacks(channel)
 
-    fun directTapbacks(peer: Long) =
-        db.messageDao().directTapbacks(container.radioManager.myNodeNum.value, peer)
+    fun directTapbacks(peer: Long) = container.radioManager.myNodeNum
+        .flatMapLatest { db.messageDao().directTapbacks(it, peer) }
 
     fun sendToChannel(text: String, channel: Int, replyId: Long = 0, isEmoji: Boolean = false) {
         viewModelScope.launch {
@@ -422,7 +428,9 @@ class MessagesViewModel(app: Application) : AndroidViewModel(app) {
 
     fun markDmRead(peer: Long) {
         viewModelScope.launch {
-            db.messageDao().markDmRead(container.radioManager.myNodeNum.value, peer)
+            // Same trap as directMessages: opening a thread before the handshake would
+            // mark node 0's rows read and leave the badge up.
+            db.messageDao().markDmRead(container.radioManager.myNodeNum.first { it != 0L }, peer)
             container.messageNotifier.dismiss(ThreadTarget.Direct(peer, ""))
         }
     }

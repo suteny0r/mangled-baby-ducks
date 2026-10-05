@@ -81,6 +81,10 @@ data class MessageEntity(
     val ackSnr: Float = 0f,
     val snr: Float = 0f,
     val rssi: Int = 0,
+    /** A PKI-encrypted DM from a sender whose key we hold (MeshPackets.swift:1437). */
+    val pkiEncrypted: Boolean = false,
+    /** A radio-verified XEdDSA signature; firmware only signs broadcasts, so DMs never set it. */
+    val xeddsaSigned: Boolean = false,
     /** MeshPacket.relayNode from the last routing reply: the low byte of a relaying node. */
     val relayNode: Long = 0,
     /** How many clean routing replies this send drew, which is how many nodes relayed it. */

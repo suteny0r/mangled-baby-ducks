@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TracerouteEntity::class,
         WaypointEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class MeshDatabase : RoomDatabase() {
@@ -48,9 +48,17 @@ abstract class MeshDatabase : RoomDatabase() {
             }
         }
 
+        /** The per-message security flags, additive like MIGRATION_4_5 and equally cheap. */
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN pkiEncrypted INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE messages ADD COLUMN xeddsaSigned INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun build(context: Context): MeshDatabase =
             Room.databaseBuilder(context, MeshDatabase::class.java, "mesh.db")
-                .addMigrations(MIGRATION_4_5)
+                .addMigrations(MIGRATION_4_5, MIGRATION_5_6)
                 .fallbackToDestructiveMigration()
                 .build()
     }

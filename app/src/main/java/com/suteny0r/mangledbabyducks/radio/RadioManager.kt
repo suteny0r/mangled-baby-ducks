@@ -578,6 +578,9 @@ class RadioManager(
         if (payload.size > MeshProtocol.MAX_TEXT_BYTES) return false
 
         val messageId = Random.nextLong(255L, 0xFFFFFFFFL)
+        // AccessoryManager+ToRadio: our own DM row is marked encrypted when we hold the
+        // recipient's key, which is what the firmware will use to encrypt it.
+        val pkiEncrypted = toNum != null && db.userDao().get(toNum)?.pkiEncrypted == true
         db.messageDao().insertIgnore(
             MessageEntity(
                 messageId = messageId,
@@ -590,6 +593,7 @@ class RadioManager(
                 read = true,
                 isEmoji = isEmoji,
                 replyId = replyId,
+                pkiEncrypted = pkiEncrypted,
             )
         )
         if (toNum != null) db.userDao().touchLastMessage(toNum, System.currentTimeMillis())
