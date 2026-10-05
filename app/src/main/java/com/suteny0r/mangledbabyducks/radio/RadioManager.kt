@@ -292,6 +292,9 @@ class RadioManager(
             runCatching {
                 db.positionDao().prune(cutoff)
                 db.telemetryDao().prune(cutoff)
+                // History whose node row is gone (radio switch, removed node) is noise.
+                db.positionDao().pruneOrphans()
+                db.telemetryDao().pruneOrphans()
             }
 
             if (conn.requiresPeriodicHeartbeat) startPeriodicHeartbeat()
@@ -880,6 +883,8 @@ class RadioManager(
         if (sent) {
             db.nodeDao().delete(removedNodeNum)
             db.userDao().delete(removedNodeNum)
+            db.positionDao().deleteFor(removedNodeNum)
+            db.telemetryDao().deleteFor(removedNodeNum)
         }
         return sent
     }

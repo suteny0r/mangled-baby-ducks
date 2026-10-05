@@ -24,7 +24,11 @@ import com.suteny0r.mangledbabyducks.radio.RadioManager
 import com.suteny0r.mangledbabyducks.radio.RadioService
 import com.suteny0r.mangledbabyducks.radio.TcpConnection
 import com.suteny0r.mangledbabyducks.ui.Router
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -128,6 +132,18 @@ class AppContainer(context: Context) {
     val locationSharer = LocationSharer(context, radioManager, prefs)
     /** Device catalog for the node detail hardware card; refreshes at most every 48 h. */
     val hardwareCatalog = HardwareCatalog(context).also { it.refresh() }
+
+    init {
+        // Positions and telemetry whose node row is gone (radio switch, removed node)
+        // are dropped at every launch as well as at connect, so an install that already
+        // carries them is clean before the first session.
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching {
+                database.positionDao().pruneOrphans()
+                database.telemetryDao().pruneOrphans()
+            }
+        }
+    }
 
     suspend fun rememberedRadio(): RememberedRadio? = prefs.data.first().rememberedRadio()
 

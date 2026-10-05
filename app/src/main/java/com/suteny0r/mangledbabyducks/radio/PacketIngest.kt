@@ -35,6 +35,8 @@ class PacketIngest(private val db: MeshDatabase) {
             // must go too, or the single-row LIMIT 1 queries keep serving the
             // old radio's identity.
             db.nodeDao().clear()
+            db.positionDao().clear()
+            db.telemetryDao().clear()
             db.myInfoDao().clear()
             existing = null
         }
@@ -283,6 +285,23 @@ class PacketIngest(private val db: MeshDatabase) {
         db.nodeDao().upsert(existing.copy(nodeStatus = status.ifEmpty { null }))
     }
 
+    /**
+     * Port of `Position.hasValidCoordinates` (MeshPackets.swift): both axes must be
+     * non-zero (a position with one axis unset would not render), and the Apple Park
+     * simulator placeholder is refused. One more case iOS does not cover: a (0, 0) fix
+     * that went through the firmware's precision reduction. That keeps the top
+     * `precision_bits` bits and adds half a cell, so null island comes out as
+     * (2^(31-p), 2^(31-p)), for example (262144, 262144) at 13 bits. It is still no
+     * location, and it drags the map to the Gulf of Guinea.
+     */
+    private fun MeshProtos.Position.hasValidCoordinates(): Boolean {
+        if (latitudeI == 0 || longitudeI == 0) return false
+        if (latitudeI == 373346000 && longitudeI == -1220090000) return false
+        val reducedNullIsland = latitudeI == longitudeI && latitudeI > 0 &&
+            (latitudeI and (latitudeI - 1)) == 0 && latitudeI <= (1 shl 24)
+        return !reducedNullIsland
+    }
+
     /** POSITION_APP. */
     suspend fun positionPacket(packet: MeshProtos.MeshPacket) {
         val pos = runCatching {
@@ -292,8 +311,7 @@ class PacketIngest(private val db: MeshDatabase) {
     }
 
     private suspend fun position(nodeNum: Long, pos: MeshProtos.Position, rxTime: Int) {
-        // Reject null island, matching hasValidCoordinates.
-        if (pos.latitudeI == 0 && pos.longitudeI == 0) return
+        if (!pos.hasValidCoordinates()) return
         val timeSec = when {
             pos.timestamp != 0 -> pos.timestamp.uint()
             pos.time != 0 -> pos.time.uint()

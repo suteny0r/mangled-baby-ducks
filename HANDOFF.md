@@ -92,6 +92,21 @@ for the Android app to look like them, with the app's own icon as the title-bar 
   network". Manual entry stays as "Add by address". New permissions:
   ACCESS_WIFI_STATE, CHANGE_WIFI_MULTICAST_STATE, ACCESS_NETWORK_STATE; the sweep is
   described in docs/PRIVACY.md.
+- Phantom node off Africa (user: unknown.jpg, node 2621672129 / !9c438ac1 skews the map).
+  Root cause, from the pulled DB: a positions row (262144, 262144) with NO node or user
+  row. 262144 = 2^18 is what the firmware's precision reduction makes of (0, 0) at 13
+  bits (keep top bits, add half a cell), so it passed the `== 0 && == 0` guard; and the
+  node row was gone because switching radios wipes `nodes` but nothing ever wiped
+  `positions` / `telemetry` (2465 orphan position rows for 173 nodes, 3464 telemetry
+  rows). iOS never shows it because positions hang off the node there. Fixes: ingest
+  uses `Position.hasValidCoordinates` (either axis zero, Apple Park, and the
+  reduced-null-island (2^k, 2^k) pair are refused); `mapNodes` / `latestByNums` JOIN
+  nodes; `pruneOrphans()` on both DAOs runs at app start (AppContainer init) and at
+  every connect; the radio-switch wipe clears positions and telemetry; removeNode drops
+  the node's rows. Verified: DB re-pulled after relaunch shows 0 orphans; map fits
+  Florida only.
+- DB pull recipe (debug build): `adb exec-out run-as com.suteny0r.mangledbabyducks cat
+  databases/mesh.db` (plus -wal and -shm) then sqlite3 on the PC.
 - Known rough edges: the Nodes row has no distance/bearing line (needs my position),
   and the tap helper `tap.py "Connect"` matches "Connected" first; tap the tab by
   coordinates (930,2060 on the Note 20) instead.

@@ -208,10 +208,26 @@ interface PositionDao {
     @Query("DELETE FROM positions WHERE latest = 0 AND time < :cutoff")
     suspend fun prune(cutoff: Long)
 
+    /**
+     * Positions outlive their node when the node table is wiped (new radio) or a node is
+     * removed; iOS keeps positions as a relationship so they go with the node. Dropping
+     * the orphans keeps stale fixes, including a precision-reduced null island from a
+     * node the current radio does not even know, off the map.
+     */
+    @Query("DELETE FROM positions WHERE nodeNum NOT IN (SELECT num FROM nodes)")
+    suspend fun pruneOrphans()
+
+    @Query("DELETE FROM positions WHERE nodeNum = :nodeNum")
+    suspend fun deleteFor(nodeNum: Long)
+
+    @Query("DELETE FROM positions")
+    suspend fun clear()
+
     @Query(
         "SELECT p.nodeNum AS nodeNum, p.latitudeI AS latitudeI, p.longitudeI AS longitudeI, " +
             "p.time AS time, u.shortName AS shortName, u.longName AS longName " +
-            "FROM positions p LEFT JOIN users u ON u.num = p.nodeNum WHERE p.latest = 1"
+            "FROM positions p JOIN nodes n ON n.num = p.nodeNum " +
+            "LEFT JOIN users u ON u.num = p.nodeNum WHERE p.latest = 1"
     )
     fun mapNodes(): Flow<List<MapNode>>
 
@@ -219,7 +235,8 @@ interface PositionDao {
     @Query(
         "SELECT p.nodeNum AS nodeNum, p.latitudeI AS latitudeI, p.longitudeI AS longitudeI, " +
             "u.shortName AS shortName, u.longName AS longName " +
-            "FROM positions p LEFT JOIN users u ON u.num = p.nodeNum " +
+            "FROM positions p JOIN nodes n ON n.num = p.nodeNum " +
+            "LEFT JOIN users u ON u.num = p.nodeNum " +
             "WHERE p.latest = 1 AND p.nodeNum IN (:nums)"
     )
     fun latestByNums(nums: List<Long>): Flow<List<RoutePoint>>
@@ -266,6 +283,15 @@ interface TelemetryDao {
 
     @Query("DELETE FROM telemetry WHERE time < :cutoff")
     suspend fun prune(cutoff: Long)
+
+    @Query("DELETE FROM telemetry WHERE nodeNum NOT IN (SELECT num FROM nodes)")
+    suspend fun pruneOrphans()
+
+    @Query("DELETE FROM telemetry WHERE nodeNum = :nodeNum")
+    suspend fun deleteFor(nodeNum: Long)
+
+    @Query("DELETE FROM telemetry")
+    suspend fun clear()
 }
 
 @Dao
