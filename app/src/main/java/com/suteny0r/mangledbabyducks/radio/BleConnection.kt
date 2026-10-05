@@ -231,6 +231,14 @@ class BleConnection(
             runCatching { enableNotify(it) }
         }
         startDrainPendingPackets()
+        // Link quality for the Connect box's signal bars; the result arrives as an
+        // RssiUpdate event from onReadRemoteRssi.
+        scope.launch {
+            while (!closed) {
+                runCatching { gatt?.readRemoteRssi() }
+                delay(RSSI_POLL_MS)
+            }
+        }
     }
 
     private suspend fun enableNotifyWithBonding(ch: BluetoothGattCharacteristic) {
@@ -362,6 +370,7 @@ class BleConnection(
     }
 
     companion object {
+        private const val RSSI_POLL_MS = 5_000L
         private const val TAG = "BleConnection"
     }
 }

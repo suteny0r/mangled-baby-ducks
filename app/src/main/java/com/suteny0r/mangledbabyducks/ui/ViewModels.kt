@@ -1,6 +1,11 @@
 package com.suteny0r.mangledbabyducks.ui
 
 import android.app.Application
+import android.bluetooth.BluetoothAdapter
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import androidx.datastore.preferences.core.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -17,6 +22,7 @@ import com.suteny0r.mangledbabyducks.db.UserEntity
 import com.suteny0r.mangledbabyducks.radio.ChannelCodec
 import com.suteny0r.mangledbabyducks.radio.DiscoveredDevice
 import com.suteny0r.mangledbabyducks.radio.LanScanner
+import com.suteny0r.mangledbabyducks.radio.MeshProtocol
 import com.suteny0r.mangledbabyducks.radio.RadioService
 import com.suteny0r.mangledbabyducks.radio.RadioState
 import com.suteny0r.mangledbabyducks.radio.TcpConnection
@@ -52,6 +58,7 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
     val myInfo: StateFlow<MyInfoEntity?> = container.database.myInfoDao().myInfo()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
     val myNodeNum: StateFlow<Long> = radio.myNodeNum
+    val linkRssi: StateFlow<Int?> = radio.linkRssi
     val myBattery: StateFlow<Int?> = radio.myNodeNum
         .flatMapLatest { container.database.telemetryDao().latestDeviceMetrics(it) }
         .map { it?.batteryLevel }
@@ -74,6 +81,25 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private var scanJob: Job? = null
+
+    // BluetoothPoweredOffRow (Connect.swift): the adapter state, tracked live so the row
+    // appears when Bluetooth goes off and clears, and the scan restarts, when it comes back.
+    private val _bluetoothOff = MutableStateFlow(container.bleScanner.adapter?.isEnabled != true)
+    val bluetoothOff: StateFlow<Boolean> = _bluetoothOff.asStateFlow()
+    private val adapterReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            _bluetoothOff.value = container.bleScanner.adapter?.isEnabled != true
+        }
+    }
+
+    init {
+        app.registerReceiver(adapterReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
+    }
+
+    override fun onCleared() {
+        runCatching { getApplication<Application>().unregisterReceiver(adapterReceiver) }
+        super.onCleared()
+    }
 
     // LAN discovery runs while the Connect screen is visible (iOS browses Bonjour
     // continuously on that tab); results are keyed host:port to match saved radios.
@@ -110,12 +136,9 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
         connectTcp(device.host, device.port)
     }
 
-    fun toggleScan() {
-        if (_scanning.value) {
-            scanJob?.cancel()
-            _scanning.value = false
-            return
-        }
+    /** iOS scans for the whole time the Connect tab is up and no radio is linked. */
+    fun startScan() {
+        if (scanJob?.isActive == true) return
         _devices.value = emptyMap()
         _scanning.value = true
         scanJob = viewModelScope.launch {
@@ -128,6 +151,26 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
                 _scanning.value = false
             }
         }
+    }
+
+    fun stopScan() {
+        scanJob?.cancel()
+        scanJob = null
+        _scanning.value = false
+    }
+
+    /** ManualConnectionMenu: "hostname[:port]" typed by the user. */
+    fun connectManual(connectionString: String) {
+        val parts = connectionString.trim().split(":")
+        val host = parts[0].ifBlank { return }
+        connectTcp(host, parts.getOrNull(1)?.toIntOrNull() ?: MeshProtocol.DEFAULT_TCP_PORT)
+    }
+
+    /** Connect box context menu "Power Off": shuts down the linked radio. */
+    fun shutdownConnectedRadio() {
+        val num = radio.myNodeNum.value
+        if (num == 0L) return
+        viewModelScope.launch { runCatching { radio.sendNodeShutdown(num) } }
     }
 
     fun connectBle(device: DiscoveredDevice) {

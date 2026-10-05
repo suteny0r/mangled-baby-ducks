@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -85,6 +86,10 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
     val router = LocalContext.current.container.router
     val pending by router.pendingNode.collectAsState()
     var detailNode by rememberSaveable { mutableStateOf<Long?>(null) }
+    // Hoisted above the detail branch below, which returns early and so takes the list out
+    // of composition: a state remembered inside the LazyColumn would be discarded and the
+    // list would come back from the detail screen scrolled to the top.
+    val listState = rememberLazyListState()
 
     LaunchedEffect(pending) {
         if (pending != null) {
@@ -176,7 +181,7 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
                 )
             }
         } else {
-            LazyColumn(Modifier.weight(1f)) {
+            LazyColumn(Modifier.weight(1f), state = listState) {
                 items(nodes, key = { it.node.num }) { entry ->
                     NodeRow(
                         entry = entry,

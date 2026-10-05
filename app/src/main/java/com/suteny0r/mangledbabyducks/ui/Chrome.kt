@@ -75,6 +75,7 @@ import com.suteny0r.mangledbabyducks.container
 import com.suteny0r.mangledbabyducks.radio.RadioState
 import com.suteny0r.mangledbabyducks.ui.theme.IosGreen
 import com.suteny0r.mangledbabyducks.ui.theme.IosRed
+import com.suteny0r.mangledbabyducks.ui.theme.IosYellow
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
@@ -372,6 +373,31 @@ fun BatteryCompact(level: Int?, modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * BLESignalStrengthIndicator.swift: three rounded bars of growing height, colored by the
+ * iOS `Device.getSignalStrength` thresholds (strong above -65 dBm, normal above -85),
+ * bars past the level drawn at 30 percent.
+ */
+@Composable
+fun BleSignalBars(rssi: Int, width: Dp = 8.dp, height: Dp = 40.dp, modifier: Modifier = Modifier) {
+    val level = when {
+        rssi > -65 -> 2
+        rssi > -85 -> 1
+        else -> 0
+    }
+    val color = when (level) { 2 -> IosGreen; 1 -> IosYellow; else -> IosRed }
+    Row(modifier, verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        for (bar in 0..2) {
+            Box(
+                Modifier
+                    .width(width)
+                    .height(height * (bar + 1) / 3)
+                    .background(color.copy(alpha = if (bar <= level) 1f else 0.3f), RoundedCornerShape(3.dp)),
+            )
+        }
+    }
+}
+
 /** IconAndText from the iOS helpers: a fixed-width glyph column, then the text. */
 @Composable
 fun IconAndText(
@@ -414,11 +440,15 @@ fun SectionHeader(text: String, modifier: Modifier = Modifier) {
 
 /** A white rounded card with no elevation, the iOS grouped section container. */
 @Composable
-fun GroupCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+fun GroupCard(
+    modifier: Modifier = Modifier,
+    containerColor: Color = MaterialTheme.colorScheme.surface,
+    content: @Composable ColumnScope.() -> Unit,
+) {
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) { Column(content = content) }
 }

@@ -89,6 +89,10 @@ class RadioManager(
     private val _packetsReceived = MutableStateFlow(0)
     val packetsReceived: StateFlow<Int> = _packetsReceived.asStateFlow()
 
+    /** Latest BLE link RSSI (Device.rssi on iOS); null off BLE or when the link is down. */
+    private val _linkRssi = MutableStateFlow<Int?>(null)
+    val linkRssi: StateFlow<Int?> = _linkRssi.asStateFlow()
+
     /** Inbound messages worth notifying about (already stored). */
     val incomingMessages = MutableSharedFlow<MessageEntity>(extraBufferCapacity = 64)
 
@@ -349,6 +353,7 @@ class RadioManager(
         connectionFactory = null
         _state.value = RadioState.Idle
         _deviceName.value = null
+        _linkRssi.value = null
     }
 
     private suspend fun handleEvent(source: RadioConnection, event: ConnectionEvent) {
@@ -362,9 +367,10 @@ class RadioManager(
                 processFromRadio(event.fromRadio)
             }
             is ConnectionEvent.LogMessage -> Log.d(TAG, "radio: ${event.message}")
-            is ConnectionEvent.RssiUpdate -> {}
+            is ConnectionEvent.RssiUpdate -> _linkRssi.value = event.rssi
             is ConnectionEvent.Disconnected -> {
                 Log.w(TAG, "Link lost (reconnect=${event.shouldReconnect}): ${event.error}")
+                _linkRssi.value = null
                 if (!sessionWentLive) {
                     // Still inside establish(): the attempt loop owns the retry, so
                     // just unblock it rather than starting a competing loop.

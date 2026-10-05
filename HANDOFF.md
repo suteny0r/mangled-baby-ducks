@@ -16,6 +16,60 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Connect tab rebuilt to match Connect.swift (2026-10-05, installed and verified)
+User: "the connect tab UI looks different than the iphone version" (reference: `1.jpg`).
+The working tree already had the ViewModel half of this (startScan/stopScan,
+connectManual, shutdownConnectedRadio, linkRssi polled every 5 s in BleConnection) but
+`ConnectScreen.kt` still called the removed `toggleScan`, so it did not compile.
+- One box at the top, three personalities: connected (90 dp avatar + battery; gray long
+  name, "Connection Name:", transport glyph + BLE/TCP + `BleSignalBars` from the live link
+  RSSI, "Firmware Version:", then green Subscribed / teal "Retrieving nodes N" / orange
+  Communicating / orange "Retrying (attempt N)"), connecting (orange antenna, "Connecting
+  . .", target name, "Connection Attempt a of b"), and idle (red error line if Failed, red
+  broken link, "No device connected").
+- Like iOS, the radio lists exist only while nothing is connected or connecting. Visible
+  Disconnect/Connect/Forget/Scan buttons are gone: long-press the box for the iOS context
+  menu (node number, Disconnect, Power Off with an "Are you sure?" confirm); tap a row to
+  connect; long-press a saved row for Forget. BLE scanning runs continuously while the tab
+  is up, idle, and Bluetooth is on (`LaunchedEffect(idle, bluetoothOff)`), stops on dispose.
+- "Available Radios" (`.font(.title)` header, "+ Manual" menu on the right -> TCP ->
+  "Manual connection string" dialog): saved BLE radios, scanned radios, and LAN-found
+  radios merged, preferred (auto-connect target) first with a yellow star, then by name.
+  Saved BLE radios stay listed when out of range (no bars); that is the Reconnect path
+  CLAUDE.md requires. "Manual Connections": saved TCP radios, "Last seen device:" from the
+  LAN scan name. `BluetoothPoweredOffRow` (tap opens Bluetooth settings) driven by
+  `ConnectViewModel.bluetoothOff`, a receiver on `ACTION_STATE_CHANGED`.
+- New shared pieces: `BleSignalBars` in Chrome.kt (BLESignalStrengthIndicator.swift
+  thresholds -65/-85), `IosTeal`, `IosYellow`.
+- Verified on the phone: box during Communicating / Retrieving nodes / Subscribed with
+  signal bars; context menu; Disconnect -> list with four BLE radios (SOBE showing bars);
+  tapping SOBE's row reconnected through the presence-probe path.
+- Swipe-to-disconnect, matched to the iOS screenshots `c1.jpg` / `c2.jpg`:
+  `SwipeToDisconnect` is hand-rolled (`draggable` + animated offset), not
+  `SwipeToDismissBox`, because the user rule is that releasing the drag must NOT
+  disconnect. Dragging left **narrows the card from its trailing edge** while the content
+  slides and is clipped (the card keeps its 16 dp page margins); the uncovered page
+  background carries the action: a 64 dp red rounded-square pill with the antenna-slash
+  glyph and a "Disconnect" caption under it, and the card tints `surfaceVariant` while
+  open. The action parks; only a tap on the pill disconnects; a tap on the card or a drag
+  back closes it. Two layout traps, each a build/install cycle: `.fillMaxSize().width(w)`
+  keeps the full width (incoming constraints are already fixed), and `Modifier.width(w)`
+  is clamped by the narrowing card, which re-wrapped the text instead of sliding it. Use
+  `.width().fillMaxHeight()` for the pill and `requiredWidth` for the sliding content.
+- The connecting states use the **same device box**, not a separate orange panel: iOS keys
+  that box on `activeConnection?.device`, so while connecting it shows a "?" avatar and
+  only the rows whose data has arrived (`c1.jpg`). `ConnectedDeviceBox` now omits the long
+  name and the firmware row when they are null, and `ConnectingBox` (orange antenna) is
+  only the no-device-at-all branch. The old split rendered a too-narrow panel with the red
+  action bleeding through beside it.
+- Nodes list keeps its scroll position across node detail: `NodesScreen` returns early
+  when `detailNode != null`, which takes the `LazyColumn` out of composition, so a state
+  remembered inside it was discarded and the list came back at the top. The
+  `rememberLazyListState()` is now hoisted above that branch. Verified on the phone:
+  scrolled down, opened a node, pressed back, same position.
+- Not ported: the Set LoRa Region banner, firmware update notice, nymea Wi-Fi Setup
+  section, Mesh Live Activity.
+
 ## iOS visual parity round (2026-10-04 evening, installed and verified on the phone)
 The user supplied five iOS screenshots (Connect, Settings, Map, Nodes, Messages) and asked
 for the Android app to look like them, with the app's own icon as the title-bar logo

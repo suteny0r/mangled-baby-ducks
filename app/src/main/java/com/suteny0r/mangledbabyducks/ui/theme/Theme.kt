@@ -22,6 +22,8 @@ val IosGreen = Color(0xFF34C759)
 val IosRed = Color(0xFFFF3B30)
 val IosOrange = Color(0xFFFF9500)
 val IosGray = Color(0xFF8E8E93)
+val IosTeal = Color(0xFF30B0C7)
+val IosYellow = Color(0xFFFFCC00)
 
 private val LightColors = lightColorScheme(
     primary = AccentBlue,

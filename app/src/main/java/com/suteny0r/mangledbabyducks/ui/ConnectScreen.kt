@@ -1,53 +1,102 @@
 package com.suteny0r.mangledbabyducks.ui
 
+import android.content.Intent
+import android.provider.Settings
+import androidx.compose.animation.core.animate
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Circle
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.LinkOff
+import androidx.compose.material.icons.filled.PortableWifiOff
+import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.SettingsInputAntenna
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Tag
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.suteny0r.mangledbabyducks.radio.MeshProtocol
+import com.suteny0r.mangledbabyducks.RememberedRadio
 import com.suteny0r.mangledbabyducks.radio.RadioState
+import com.suteny0r.mangledbabyducks.ui.theme.IosGray
 import com.suteny0r.mangledbabyducks.ui.theme.IosGreen
+import com.suteny0r.mangledbabyducks.ui.theme.IosOrange
+import com.suteny0r.mangledbabyducks.ui.theme.IosRed
+import com.suteny0r.mangledbabyducks.ui.theme.IosTeal
+import com.suteny0r.mangledbabyducks.ui.theme.IosYellow
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
+/**
+ * Connect.swift. One box at the top for the radio (connected, connecting, or "No device
+ * connected"); the radio lists underneath exist only while nothing is connected or
+ * connecting, exactly as the iOS tab hides them. Rows are DeviceConnectRow: star for the
+ * preferred radio, name, transport glyph, signal bars; tap to connect, long-press to
+ * forget (the iOS swipe-to-delete / context-menu Delete).
+ */
 @Composable
 fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
     val state by vm.state.collectAsState()
     val devices by vm.devices.collectAsState()
-    val scanning by vm.scanning.collectAsState()
     val deviceName by vm.deviceName.collectAsState()
     val remembered by vm.remembered.collectAsState()
     val knownRadios by vm.knownRadios.collectAsState()
@@ -55,286 +104,612 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
     val myInfo by vm.myInfo.collectAsState()
     val myNodeNum by vm.myNodeNum.collectAsState()
     val myBattery by vm.myBattery.collectAsState()
+    val linkRssi by vm.linkRssi.collectAsState()
     val lanDevices by vm.lanDevices.collectAsState()
-    val lanScanning by vm.lanScanning.collectAsState()
+    val bluetoothOff by vm.bluetoothOff.collectAsState()
 
-    // Browse the LAN for the life of this screen, like the iOS Connect tab.
+    // isConnected || isConnecting on iOS: the device box owns the screen and the lists go.
+    val idle = state is RadioState.Idle || state is RadioState.Failed
+    val target = deviceName ?: remembered?.label
+    // iOS keys the device box on `activeConnection?.device`, not on the handshake being
+    // finished: while connecting it is the same box with a "?" avatar and only the rows
+    // whose data has arrived. The orange antenna box is its else-branch, for a connect
+    // with no device at all.
+    val hasDevice = !idle && target != null
+    val tcp = remembered?.type == "tcp"
+
+    // iOS scans (BLE + Bonjour) for the whole time the tab is up and no radio is linked.
     DisposableEffect(Unit) {
         vm.startLanScan()
-        onDispose { vm.stopLanScan() }
+        onDispose {
+            vm.stopLanScan()
+            vm.stopScan()
+        }
     }
-
-    // Every in-progress state names its target: "Connecting…" with no device told the
-    // user nothing about which radio was being reached.
-    val target = deviceName ?: remembered?.label
-    val live = state is RadioState.Subscribed
+    LaunchedEffect(idle, bluetoothOff) {
+        if (idle && !bluetoothOff) vm.startScan() else vm.stopScan()
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // iOS navigationTitle("Connect") with the logo and ConnectedDevice toolbar items.
         item { AppHeader("Connect") }
 
-        // Connect.swift: the connected-device box. Avatar + battery on the left, name,
-        // connection name, transport, firmware and the state line on the right.
         item {
-            GroupCard(Modifier.padding(horizontal = 16.dp)) {
-                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.Top) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        NodeAvatar(
-                            shortName = if (live) myUser?.shortName else null,
-                            num = if (live) myNodeNum else 0L,
-                            size = 90.dp,
+            val cardPadding = Modifier.padding(horizontal = 16.dp)
+            if (idle) {
+                GroupCard(cardPadding) { NoDeviceBox((state as? RadioState.Failed)?.reason) }
+            } else {
+                SwipeToDisconnect(onDisconnect = vm::disconnect) {
+                    if (hasDevice) {
+                        ConnectedDeviceBox(
+                            state = state,
+                            longName = myUser?.longName,
+                            shortName = myUser?.shortName,
+                            nodeNum = myNodeNum,
+                            connectionName = myInfo?.bleName ?: deviceName ?: "?",
+                            tcp = tcp,
+                            rssi = linkRssi,
+                            battery = myBattery,
+                            firmware = myInfo?.firmwareVersion,
+                            onDisconnect = vm::disconnect,
+                            onShutdown = vm::shutdownConnectedRadio,
                         )
-                        if (live) {
-                            BatteryCompact(myBattery, Modifier.padding(top = 6.dp))
-                        }
-                    }
-                    Spacer(Modifier.width(16.dp))
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(
-                            when {
-                                live -> myUser?.longName ?: "Unknown"
-                                target != null -> target
-                                else -> "No radio"
-                            },
-                            style = MaterialTheme.typography.titleLarge,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        if (live) {
-                            LabelValue("Connection Name", myInfo?.bleName ?: deviceName ?: "?")
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                val tcp = remembered?.type == "tcp"
-                                Icon(
-                                    if (tcp) Icons.Default.Wifi else Icons.Default.Bluetooth,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(22.dp),
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    if (tcp) "TCP" else "BLE",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            LabelValue("Firmware Version", myInfo?.firmwareVersion ?: "Unknown")
-                        }
-                        when (val s = state) {
-                            is RadioState.Idle -> StateLine("Not connected", MaterialTheme.colorScheme.onSurfaceVariant)
-                            is RadioState.Searching -> StatusRow(
-                                "Looking for ${target ?: "radio"}…" +
-                                    if (s.of > 1) "  (try ${s.attempt} of ${s.of})" else ""
-                            )
-                            is RadioState.Connecting -> StatusRow(
-                                "Connecting…" + if (s.of > 1) "  (try ${s.attempt} of ${s.of})" else ""
-                            )
-                            is RadioState.Communicating -> StatusRow("Retrieving configuration…")
-                            is RadioState.RetrievingDatabase ->
-                                StatusRow("Retrieving nodes (${s.nodeCount})…")
-                            is RadioState.Subscribed -> StateLine("Subscribed", IosGreen)
-                            is RadioState.Reconnecting ->
-                                StatusRow("Connection lost, reconnecting (attempt ${s.attempt})…")
-                            is RadioState.Failed -> StateLine(s.reason, MaterialTheme.colorScheme.error)
-                        }
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.padding(top = 6.dp),
-                        ) {
-                            if (live) {
-                                OutlinedButton(onClick = { vm.disconnect() }) { Text("Disconnect") }
-                            }
-                            // Auto-connect is spent once per launch, so the radio it gave
-                            // up on needs an explicit way back.
-                            if (state is RadioState.Failed || state is RadioState.Idle) {
-                                remembered?.let { radio ->
-                                    Button(onClick = { vm.connectKnown(radio) }) {
-                                        Text("Connect ${radio.label}")
-                                    }
-                                }
-                            }
-                        }
+                    } else {
+                        ConnectingBox(state, target)
                     }
                 }
             }
         }
 
-        // Saved radios first: connecting to one of these needs no scan at all.
-        if (knownRadios.isNotEmpty()) {
-            item { SectionHeader("Saved Radios", Modifier.padding(horizontal = 16.dp)) }
-            item {
-                GroupCard(Modifier.padding(horizontal = 16.dp)) {
-                    knownRadios.forEachIndexed { index, radio ->
-                        if (index > 0) RowDivider()
-                        val seen = devices[radio.address]
-                        val isLive = live && deviceName == radio.label
-                        NavRow(
-                            title = radio.label,
-                            icon = if (radio.type == "tcp") Icons.Default.Wifi else Icons.Default.Bluetooth,
-                            subtitle = buildList {
-                                add(radio.address)
-                                if (seen != null) add("in range  ${seen.rssi} dBm")
-                                if (radio.type == "tcp" && radio.address in lanDevices) add("on this network")
-                                if (radio.lastConnectedMs > 0) add("last used ${relativeTime(radio.lastConnectedMs)}")
-                            }.joinToString("  •  "),
-                            chevron = false,
-                            trailing = {
-                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    if (isLive) {
-                                        Text("Connected", style = MaterialTheme.typography.labelMedium, color = IosGreen)
-                                    } else {
-                                        TextButton(onClick = { vm.connectKnown(radio) }) { Text("Connect") }
-                                    }
-                                    TextButton(onClick = { vm.forget(radio) }) { Text("Forget") }
-                                }
-                            },
-                        )
-                    }
-                }
-            }
-        }
+        if (!idle) return@LazyColumn
 
-        // Scan results, minus anything already saved above. Stable sort: RSSI updates
-        // every advertisement and reordering rows while the user is aiming at a Connect
-        // button causes mis-taps.
-        item {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                SectionHeader("Available Radios", Modifier.padding(start = 0.dp))
-                TextButton(onClick = { vm.toggleScan() }) {
-                    Text(if (scanning) "Stop scan" else "Scan")
-                }
-            }
-        }
+        // Available Radios: everything BLE (saved or scanned) plus radios found on this
+        // network, preferred radio first then by name (sortedAvailableDevices).
+        val preferred = remembered?.address
         val savedAddresses = knownRadios.map { it.address }.toSet()
-        val found = devices.values
-            .filterNot { it.id in savedAddresses }
-            .sortedBy { it.name + it.id }
-        item {
-            GroupCard(Modifier.padding(horizontal = 16.dp)) {
-                if (found.isEmpty()) {
-                    Text(
-                        if (scanning) "Scanning…" else "Tap Scan to find radios over Bluetooth.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(16.dp),
+        val available = buildList {
+            knownRadios.filter { it.type == "ble" }.forEach { radio ->
+                add(
+                    AvailableRadio(
+                        key = radio.address,
+                        name = radio.label,
+                        tcp = false,
+                        rssi = devices[radio.address]?.rssi,
+                        saved = radio,
+                        connect = { vm.connectKnown(radio) },
                     )
-                }
-                found.forEachIndexed { index, device ->
-                    if (index > 0) RowDivider()
-                    NavRow(
-                        title = device.name,
-                        icon = Icons.Default.Bluetooth,
-                        subtitle = "${device.id}  •  ${device.rssi} dBm",
-                        chevron = false,
-                        trailing = { TextButton(onClick = { vm.connectBle(device) }) { Text("Connect") } },
-                    )
-                }
+                )
             }
-        }
+            devices.values.filterNot { it.id in savedAddresses }.forEach { device ->
+                add(
+                    AvailableRadio(
+                        key = device.id,
+                        name = device.name,
+                        tcp = false,
+                        rssi = device.rssi,
+                        saved = null,
+                        connect = { vm.connectBle(device) },
+                    )
+                )
+            }
+            lanDevices.values.filterNot { it.id in savedAddresses }.forEach { device ->
+                add(
+                    AvailableRadio(
+                        key = device.id,
+                        name = device.name,
+                        tcp = true,
+                        rssi = null,
+                        saved = null,
+                        connect = { vm.connectLan(device) },
+                    )
+                )
+            }
+        }.sortedWith(
+            compareByDescending<AvailableRadio> { it.key == preferred }
+                .thenBy { it.name.lowercase() }
+        )
 
-        // Every radio found on this Wi-Fi (mDNS or the port sweep), saved ones included
-        // so the scan result is visible; the saved card also notes "on this network".
         item {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                SectionHeader("Network", Modifier.padding(start = 0.dp))
-                if (lanScanning) {
-                    Spacer(Modifier.width(8.dp))
-                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                }
+                SectionTitle("Available Radios")
+                Spacer(Modifier.weight(1f))
+                ManualConnectionMenu(onConnect = vm::connectManual)
             }
         }
-        val lanFound = lanDevices.values.sortedBy { it.name.lowercase() }
         item {
             GroupCard(Modifier.padding(horizontal = 16.dp)) {
-                if (lanFound.isEmpty()) {
+                if (bluetoothOff) BluetoothPoweredOffRow()
+                if (available.isEmpty() && !bluetoothOff) {
                     Text(
-                        if (lanScanning) "Looking for radios on this network…"
-                        else "No radios found on this network.",
-                        style = MaterialTheme.typography.bodyMedium,
+                        "Looking for radios…",
+                        style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(16.dp),
                     )
                 }
-                lanFound.forEachIndexed { index, device ->
-                    if (index > 0) RowDivider()
-                    val isLive = live && remembered?.type == "tcp" && remembered?.address == device.id
-                    NavRow(
-                        title = device.name,
-                        icon = Icons.Default.Wifi,
-                        subtitle = if (device.id in savedAddresses) "${device.id}  •  saved" else device.id,
-                        chevron = false,
-                        trailing = {
-                            if (isLive) {
-                                Text("Connected", style = MaterialTheme.typography.labelMedium, color = IosGreen)
-                            } else {
-                                TextButton(onClick = { vm.connectLan(device) }) { Text("Connect") }
-                            }
-                        },
+                available.forEachIndexed { index, radio ->
+                    if (index > 0 || bluetoothOff) RowDivider()
+                    DeviceConnectRow(
+                        name = radio.name,
+                        tcp = radio.tcp,
+                        preferred = radio.key == preferred,
+                        rssi = radio.rssi,
+                        lastSeen = null,
+                        onConnect = radio.connect,
+                        onForget = radio.saved?.let { saved -> { vm.forget(saved) } },
                     )
                 }
-                RowDivider()
-                Box(Modifier.padding(12.dp)) { TcpConnectRow(onConnect = vm::connectTcp) }
+            }
+        }
+
+        // Manual Connections: the TCP radios added by address (ManualConnectionList).
+        val manual = knownRadios.filter { it.type == "tcp" }
+        if (manual.isNotEmpty()) {
+            item { SectionTitle("Manual Connections", Modifier.padding(horizontal = 16.dp)) }
+            item {
+                GroupCard(Modifier.padding(horizontal = 16.dp)) {
+                    manual.forEachIndexed { index, radio ->
+                        if (index > 0) RowDivider()
+                        val seen = lanDevices[radio.address]
+                        DeviceConnectRow(
+                            name = radio.address,
+                            tcp = true,
+                            preferred = radio.address == preferred,
+                            rssi = null,
+                            lastSeen = (seen?.name ?: radio.name)?.takeIf { it != radio.address.substringBefore(':') },
+                            onConnect = { vm.connectKnown(radio) },
+                            onForget = { vm.forget(radio) },
+                        )
+                    }
+                }
             }
         }
     }
 }
 
+private class AvailableRadio(
+    val key: String,
+    val name: String,
+    val tcp: Boolean,
+    val rssi: Int?,
+    val saved: RememberedRadio?,
+    val connect: () -> Unit,
+)
+
+/** The iOS `.font(.title)` section header: large, not the small gray caption. */
 @Composable
-private fun LabelValue(label: String, value: String) {
+private fun SectionTitle(text: String, modifier: Modifier = Modifier) {
     Text(
-        buildAnnotatedString {
-            append("$label: ")
-            withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)) { append(value) }
-        },
-        style = MaterialTheme.typography.bodyMedium,
+        text,
+        style = MaterialTheme.typography.headlineSmall,
+        modifier = modifier.padding(top = 4.dp),
     )
 }
 
+/** Text("Label").font(.callout) + Text(": value"), gray like the rest of the box. */
 @Composable
-private fun StateLine(text: String, color: Color) {
-    Text(text, style = MaterialTheme.typography.bodyMedium, color = color)
+private fun CalloutLine(text: String, color: Color = IosGray) {
+    Text(text, style = MaterialTheme.typography.bodyLarge, color = color)
 }
 
+/** TransportIcon: the transport glyph (accent for BLE) and its name in title3. */
 @Composable
-private fun StatusRow(text: String) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-        Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun TransportIcon(tcp: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        Icon(
+            if (tcp) Icons.Default.Wifi else Icons.Default.Bluetooth,
+            contentDescription = null,
+            tint = if (tcp) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+        )
+        Text(
+            if (tcp) "TCP" else "BLE",
+            style = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp),
+            color = IosGray,
+        )
     }
 }
 
+// ---------------------------------------------------------------------------------------
+// The connected-device box
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun TcpConnectRow(onConnect: (String, Int) -> Unit) {
-    var host by rememberSaveable { mutableStateOf("") }
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        OutlinedTextField(
-            value = host,
-            onValueChange = { host = it },
-            label = { Text("Add by address (host[:port])") },
-            modifier = Modifier.weight(1f),
-            singleLine = true,
-        )
-        Button(
-            enabled = host.isNotBlank(),
-            onClick = {
-                val parts = host.split(":")
-                val port = parts.getOrNull(1)?.toIntOrNull() ?: MeshProtocol.DEFAULT_TCP_PORT
-                onConnect(parts[0], port)
+private fun ConnectedDeviceBox(
+    state: RadioState,
+    longName: String?,
+    shortName: String?,
+    nodeNum: Long,
+    connectionName: String,
+    tcp: Boolean,
+    rssi: Int?,
+    battery: Int?,
+    firmware: String?,
+    onDisconnect: () -> Unit,
+    onShutdown: () -> Unit,
+) {
+    var menu by remember { mutableStateOf(false) }
+    var confirmShutdown by remember { mutableStateOf(false) }
+
+    Box {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .combinedClickable(onClick = {}, onLongClick = { menu = true })
+                .padding(16.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                NodeAvatar(shortName = shortName, num = nodeNum, size = 90.dp)
+                BatteryCompact(battery, Modifier.padding(top = 6.dp))
+            }
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                if (longName != null) {
+                    Text(
+                        longName,
+                        style = MaterialTheme.typography.titleLarge,
+                        color = IosGray,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                CalloutLine("Connection Name: $connectionName")
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TransportIcon(tcp)
+                    if (!tcp && rssi != null) BleSignalBars(rssi, width = 5.dp, height = 20.dp)
+                }
+                if (firmware != null) CalloutLine("Firmware Version: $firmware")
+                when (state) {
+                    is RadioState.Subscribed -> CalloutLine("Subscribed", IosGreen)
+                    is RadioState.RetrievingDatabase ->
+                        ActivityLine("Retrieving nodes ${state.nodeCount}", IosTeal)
+                    is RadioState.Communicating -> ActivityLine("Communicating", IosOrange)
+                    is RadioState.Reconnecting -> ActivityLine("Retrying (attempt ${state.attempt})", IosOrange)
+                    is RadioState.Searching -> ActivityLine(attemptLabel(state.attempt, state.of), IosOrange)
+                    is RadioState.Connecting -> ActivityLine(attemptLabel(state.attempt, state.of), IosOrange)
+                    else -> {}
+                }
+            }
+        }
+        // Connect.swift .contextMenu: node number, Disconnect, Power Off.
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(
+                text = { Text(nodeNum.toString()) },
+                leadingIcon = { Icon(Icons.Default.Tag, contentDescription = null) },
+                enabled = false,
+                onClick = {},
+            )
+            DropdownMenuItem(
+                text = { Text("Disconnect", color = IosRed) },
+                leadingIcon = { Icon(Icons.Default.LinkOff, contentDescription = null, tint = IosRed) },
+                onClick = { menu = false; onDisconnect() },
+            )
+            DropdownMenuItem(
+                text = { Text("Power Off", color = IosRed) },
+                leadingIcon = { Icon(Icons.Default.PowerSettingsNew, contentDescription = null, tint = IosRed) },
+                onClick = { menu = false; confirmShutdown = true },
+            )
+        }
+    }
+
+    if (confirmShutdown) {
+        AlertDialog(
+            onDismissRequest = { confirmShutdown = false },
+            title = { Text("Are you sure?") },
+            confirmButton = {
+                TextButton(onClick = { confirmShutdown = false; onShutdown() }) {
+                    Text("Shutdown Node?", color = IosRed)
+                }
             },
-        ) { Text("Connect") }
+            dismissButton = {
+                TextButton(onClick = { confirmShutdown = false }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+/**
+ * Connect.swift `.swipeActions { Disconnect }` on the device box, drawn the way iOS draws
+ * a swipe action: the card stays inside the page margins and **narrows** from its trailing
+ * edge while its content slides left and is clipped, uncovering the page background, where
+ * the action sits as a red rounded pill with the "Disconnect" caption under it. The card
+ * tints gray while the action shows. The action parks open: releasing the drag must not
+ * disconnect (user rule), only a tap on the pill does; a tap on the card or a drag back
+ * closes it.
+ */
+@Composable
+private fun SwipeToDisconnect(onDisconnect: () -> Unit, content: @Composable () -> Unit) {
+    val actionWidth = 110.dp
+    val density = LocalDensity.current
+    val actionWidthPx = with(density) { actionWidth.toPx() }
+    var offsetX by remember { mutableFloatStateOf(0f) }
+    val scope = rememberCoroutineScope()
+    fun settle(open: Boolean) {
+        scope.launch {
+            animate(offsetX, if (open) -actionWidthPx else 0f) { value, _ -> offsetX = value }
+        }
+    }
+    val open = offsetX < 0f
+
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        // The content keeps the width it had before the swipe, so sliding the card open
+        // translates it instead of re-wrapping its text.
+        val contentWidth = maxWidth - 32.dp
+        val revealed = with(density) { (-offsetX).toDp() }
+
+        Column(
+            Modifier
+                .align(Alignment.CenterEnd)
+                .width(actionWidth),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Box(
+                Modifier
+                    .size(64.dp)
+                    .background(IosRed, RoundedCornerShape(22.dp))
+                    .clickable(enabled = open) { settle(false); onDisconnect() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Default.PortableWifiOff,
+                    contentDescription = "Disconnect",
+                    tint = Color.White,
+                    modifier = Modifier.size(30.dp),
+                )
+            }
+            Text(
+                "Disconnect",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        GroupCard(
+            Modifier
+                .padding(start = 16.dp, end = 16.dp + revealed)
+                .draggable(
+                    orientation = Orientation.Horizontal,
+                    state = rememberDraggableState { delta ->
+                        offsetX = (offsetX + delta).coerceIn(-actionWidthPx, 0f)
+                    },
+                    onDragStopped = { velocity ->
+                        settle(
+                            when {
+                                velocity < -500f -> true
+                                velocity > 500f -> false
+                                else -> offsetX < -actionWidthPx / 2
+                            }
+                        )
+                    },
+                ),
+            // iOS tints the row while its swipe action is open.
+            containerColor = if (open) MaterialTheme.colorScheme.surfaceVariant
+            else MaterialTheme.colorScheme.surface,
+        ) {
+            Box(
+                Modifier
+                    // requiredWidth, not width: width() is clamped by the narrowing card's
+                    // constraints, which re-wraps the text instead of sliding it.
+                    .requiredWidth(contentWidth)
+                    .offset { IntOffset(offsetX.roundToInt(), 0) },
+            ) {
+                content()
+                if (open) {
+                    // A tap anywhere on the shifted card closes the action instead of
+                    // reaching the card's own long-press handler.
+                    Box(
+                        Modifier
+                            .matchParentSize()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                            ) { settle(false) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** "Connecting . ." on its own, or with the attempt count when there is more than one. */
+private fun attemptLabel(attempt: Int, of: Int): String =
+    if (of > 1) "Connecting . .  (attempt $attempt of $of)" else "Connecting . ."
+
+/** The stacked-squares glyph plus a colored callout, for the in-progress states. */
+@Composable
+private fun ActivityLine(text: String, color: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Icon(Icons.Default.Layers, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
+        CalloutLine(text, color)
+    }
+}
+
+/** isConnecting with no device yet: the orange antenna and "Connecting . .". */
+@Composable
+private fun ConnectingBox(state: RadioState, target: String?) {
+    Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            Icons.Default.SettingsInputAntenna,
+            contentDescription = null,
+            tint = IosOrange,
+            modifier = Modifier.size(60.dp),
+        )
+        Spacer(Modifier.width(16.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Connecting . .", style = MaterialTheme.typography.titleLarge, color = IosOrange)
+            // iOS names nothing here; every in-progress state in this app names its target.
+            if (target != null) CalloutLine(target, IosOrange)
+            val (attempt, of) = when (state) {
+                is RadioState.Searching -> state.attempt to state.of
+                is RadioState.Connecting -> state.attempt to state.of
+                else -> 1 to 1
+            }
+            if (of > 1) CalloutLine("Connection Attempt $attempt of $of", IosOrange)
+        }
+    }
+}
+
+/** Nothing connected: the last error in red, then the broken link and the caption. */
+@Composable
+private fun NoDeviceBox(error: String?) {
+    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (error != null) CalloutLine(error, IosRed)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Default.LinkOff,
+                contentDescription = null,
+                tint = IosRed,
+                modifier = Modifier.size(60.dp),
+            )
+            Spacer(Modifier.width(16.dp))
+            Text("No device connected", style = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// Radio rows
+
+/**
+ * DeviceConnectRow: yellow star for the preferred radio, gray dot otherwise; the name;
+ * the transport glyph (and "Last seen device" for a manual connection); signal bars.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun DeviceConnectRow(
+    name: String,
+    tcp: Boolean,
+    preferred: Boolean,
+    rssi: Int?,
+    lastSeen: String?,
+    onConnect: () -> Unit,
+    onForget: (() -> Unit)?,
+) {
+    var menu by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .combinedClickable(onClick = onConnect, onLongClick = { if (onForget != null) menu = true })
+                .padding(horizontal = 16.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (preferred) Icons.Default.Star else Icons.Default.Circle,
+                contentDescription = if (preferred) "Preferred radio" else null,
+                tint = if (preferred) IosYellow else IosGray,
+                modifier = Modifier.size(if (preferred) 28.dp else 22.dp),
+            )
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.weight(1f)) {
+                Text(name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(top = 3.dp),
+                ) {
+                    TransportIcon(tcp)
+                    if (lastSeen != null) {
+                        Column {
+                            Text("Last seen device:", style = MaterialTheme.typography.bodySmall, color = IosGray)
+                            Text(lastSeen, style = MaterialTheme.typography.bodySmall, color = IosGray)
+                        }
+                    }
+                }
+            }
+            if (rssi != null) BleSignalBars(rssi)
+        }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(
+                text = { Text("Forget", color = IosRed) },
+                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = IosRed) },
+                onClick = { menu = false; onForget?.invoke() },
+            )
+        }
+    }
+}
+
+/** BluetoothPoweredOffRow: the only in-app hint for why the list is empty; opens Settings. */
+@Composable
+private fun BluetoothPoweredOffRow() {
+    val context = LocalContext.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable { context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(Icons.Default.Warning, contentDescription = null, tint = IosOrange)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Bluetooth is off", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Turn on Bluetooth in Settings to see nearby radios.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.outline)
+    }
+}
+
+/**
+ * ManualConnectionMenu: "+ Manual" opens a menu of transports that take a typed address
+ * (TCP here), then an alert with a hostname[:port] field.
+ */
+@Composable
+private fun ManualConnectionMenu(onConnect: (String) -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    var asking by rememberSaveable { mutableStateOf(false) }
+    var connectionString by rememberSaveable { mutableStateOf("") }
+    val allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:"
+
+    Box {
+        TextButton(onClick = { menu = true }) {
+            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("Manual")
+        }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(
+                text = { Text("TCP") },
+                leadingIcon = { Icon(Icons.Default.Wifi, contentDescription = null) },
+                onClick = { menu = false; asking = true },
+            )
+        }
+    }
+
+    if (asking) {
+        AlertDialog(
+            onDismissRequest = { asking = false },
+            title = { Text("Manual connection string") },
+            text = {
+                OutlinedTextField(
+                    value = connectionString,
+                    onValueChange = { v -> connectionString = v.filter { it in allowed } },
+                    placeholder = { Text("Enter hostname[:port]") },
+                    singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Uri),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = connectionString.isNotBlank(),
+                    onClick = { asking = false; onConnect(connectionString) },
+                ) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { asking = false }) { Text("Cancel") }
+            },
+        )
     }
 }
