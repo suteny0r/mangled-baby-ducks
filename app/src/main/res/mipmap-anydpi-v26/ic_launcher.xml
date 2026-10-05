@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Photo icon: the mesh image (art/icon-crops/icon-4-tight, from grid.jpg) is the
+     full-bleed background layer and the foreground is empty, so the launcher mask crops
+     the picture itself. The triangle glyph survives as the monochrome layer for
+     Android 13+ themed icons and stays the notification small icon. -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@color/ic_launcher_background" />
-    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <background android:drawable="@mipmap/ic_launcher_background" />
+    <foreground android:drawable="@android:color/transparent" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
 </adaptive-icon>
