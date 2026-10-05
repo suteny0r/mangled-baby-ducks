@@ -9,25 +9,21 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Message
+import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.lifecycleScope
 import com.suteny0r.mangledbabyducks.ui.ConnectScreen
+import com.suteny0r.mangledbabyducks.ui.FloatingTabBar
+import com.suteny0r.mangledbabyducks.ui.TabSpec
 import com.suteny0r.mangledbabyducks.ui.MapScreen
 import com.suteny0r.mangledbabyducks.ui.MessagesScreen
 import com.suteny0r.mangledbabyducks.ui.NodesScreen
@@ -35,8 +31,6 @@ import com.suteny0r.mangledbabyducks.ui.SettingsScreen
 import com.suteny0r.mangledbabyducks.ui.ThreadTarget
 import com.suteny0r.mangledbabyducks.ui.theme.MeshtasticTheme
 import kotlinx.coroutines.launch
-
-private data class Tab(val label: String, val icon: ImageVector)
 
 class MainActivity : ComponentActivity() {
 
@@ -54,36 +48,26 @@ class MainActivity : ComponentActivity() {
                 val router = container.router
                 // Tab order + labels mirror the iOS TabView (ContentView.swift).
                 val tabs = listOf(
-                    Tab("Messages", Icons.AutoMirrored.Filled.Message),
-                    Tab("Nodes", Icons.Default.Router),
-                    Tab("Map", Icons.Default.Map),
-                    Tab("Settings", Icons.Default.Settings),
-                    Tab("Connect", Icons.Default.Link),
+                    TabSpec("Messages", Icons.Filled.ChatBubble),
+                    TabSpec("Nodes", Icons.Filled.Router),
+                    TabSpec("Map", Icons.Filled.Map),
+                    TabSpec("Settings", Icons.Filled.Settings),
+                    TabSpec("Connect", Icons.Filled.Link),
                 )
                 val selected by router.selectedTab.collectAsState()
                 val unread by remember {
                     container.database.messageDao().unreadCount()
                 }.collectAsState(initial = 0)
                 Scaffold(
+                    containerColor = MaterialTheme.colorScheme.background,
                     bottomBar = {
-                        NavigationBar {
-                            tabs.forEachIndexed { index, tab ->
-                                NavigationBarItem(
-                                    selected = selected == index,
-                                    onClick = { router.selectedTab.value = index },
-                                    icon = {
-                                        if (index == com.suteny0r.mangledbabyducks.ui.Router.TAB_MESSAGES && unread > 0) {
-                                            BadgedBox(badge = { Badge { Text(unread.toString()) } }) {
-                                                Icon(tab.icon, contentDescription = tab.label)
-                                            }
-                                        } else {
-                                            Icon(tab.icon, contentDescription = tab.label)
-                                        }
-                                    },
-                                    label = { Text(tab.label) },
-                                )
-                            }
-                        }
+                        FloatingTabBar(
+                            tabs = tabs,
+                            selected = selected,
+                            onSelect = { router.selectedTab.value = it },
+                            badgeIndex = com.suteny0r.mangledbabyducks.ui.Router.TAB_MESSAGES,
+                            badgeCount = unread,
+                        )
                     },
                 ) { padding ->
                     androidx.compose.foundation.layout.Box(Modifier.padding(padding)) {

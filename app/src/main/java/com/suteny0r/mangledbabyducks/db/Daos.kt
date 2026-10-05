@@ -114,6 +114,12 @@ interface MessageDao {
     @Query("SELECT COUNT(*) FROM messages WHERE read = 0 AND isEmoji = 0")
     fun unreadCount(): Flow<Int>
 
+    @Query("SELECT COUNT(*) FROM messages WHERE read = 0 AND isEmoji = 0 AND toNum IS NULL")
+    fun unreadChannelCount(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM messages WHERE read = 0 AND isEmoji = 0 AND toNum IS NOT NULL")
+    fun unreadDirectCount(): Flow<Int>
+
     @Query("UPDATE messages SET read = 1 WHERE toNum IS NULL AND channel = :channel")
     suspend fun markChannelRead(channel: Int)
 

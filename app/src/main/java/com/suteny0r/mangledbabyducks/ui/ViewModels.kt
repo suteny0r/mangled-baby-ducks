@@ -35,12 +35,26 @@ import kotlinx.coroutines.launch
 import org.meshtastic.proto.AppOnlyProtos
 import org.meshtastic.proto.ConfigProtos
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class ConnectViewModel(app: Application) : AndroidViewModel(app) {
     private val container = app.container
     private val radio = container.radioManager
 
     val state: StateFlow<RadioState> = radio.state
     val deviceName: StateFlow<String?> = radio.deviceName
+
+    // The connected-device box (Connect.swift) shows our own node: name, short name
+    // avatar, battery, firmware and the BLE name.
+    val myUser: StateFlow<UserEntity?> = radio.myNodeNum
+        .flatMapLatest { container.database.userDao().userFlow(it) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val myInfo: StateFlow<MyInfoEntity?> = container.database.myInfoDao().myInfo()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val myNodeNum: StateFlow<Long> = radio.myNodeNum
+    val myBattery: StateFlow<Int?> = radio.myNodeNum
+        .flatMapLatest { container.database.telemetryDao().latestDeviceMetrics(it) }
+        .map { it?.batteryLevel }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     private val _devices = MutableStateFlow<Map<String, DiscoveredDevice>>(emptyMap())
     val devices: StateFlow<Map<String, DiscoveredDevice>> = _devices.asStateFlow()
@@ -214,6 +228,10 @@ class MessagesViewModel(app: Application) : AndroidViewModel(app) {
     val channels: StateFlow<List<ChannelEntity>> = db.channelDao().activeChannels()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val unreadChannels: StateFlow<Int> = db.messageDao().unreadChannelCount()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+    val unreadDirect: StateFlow<Int> = db.messageDao().unreadDirectCount()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
     val dmContacts: StateFlow<List<UserEntity>> = db.userDao().dmContacts()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 

@@ -16,6 +16,41 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## iOS visual parity round (2026-10-04 evening, installed and verified on the phone)
+The user supplied five iOS screenshots (Connect, Settings, Map, Nodes, Messages) and asked
+for the Android app to look like them, with the app's own icon as the title-bar logo
+(the Meshtastic mark is trademarked and never appears in the app).
+- `ui/Chrome.kt` (new): `AppLogo` (circular app icon, taps `Router.openAbout()`),
+  `ConnectedDevicePill` (ConnectedDevice.swift: green link + own short name, red broken
+  link when down; reads RadioManager state directly), `AppHeader` (large-title or inline),
+  `NodeAvatar` + `nodeColor(num)` (CircleText.swift; color is the low 24 bits of the node
+  number, text color by WCAG luminance, font scaled by glyph count because Compose 1.7 has
+  no auto-size text), `BatteryCompact`, `IconAndText`, `SectionHeader`/`GroupCard`/
+  `RowDivider`/`NavRow` (inset-grouped list pieces), `FloatingTabBar` (pill tab bar with
+  the unread badge). `TabSpec` replaced MainActivity's private Tab.
+- `ui/theme/Theme.kt`: iOS grouped palette (gray page, white cards, hairline dividers,
+  iOS green/red/orange/gray constants). Material's tonal surfaces had tinted the page pink.
+- Connect: Connect.swift device box (90 dp avatar + battery, long name, Connection Name,
+  transport, firmware, green "Subscribed"); Saved / Available / Network as grouped cards.
+  `ConnectViewModel` gained `myUser`, `myInfo`, `myNodeNum`, `myBattery`.
+- Nodes: inline "Nodes (N)" title, gray rounded search bar, NodeListItem.swift rows
+  (70 dp avatar, key glyph + name + star, Connected, last heard with online check /
+  moon, Role with glyph, Unmonitored, MQTT, Hops Away box, SNR). Message / favorite /
+  ignore moved to a long-press menu (iOS context menu); the row itself opens detail.
+- Settings: Settings.swift grouping with accent glyphs (About, Help, location toggle;
+  Configure chip "Connected Node X"; Radio Configuration: LoRa, Channels (import),
+  Security, Share QR Code; Device Configuration: User (owner edit), Bluetooth, Device,
+  Display, Network, Position, Power; Tools: Broadcast node info). The old Node number /
+  Firmware / Known nodes rows are gone (Connect shows firmware, the Nodes title the count).
+  `Router.pendingAbout` makes the logo open About.
+- Messages: two-level like Messages.swift. Top: Channels / Direct Messages rows with
+  per-section unread counts (`unreadChannelCount` / `unreadDirectCount` DAO queries);
+  each opens its list (channel avatar = index on accent blue; DM avatar = node avatar).
+- Map: logo + pill overlay at the top; layer and close-route buttons sit below it.
+- Known rough edges: the Nodes row has no distance/bearing line (needs my position),
+  and the tap helper `tap.py "Connect"` matches "Connected" first; tap the tab by
+  coordinates (930,2060 on the Note 20) instead.
+
 ## Licensing, trademark and attribution for a Play release (2026-10-04, installed and clicked through)
 Prompted by a release-risk review. The app is a derivative of GPL-3.0 Meshtastic-Apple and
 bundles GPL-3.0 protobufs, and until this round the repo had no license at all.

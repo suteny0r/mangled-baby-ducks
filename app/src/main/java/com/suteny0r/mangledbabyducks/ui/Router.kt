@@ -23,6 +23,8 @@ class Router {
      * shown, connected by the forward (solid) and return (dashed) path.
      */
     val activeRoute = MutableStateFlow<TracerouteEntity?>(null)
+    /** One-shot: the top-left logo opens Settings > About (iOS deep link settings/about). */
+    val pendingAbout = MutableStateFlow(false)
 
     fun openThread(target: ThreadTarget) {
         pendingThread.value = target
@@ -41,6 +43,11 @@ class Router {
 
     fun clearRoute() {
         activeRoute.value = null
+    }
+
+    fun openAbout() {
+        pendingAbout.value = true
+        selectedTab.value = TAB_SETTINGS
     }
 
     companion object {

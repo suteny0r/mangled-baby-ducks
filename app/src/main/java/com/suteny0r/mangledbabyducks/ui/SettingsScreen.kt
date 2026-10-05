@@ -16,6 +16,21 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
+import androidx.compose.material.icons.outlined.Badge
+import androidx.compose.material.icons.outlined.Bluetooth
+import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.Campaign
+import androidx.compose.material.icons.outlined.DesktopWindows
+import androidx.compose.material.icons.outlined.HelpOutline
+import androidx.compose.material.icons.outlined.Lan
+import androidx.compose.material.icons.outlined.LocationOn
+import androidx.compose.material.icons.outlined.MyLocation
+import androidx.compose.material.icons.outlined.QrCode2
+import androidx.compose.material.icons.outlined.SettingsInputAntenna
+import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.Smartphone
+import androidx.compose.material.icons.outlined.Tag
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -39,11 +54,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
+import com.suteny0r.mangledbabyducks.container
 import com.suteny0r.mangledbabyducks.radio.RadioState
+import com.suteny0r.mangledbabyducks.ui.theme.IosGreen
 import org.meshtastic.proto.AppOnlyProtos
 
 @Composable
@@ -54,6 +72,7 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
     val myUser by vm.myUser.collectAsState()
     val shareLocation by vm.shareLocation.collectAsState()
 
+    val context = LocalContext.current
     var editingOwner by remember { mutableStateOf(false) }
     var showExport by remember { mutableStateOf(false) }
     var showImport by remember { mutableStateOf(false) }
@@ -62,6 +81,15 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
     // local state with the system back gesture wired to it.
     var section by rememberSaveable { mutableStateOf<ConfigSection?>(null) }
     var showAbout by rememberSaveable { mutableStateOf(false) }
+    val router = LocalContext.current.container.router
+    val pendingAbout by router.pendingAbout.collectAsState()
+    LaunchedEffect(pendingAbout) {
+        if (pendingAbout) {
+            section = null
+            showAbout = true
+            router.pendingAbout.value = false
+        }
+    }
 
     val connected = state is RadioState.Subscribed
 
@@ -90,147 +118,114 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
         return
     }
 
+    val broadcastResult by vm.broadcastResult.collectAsState()
     Column(
         Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .verticalScroll(rememberScrollState()),
     ) {
-        Text("Settings", style = MaterialTheme.typography.headlineSmall)
-
-        Card(Modifier.fillMaxWidth()) {
-            Column {
-                ListItem(
-                    headlineContent = { Text("Owner") },
-                    supportingContent = {
-                        Text(
-                            myUser?.let { "${it.longName ?: "?"} (${it.shortName ?: "?"})" } ?: "—",
-                        )
-                    },
-                    trailingContent = { Text("Edit") },
-                    modifier = Modifier.clickable(enabled = myUser != null) { editingOwner = true },
-                )
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text("Connection") },
-                    supportingContent = {
-                        Text(
-                            when (state) {
-                                is RadioState.Subscribed -> "Connected"
-                                is RadioState.Idle -> "Disconnected"
-                                is RadioState.Failed -> "Failed"
-                                else -> "Connecting…"
-                            }
-                        )
+        AppHeader("Settings")
+        Column(
+            Modifier.padding(horizontal = 16.dp).padding(bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            // Settings.swift top group: app-level rows with accent glyphs.
+            GroupCard {
+                NavRow("About and licenses", Icons.Outlined.HelpOutline) { showAbout = true }
+                RowDivider()
+                NavRow("Help & Documentation", Icons.AutoMirrored.Outlined.MenuBook) {
+                    openUrl(context, SOURCE_URL)
+                }
+                RowDivider()
+                NavRow(
+                    "Share phone location",
+                    Icons.Outlined.MyLocation,
+                    subtitle = "Broadcast the phone's GPS as this node's position",
+                    chevron = false,
+                    trailing = {
+                        Switch(checked = shareLocation, onCheckedChange = { vm.setShareLocation(it) })
                     },
                 )
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text("Node number") },
-                    supportingContent = { Text(myInfo?.myNodeNum?.toString() ?: "—") },
-                )
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text("Firmware") },
-                    supportingContent = { Text(myInfo?.firmwareVersion ?: "—") },
-                )
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text("Known nodes") },
-                    supportingContent = { Text(nodeCount.toString()) },
+            }
+
+            // "Configure" + the connected-node chip.
+            SectionHeader("Configure")
+            GroupCard {
+                NavRow(
+                    title = if (connected) "Connected Node ${myUser?.longName ?: "?"}"
+                    else "Connect to a Node",
+                    icon = Icons.Outlined.Bluetooth,
+                    iconTint = if (connected) IosGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                    chevron = false,
+                    onClick = if (connected) null else { { router.selectedTab.value = Router.TAB_CONNECT } },
                 )
             }
-        }
 
-        Text("Phone", style = MaterialTheme.typography.titleMedium)
-        Card(Modifier.fillMaxWidth()) {
-            ListItem(
-                headlineContent = { Text("Share phone location") },
-                supportingContent = { Text("Broadcast the phone's GPS as this node's position") },
-                trailingContent = {
-                    Switch(checked = shareLocation, onCheckedChange = { vm.setShareLocation(it) })
-                },
-            )
-        }
-
-        Text("Channels", style = MaterialTheme.typography.titleMedium)
-        Card(Modifier.fillMaxWidth()) {
-            Column {
-                ListItem(
-                    headlineContent = { Text("Share channels (QR)") },
-                    supportingContent = { Text("Show a QR code and URL for this radio's channels") },
-                    modifier = Modifier.clickable { showExport = true },
-                )
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text("Import channels from URL") },
-                    supportingContent = { Text("Paste a meshtastic.org/e/# link") },
-                    modifier = Modifier.clickable(enabled = connected) { showImport = true },
-                )
-            }
-        }
-
-        // iOS Settings groups: Radio Configuration holds LoRa/Security (+ channel QR),
-        // Device Configuration holds the rest of the sections.
-        Text("Radio Configuration", style = MaterialTheme.typography.titleMedium)
-        Card(Modifier.fillMaxWidth()) {
-            Column {
-                listOf(ConfigSection.LORA, ConfigSection.SECURITY).forEachIndexed { index, entry ->
-                    if (index > 0) HorizontalDivider()
-                    ListItem(
-                        headlineContent = { Text(entry.title) },
-                        supportingContent = { Text(entry.summary) },
-                        modifier = Modifier.clickable { section = entry },
-                    )
+            // iOS Settings groups: Radio Configuration holds LoRa/Security (+ channel QR),
+            // Device Configuration holds the rest of the sections.
+            SectionHeader("Radio Configuration")
+            GroupCard {
+                NavRow(ConfigSection.LORA.title, Icons.Outlined.SettingsInputAntenna, ConfigSection.LORA.summary) {
+                    section = ConfigSection.LORA
+                }
+                RowDivider()
+                NavRow("Channels", Icons.Outlined.Tag, "Import from a meshtastic.org/e/# link", enabled = connected) {
+                    showImport = true
+                }
+                RowDivider()
+                NavRow(ConfigSection.SECURITY.title, Icons.Outlined.Shield, ConfigSection.SECURITY.summary) {
+                    section = ConfigSection.SECURITY
+                }
+                RowDivider()
+                NavRow("Share QR Code", Icons.Outlined.QrCode2, "This radio's channels as QR and URL") {
+                    showExport = true
                 }
             }
-        }
 
-        Text("Device Configuration", style = MaterialTheme.typography.titleMedium)
-        Card(Modifier.fillMaxWidth()) {
-            Column {
+            SectionHeader("Device Configuration")
+            GroupCard {
+                NavRow(
+                    "User",
+                    Icons.Outlined.Badge,
+                    myUser?.let { "${it.longName ?: "?"} (${it.shortName ?: "?"})" } ?: "Owner name",
+                    enabled = myUser != null,
+                ) { editingOwner = true }
                 listOf(
-                    ConfigSection.BLUETOOTH,
-                    ConfigSection.DEVICE,
-                    ConfigSection.DISPLAY,
-                    ConfigSection.NETWORK,
-                    ConfigSection.POSITION,
-                    ConfigSection.POWER,
-                ).forEachIndexed { index, entry ->
-                    if (index > 0) HorizontalDivider()
-                    ListItem(
-                        headlineContent = { Text(entry.title) },
-                        supportingContent = { Text(entry.summary) },
-                        modifier = Modifier.clickable { section = entry },
-                    )
+                    ConfigSection.BLUETOOTH to Icons.Outlined.Bluetooth,
+                    ConfigSection.DEVICE to Icons.Outlined.Smartphone,
+                    ConfigSection.DISPLAY to Icons.Outlined.DesktopWindows,
+                    ConfigSection.NETWORK to Icons.Outlined.Lan,
+                    ConfigSection.POSITION to Icons.Outlined.LocationOn,
+                    ConfigSection.POWER to Icons.Outlined.Bolt,
+                ).forEach { (entry, icon) ->
+                    RowDivider()
+                    NavRow(entry.title, icon, entry.summary) { section = entry }
                 }
             }
-        }
 
-        val broadcastResult by vm.broadcastResult.collectAsState()
-        Button(
-            onClick = { vm.broadcastNodeInfo() },
-            enabled = connected,
-        ) { Text("Broadcast node info") }
-        broadcastResult?.let {
+            SectionHeader("Tools")
+            GroupCard {
+                NavRow(
+                    "Broadcast node info",
+                    Icons.Outlined.Campaign,
+                    subtitle = when (broadcastResult) {
+                        true -> "Node info broadcast sent"
+                        false -> "Broadcast failed"
+                        null -> "Re-announce this node to the mesh"
+                    },
+                    enabled = connected,
+                    chevron = false,
+                ) { vm.broadcastNodeInfo() }
+            }
+
+            // The full trademark notice lives in About; this is the one-line minimum.
             Text(
-                if (it) "Node info broadcast sent" else "Broadcast failed",
-                style = MaterialTheme.typography.bodySmall,
+                "Not affiliated with or endorsed by Meshtastic LLC.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 16.dp, top = 4.dp),
             )
         }
-        Card(Modifier.fillMaxWidth()) {
-            ListItem(
-                headlineContent = { Text("About and licenses") },
-                supportingContent = { Text("GPLv3, source code, privacy, third-party notices") },
-                modifier = Modifier.clickable { showAbout = true },
-            )
-        }
-        // The full trademark notice lives in About; this is the one-line minimum.
-        Text(
-            "Not affiliated with or endorsed by Meshtastic LLC.",
-            style = MaterialTheme.typography.labelSmall,
-        )
     }
 
     if (editingOwner) {

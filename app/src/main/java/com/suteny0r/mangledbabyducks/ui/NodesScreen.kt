@@ -1,7 +1,8 @@
 package com.suteny0r.mangledbabyducks.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,42 +14,67 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Message
+import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material.icons.filled.CellTower
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.Pets
+import androidx.compose.material.icons.filled.PhonelinkErase
 import androidx.compose.material.icons.filled.RemoveCircle
+import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Sensors
+import androidx.compose.material.icons.filled.SettingsInputAntenna
+import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Thermostat
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.RemoveCircle
 import androidx.compose.material.icons.outlined.StarOutline
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.suteny0r.mangledbabyducks.container
 import com.suteny0r.mangledbabyducks.db.NodeWithUser
+import com.suteny0r.mangledbabyducks.ui.theme.IosGreen
+import com.suteny0r.mangledbabyducks.ui.theme.IosOrange
+import com.suteny0r.mangledbabyducks.ui.theme.IosRed
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -95,13 +121,14 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
     val batteryByNode by vm.batteryByNode.collectAsState()
 
     Column(Modifier.fillMaxSize()) {
-        // iOS sidebar title is "Nodes (<live count>)" (NodeList.swift).
-        TopAppBar(title = { Text("Nodes (${nodes.size})") })
-        OutlinedTextField(
+        // iOS sidebar title is "Nodes (<live count>)" (NodeList.swift), inline next to
+        // the logo with the ConnectedDevice pill at the trailing edge.
+        AppHeader("Nodes (${nodes.size})", large = false)
+        // iOS .searchable field: a gray rounded bar with the magnifier inside.
+        TextField(
             value = search,
             onValueChange = { vm.searchText.value = it },
-            label = { Text("Find a node") },
-            placeholder = { Text("Name, handle, or !num") },
+            placeholder = { Text("Find a node") },
             singleLine = true,
             leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
             trailingIcon = {
@@ -111,11 +138,19 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
                     }
                 }
             },
+            shape = RoundedCornerShape(12.dp),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                focusedIndicatorColor = Color.Transparent,
+                unfocusedIndicatorColor = Color.Transparent,
+                disabledIndicatorColor = Color.Transparent,
+            ),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 4.dp),
         )
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             FilterChip(
                 selected = favoritesOnly,
                 onClick = { vm.favoritesOnly.value = !favoritesOnly },
@@ -134,7 +169,7 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
                     if (search.isNotEmpty() || favoritesOnly || showIgnored) "No matching nodes"
-                    else "No nodes yet — connect a radio",
+                    else "No nodes yet. Connect a radio.",
                     style = MaterialTheme.typography.bodyLarge,
                 )
             }
@@ -157,12 +192,26 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
                             )
                         },
                     )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 }
             }
         }
     }
 }
 
+/** iOS treats a node as online when it was heard in the last two hours. */
+private const val ONLINE_WINDOW_MS = 2 * 60 * 60 * 1000L
+
+private fun heardTimestamp(epochMs: Long): String =
+    java.text.SimpleDateFormat("M/d/yyyy, h:mm a", java.util.Locale.getDefault()).format(epochMs)
+
+/**
+ * NodeListItem.swift: 70 pt avatar with battery under it, then the name row (key glyph +
+ * long name + favorite star), the Connected line, last heard, role, hops, with the row
+ * chevron at the trailing edge. Message / ignore live on a long-press menu, as iOS keeps
+ * them in the context menu.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun NodeRow(
     entry: NodeWithUser,
@@ -175,97 +224,133 @@ private fun NodeRow(
 ) {
     val user = entry.user
     val node = entry.node
-    ListItem(
-        modifier = Modifier.clickable(onClick = onOpen),
-        headlineContent = {
-            // iOS rows identify the connected radio with the "Connected" metadata
-            // line only; no name suffix.
-            Text(user?.longName ?: "Node ${node.num}")
-        },
-        supportingContent = {
-            val parts = buildList {
-                if (isSelf) add("connected")
-                val role = user?.role
-                if (role != null && role != 0) add(roleLabel(role))
-                battery?.let { add("battery ${it.coerceIn(0, 100)}%") }
-                node.lastHeard?.let { add("heard ${relativeTime(it)}") }
-                if (node.snr != 0f) add("SNR %.1f".format(node.snr))
-                if (node.hopsAway == 0) add("direct") else if (node.hopsAway > 0) add("${node.hopsAway} hops")
-                if (node.viaMqtt) add("MQTT")
-            }
-            Text(parts.joinToString("  •  "))
-        },
-        leadingContent = {
+    var menu by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .combinedClickable(onClick = onOpen, onLongClick = { menu = true })
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(
-                    Modifier
-                        .size(44.dp)
-                        .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        user?.shortName?.take(4) ?: "?",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    )
-                }
-                // PKI state: signed node -> green lock when the key matches, red when
-                // it doesn't; unsigned -> no glyph. Mute rides the bell-slash. Port of
-                // NodeListItem keyStatus + NodeAlertsButton glyph.
-                if (user?.pkiEncrypted == true || user?.mute == true) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (user?.pkiEncrypted == true) {
-                            Icon(
-                                if (user.keyMatch) Icons.Filled.Lock else Icons.Outlined.Lock,
-                                contentDescription = if (user.keyMatch) "key verified" else "key mismatch",
-                                tint = if (user.keyMatch) Color(0xFF2E7D32) else MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
-                        if (user?.mute == true) {
-                            Icon(
-                                Icons.Filled.NotificationsOff,
-                                contentDescription = "muted",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(14.dp),
-                            )
-                        }
-                    }
-                }
+                NodeAvatar(user?.shortName, node.num, 70.dp)
+                BatteryCompact(battery, Modifier.padding(top = 4.dp))
             }
-        },
-        trailingContent = {
-            Row {
-                if (!isSelf) {
-                    IconButton(onClick = onMessage) {
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // PKI state (NodeListRowSummary.keyStatus): green lock when the key
+                    // matches, red when it doesn't, yellow open lock when unencrypted.
+                    val (keyIcon, keyTint) = when {
+                        user?.pkiEncrypted == true && user.keyMatch -> Icons.Filled.Lock to IosGreen
+                        user?.pkiEncrypted == true -> Icons.Filled.Key to IosRed
+                        else -> Icons.Filled.LockOpen to IosOrange
+                    }
+                    IconAndText(
+                        icon = keyIcon,
+                        text = user?.longName ?: "Node ${node.num}",
+                        iconTint = keyTint,
+                        textColor = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (node.favorite) {
                         Icon(
-                            Icons.AutoMirrored.Outlined.Message,
-                            contentDescription = "Message",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            Icons.Filled.Star,
+                            contentDescription = "Favorite",
+                            tint = Color(0xFFB8860B),
+                            modifier = Modifier.size(20.dp),
                         )
                     }
                 }
-                IconButton(onClick = onToggleFavorite) {
-                    Icon(
-                        if (node.favorite) Icons.Filled.Star else Icons.Outlined.StarOutline,
-                        contentDescription = "Favorite",
-                        tint = if (node.favorite) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                if (user?.mute == true) {
+                    IconAndText(Icons.Filled.NotificationsOff, "Muted")
+                }
+                if (isSelf) {
+                    IconAndText(Icons.Filled.SettingsInputAntenna, "Connected", iconTint = IosGreen)
+                }
+                node.lastHeard?.takeIf { it > 0 }?.let { heard ->
+                    val online = System.currentTimeMillis() - heard < ONLINE_WINDOW_MS
+                    IconAndText(
+                        icon = if (online) Icons.Filled.CheckCircle else Icons.Filled.Bedtime,
+                        text = heardTimestamp(heard),
+                        iconTint = if (online) IosGreen else IosOrange,
                     )
                 }
-                if (!isSelf) {
-                    IconButton(onClick = onToggleIgnore) {
-                        Icon(
-                            if (node.ignored) Icons.Filled.RemoveCircle else Icons.Outlined.RemoveCircle,
-                            contentDescription = "Ignore",
-                            tint = if (node.ignored) MaterialTheme.colorScheme.error
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                IconAndText(
+                    icon = roleIcon(user?.role ?: 0),
+                    text = "Role: ${roleLabel(user?.role ?: 0)}",
+                )
+                if (user?.unmessagable == true) {
+                    IconAndText(Icons.Filled.PhonelinkErase, "Unmonitored")
+                }
+                if (node.viaMqtt && !isSelf) {
+                    IconAndText(Icons.Filled.CloudUpload, "MQTT")
+                }
+                if (node.hopsAway > 0) {
+                    IconAndText(Icons.Filled.Pets, "Hops Away:") {
+                        Spacer(Modifier.width(8.dp))
+                        Box(
+                            Modifier
+                                .size(24.dp)
+                                .border(1.5.dp, MaterialTheme.colorScheme.onSurface, RoundedCornerShape(5.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(node.hopsAway.toString(), style = MaterialTheme.typography.labelLarge)
+                        }
                     }
+                } else if (node.snr != 0f && !node.viaMqtt && !isSelf) {
+                    IconAndText(Icons.Filled.NetworkCheck, "SNR %.1f dB  RSSI ${node.rssi}".format(node.snr))
                 }
             }
-        },
-    )
+            Icon(
+                Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.outline,
+            )
+        }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            if (!isSelf) {
+                DropdownMenuItem(
+                    text = { Text("Message") },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Message, contentDescription = null) },
+                    onClick = { menu = false; onMessage() },
+                )
+            }
+            DropdownMenuItem(
+                text = { Text(if (node.favorite) "Remove favorite" else "Favorite") },
+                leadingIcon = {
+                    Icon(if (node.favorite) Icons.Filled.Star else Icons.Outlined.StarOutline, contentDescription = null)
+                },
+                onClick = { menu = false; onToggleFavorite() },
+            )
+            if (!isSelf) {
+                DropdownMenuItem(
+                    text = { Text(if (node.ignored) "Stop ignoring" else "Ignore") },
+                    leadingIcon = {
+                        Icon(if (node.ignored) Icons.Filled.RemoveCircle else Icons.Outlined.RemoveCircle, contentDescription = null)
+                    },
+                    onClick = { menu = false; onToggleIgnore() },
+                )
+            }
+        }
+    }
+}
+
+/** DeviceRoles.systemName equivalents for the Role line. */
+private fun roleIcon(role: Int): ImageVector = when (role) {
+    0 -> Icons.Filled.Smartphone          // client: flipphone
+    1 -> Icons.Filled.NotificationsOff    // client mute
+    2, 11 -> Icons.Filled.Router          // router / router late
+    3 -> Icons.Filled.Hub                 // router client
+    4 -> Icons.Filled.CellTower           // repeater
+    5 -> Icons.Filled.Sensors             // tracker
+    6 -> Icons.Filled.Thermostat          // sensor
+    7 -> Icons.Filled.Terminal            // TAK
+    8 -> Icons.Filled.VisibilityOff       // client hidden
+    9 -> Icons.Filled.Campaign            // lost and found
+    10 -> Icons.Filled.Terminal           // TAK tracker
+    else -> Icons.Filled.Smartphone
 }
 
 fun relativeTime(epochMs: Long): String {

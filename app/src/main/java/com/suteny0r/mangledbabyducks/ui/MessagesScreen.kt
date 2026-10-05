@@ -1,5 +1,6 @@
 package com.suteny0r.mangledbabyducks.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -8,6 +9,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -19,10 +23,11 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.NotificationsOff
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Tag
+import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -30,7 +35,9 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -48,6 +55,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -125,68 +135,142 @@ fun MessagesScreen(vm: MessagesViewModel = viewModel()) {
 private fun ThreadList(vm: MessagesViewModel, onOpen: (ThreadTarget) -> Unit) {
     val channels by vm.channels.collectAsState()
     val contacts by vm.dmContacts.collectAsState()
+    val unreadChannels by vm.unreadChannels.collectAsState()
+    val unreadDirect by vm.unreadDirect.collectAsState()
+    // Messages.swift: the sidebar is two rows, Channels and Direct Messages, and each
+    // opens its own list (ChannelList / UserList). Held in local state like the thread.
+    var section by rememberSaveable { mutableStateOf<String?>(null) }
 
-    LazyColumn(Modifier.fillMaxSize()) {
-        item {
-            // iOS navigationTitle("Messages") on the sidebar (Messages.swift).
-            Text(
-                "Messages",
-                style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.padding(16.dp),
-            )
-        }
-        item {
-            Text(
-                "Channels",
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.padding(16.dp),
-            )
-        }
-        items(channels, key = { "c${it.index}" }) { channel ->
-            val name = channel.name?.ifEmpty { "Primary Channel" } ?: "Primary Channel"
-            ListItem(
-                headlineContent = { Text(name) },
-                leadingContent = { Icon(Icons.Default.Tag, contentDescription = null) },
-                supportingContent = { Text("Channel ${channel.index}") },
-                trailingContent = if (channel.mute) {
-                    { Icon(Icons.Filled.NotificationsOff, contentDescription = "muted") }
-                } else {
-                    null
-                },
-                modifier = Modifier.clickable { onOpen(ThreadTarget.Channel(channel.index, name)) },
-            )
-        }
-        item {
-            Text(
-                "Direct Messages",
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.padding(16.dp),
-            )
-        }
-        if (contacts.isEmpty()) {
-            item {
+    section?.let { open ->
+        BackHandler { section = null }
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(start = 4.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
+            ) {
+                IconButton(onClick = { section = null }) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                }
                 Text(
-                    "No conversations yet — start one from the Nodes tab",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 16.dp),
+                    if (open == "channels") "Channels" else "Direct Messages",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
                 )
+                ConnectedDevicePill()
+            }
+            LazyColumn(Modifier.fillMaxSize()) {
+                if (open == "channels") {
+                    items(channels, key = { "c${it.index}" }) { channel ->
+                        val name = channel.name?.ifEmpty { "Primary Channel" } ?: "Primary Channel"
+                        ConversationRow(
+                            avatar = { NodeAvatar(channel.index.toString(), 0x5E8BE6L, 52.dp) },
+                            name = name,
+                            detail = "Channel ${channel.index}",
+                            muted = channel.mute,
+                            onClick = { onOpen(ThreadTarget.Channel(channel.index, name)) },
+                        )
+                    }
+                } else {
+                    if (contacts.isEmpty()) {
+                        item {
+                            Text(
+                                "No conversations yet. Start one from the Nodes tab.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(16.dp),
+                            )
+                        }
+                    }
+                    items(contacts, key = { "u${it.num}" }) { user ->
+                        val name = user.longName ?: "Node ${user.num}"
+                        ConversationRow(
+                            avatar = { NodeAvatar(user.shortName, user.num, 52.dp) },
+                            name = name,
+                            detail = user.lastMessage?.let { listTimestamp(it) },
+                            muted = user.mute,
+                            onClick = { onOpen(ThreadTarget.Direct(user.num, name)) },
+                        )
+                    }
+                }
             }
         }
-        items(contacts, key = { "u${it.num}" }) { user ->
-            val name = user.longName ?: "Node ${user.num}"
-            ListItem(
-                headlineContent = { Text(name) },
-                leadingContent = { Icon(Icons.Default.Person, contentDescription = null) },
-                supportingContent = { user.lastMessage?.let { Text(listTimestamp(it)) } },
-                trailingContent = if (user.mute) {
-                    { Icon(Icons.Filled.NotificationsOff, contentDescription = "muted") }
-                } else {
-                    null
-                },
-                modifier = Modifier.clickable { onOpen(ThreadTarget.Direct(user.num, name)) },
+        return
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        // iOS navigationTitle("Messages"), logo at the leading edge.
+        AppHeader("Messages", large = false)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        SectionRow(
+            icon = Icons.Outlined.Groups,
+            title = "Channels",
+            badge = unreadChannels,
+            onClick = { section = "channels" },
+        )
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        SectionRow(
+            icon = Icons.Outlined.Person,
+            title = "Direct Messages",
+            badge = unreadDirect,
+            onClick = { section = "direct" },
+        )
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    }
+}
+
+/** One of the two big sidebar rows: accent glyph, title2 text, unread badge, chevron. */
+@Composable
+private fun SectionRow(icon: ImageVector, title: String, badge: Int, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 22.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(34.dp),
+        )
+        Spacer(Modifier.width(24.dp))
+        Text(title, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+        if (badge > 0) {
+            Text(
+                badge.toString(),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(end = 8.dp),
             )
         }
+        Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.outline)
     }
+}
+
+@Composable
+private fun ConversationRow(
+    avatar: @Composable () -> Unit,
+    name: String,
+    detail: String?,
+    muted: Boolean,
+    onClick: () -> Unit,
+) {
+    ListItem(
+        headlineContent = { Text(name) },
+        leadingContent = avatar,
+        supportingContent = detail?.let { { Text(it) } },
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (muted) Icon(Icons.Filled.NotificationsOff, contentDescription = "muted", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.outline)
+            }
+        },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier.clickable(onClick = onClick),
+    )
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, modifier = Modifier.padding(start = 84.dp))
 }
 
 /**

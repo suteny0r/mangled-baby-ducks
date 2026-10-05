@@ -16,6 +16,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.filled.Info
 import kotlinx.coroutines.delay
@@ -348,11 +350,25 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
                 }
             },
         )
+        // iOS map toolbar: logo at the leading edge, ConnectedDevice pill trailing.
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .align(Alignment.TopStart)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AppLogo()
+            Spacer(Modifier.weight(1f))
+            ConnectedDevicePill()
+        }
         SmallFloatingActionButton(
             onClick = { satellite = !satellite },
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(12.dp),
+                .padding(top = 72.dp, end = 12.dp),
         ) {
             Icon(Icons.Default.Layers, contentDescription = "Toggle satellite/streets")
         }
@@ -409,9 +425,11 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
         if (route.nodes.isNotEmpty()) {
             SmallFloatingActionButton(
                 onClick = { router.clearRoute() },
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(12.dp),
+                    .padding(top = 72.dp, start = 12.dp),
             ) {
                 Icon(Icons.Default.Close, contentDescription = "Close traceroute")
             }
