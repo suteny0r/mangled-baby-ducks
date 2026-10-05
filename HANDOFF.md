@@ -30,15 +30,17 @@ bundles GPL-3.0 protobufs, and until this round the repo had no license at all.
   for Meshtastic-Apple, protobufs, MapLibre, protobuf, AndroidX, Kotlin, ZXing, map data.
   `NOTICES.txt` carries the full BSD-2, BSD-3 and Apache-2.0 texts (Apache §4 and BSD
   both require the text to ship with the binary).
-- Settings footer now reads "an independent client compatible with Meshtastic® devices.
-  Not affiliated with or endorsed by Meshtastic LLC."
-- Map: compact attribution chip at bottom-end. Full credit shows for 10 s after each
-  layer change (OpenFreeMap / OpenMapTiles / OpenStreetMap for streets, full Esri World
-  Imagery string for satellite), then collapses to an info icon; tap the icon to expand,
-  tap the text to open the provider's copyright page. MapLibre's own logo and "i"
+- Settings footer is one labelSmall line, "Not affiliated with or endorsed by Meshtastic
+  LLC."; the full ® notice and compatibility statement are in About (user wants every
+  attribution as unobtrusive as the licenses allow).
+- Map: compact attribution chip at bottom-end, collapsed to an info icon by default
+  (OSM attribution guidelines and Esri's SDKs accept this on small screens). Tap the
+  icon to show the credit for 10 s (OpenFreeMap / OpenMapTiles / OpenStreetMap for
+  streets, full Esri World Imagery string for satellite), tap the text to open the
+  provider's copyright page. MapLibre's own logo and "i"
   button are disabled (the chip overlapped them, and the liberty style declares no
-  source attribution so the "i" showed nothing for streets). The user asked for a fade
-  after 10 s; the icon stays because OSM and Esri require credit on the map itself.
+  source attribution so the "i" showed nothing for streets). The icon itself must stay:
+  OSM and Esri require credit reachable on the map.
 - Still open: Esri World Imagery is attributed but the user has to decide whether use
   outside ArcGIS is acceptable under Esri's terms or drop the layer.
 - `docs/PRIVACY.md` is the Play privacy policy (URL is the GitHub blob link; About has a

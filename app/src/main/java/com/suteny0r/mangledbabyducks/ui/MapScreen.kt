@@ -356,12 +356,11 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
         ) {
             Icon(Icons.Default.Layers, contentDescription = "Toggle satellite/streets")
         }
-        // Compact attribution: the full credit shows for 10 s after each layer change,
-        // then collapses to an info icon so it stops covering the map. The icon stays
-        // because OpenStreetMap and Esri both require credit on the map itself; tapping
-        // it re-expands the text, and tapping the text opens the provider's page.
-        var attributionExpanded by remember { mutableStateOf(true) }
-        LaunchedEffect(satellite) { attributionExpanded = true }
+        // Compact attribution: an info icon by default (OpenStreetMap's guidelines and
+        // Esri's own SDKs accept collapsed attribution on small screens as long as the
+        // control is visible and one tap away). Tapping the icon shows the credit for
+        // 10 s; tapping the credit opens the provider's page.
+        var attributionExpanded by remember { mutableStateOf(false) }
         LaunchedEffect(attributionExpanded, satellite) {
             if (attributionExpanded) {
                 delay(10_000)

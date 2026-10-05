@@ -222,14 +222,14 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
         Card(Modifier.fillMaxWidth()) {
             ListItem(
                 headlineContent = { Text("About and licenses") },
-                supportingContent = { Text("GPLv3, source code, third-party notices") },
+                supportingContent = { Text("GPLv3, source code, privacy, third-party notices") },
                 modifier = Modifier.clickable { showAbout = true },
             )
         }
+        // The full trademark notice lives in About; this is the one-line minimum.
         Text(
-            "Mangled Baby Ducks, an independent client compatible with Meshtastic® devices. " +
-                "Not affiliated with or endorsed by Meshtastic LLC.",
-            style = MaterialTheme.typography.bodySmall,
+            "Not affiliated with or endorsed by Meshtastic LLC.",
+            style = MaterialTheme.typography.labelSmall,
         )
     }
 
