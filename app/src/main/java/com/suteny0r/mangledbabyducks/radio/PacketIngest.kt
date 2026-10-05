@@ -23,6 +23,9 @@ import org.meshtastic.proto.TelemetryProtos
  * Packet-to-database ingest. Port of the business logic in
  * Meshtastic/Helpers/MeshPackets.swift and Meshtastic/Persistence/UpdateSwiftData.swift.
  */
+/** An rx_time older than this is a replay, not clock skew. */
+private const val HISTORICAL_MS = 10 * 60 * 1000L
+
 class PacketIngest(private val db: MeshDatabase) {
 
     /** Called when this radio's MyNodeInfo arrives; returns the local node num. */
@@ -220,7 +223,7 @@ class PacketIngest(private val db: MeshDatabase) {
             channel = packet.channel,
             portNum = packet.decoded.portnumValue,
             payload = text,
-            timestamp = if (packet.rxTime != 0) packet.rxTime.uint() * 1000 else System.currentTimeMillis(),
+            timestamp = arrivalTime(packet.rxTime),
             read = isFromSelf,
             isEmoji = packet.decoded.emoji != 0,
             replyId = packet.decoded.replyId.uint(),
@@ -300,6 +303,21 @@ class PacketIngest(private val db: MeshDatabase) {
         val reducedNullIsland = latitudeI == longitudeI && latitudeI > 0 &&
             (latitudeI and (latitudeI - 1)) == 0 && latitudeI <= (1 shl 24)
         return !reducedNullIsland
+    }
+
+    /**
+     * When a message "happened" for thread ordering. iOS uses the radio's rx_time, but
+     * that is the radio's clock at one-second resolution, and our own sends are stamped
+     * with the phone's clock: any skew between the two interleaves a fresh incoming
+     * message among older ones. A live packet reaches the phone within moments of the
+     * radio hearing it, so the phone's clock is the arrival time. The radio's time is kept
+     * only when it is clearly historical (a store-and-forward replay), so those keep
+     * their original place.
+     */
+    private fun arrivalTime(rxTimeSec: Int): Long {
+        val now = System.currentTimeMillis()
+        val rx = rxTimeSec.uint() * 1000
+        return if (rx != 0L && rx < now - HISTORICAL_MS) rx else now
     }
 
     /** POSITION_APP. */

@@ -111,6 +111,19 @@ for the Android app to look like them, with the app's own icon as the title-bar 
   and the tap helper `tap.py "Connect"` matches "Connected" first; tap the tab by
   coordinates (930,2060 on the Note 20) instead.
 
+## Message ordering + per-bubble times (2026-10-05, BUILT, NOT INSTALLED: phone dropped off USB)
+- User: new public-channel messages sometimes land between older ones; not every
+  message shows a time. Cause (from the pulled DB): incoming messages were stamped with
+  the radio's rx_time (its clock, 1 s resolution, every stored value ends in 000) while
+  our sends use the phone clock, so any skew between the two interleaves them.
+  `PacketIngest.arrivalTime` now stamps a live packet with the phone clock and keeps
+  rx_time only when it is more than 10 min old (a store-and-forward replay keeps its
+  place). Every bubble now shows "h:mm a" (or "M/d, h:mm a") under it; ours shares the
+  line with the delivery status. iOS shows only the hour-gap headers; the per-bubble
+  time is a user request.
+- To verify: install, open a thread, send from Spiney Norman on COM3 to !0f352b79, and
+  check the new bubble lands last with a time under it.
+
 ## Release 0.2.0 (2026-10-04, tag v0.2.0, GitHub release with both APKs)
 - Version lives in `app/build.gradle.kts` (versionCode 2, versionName 0.2.0). Tag is
   `v<versionName>`; the About screen's source link plus the tag is the GPL source offer.
