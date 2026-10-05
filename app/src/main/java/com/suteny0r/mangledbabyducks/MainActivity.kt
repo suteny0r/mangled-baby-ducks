@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.padding
@@ -70,6 +71,12 @@ class MainActivity : ComponentActivity() {
                         )
                     },
                 ) { padding ->
+                    // Nodes is home: system back from any other tab root returns there,
+                    // and from Nodes it exits. Sub-screens register their own handlers
+                    // later in composition, so they win while open.
+                    BackHandler(enabled = selected != com.suteny0r.mangledbabyducks.ui.Router.TAB_NODES) {
+                        router.selectedTab.value = com.suteny0r.mangledbabyducks.ui.Router.TAB_NODES
+                    }
                     androidx.compose.foundation.layout.Box(Modifier.padding(padding)) {
                         when (selected) {
                             0 -> MessagesScreen()

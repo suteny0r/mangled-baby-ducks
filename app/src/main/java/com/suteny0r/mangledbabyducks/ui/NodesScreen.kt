@@ -1,5 +1,6 @@
 package com.suteny0r.mangledbabyducks.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
@@ -93,6 +94,7 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
     }
 
     detailNode?.let { num ->
+        BackHandler { detailNode = null }
         NodeDetailScreen(
             nodeNum = num,
             onBack = { detailNode = null },

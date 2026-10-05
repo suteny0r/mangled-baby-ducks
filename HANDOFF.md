@@ -47,6 +47,11 @@ for the Android app to look like them, with the app's own icon as the title-bar 
   per-section unread counts (`unreadChannelCount` / `unreadDirectCount` DAO queries);
   each opens its list (channel avatar = index on accent blue; DM avatar = node avatar).
 - Map: logo + pill overlay at the top; layer and close-route buttons sit below it.
+- System back (user rule): behaves like the top-left arrow. Sub-screens (node detail,
+  thread, Messages section, config section, About, About documents) each register a
+  BackHandler; with none open, MainActivity's handler jumps to the Nodes tab, and on the
+  Nodes root it is disabled so the activity finishes. Verified: Messages -> back -> Nodes;
+  detail -> back -> list; list -> back -> launcher.
 - Known rough edges: the Nodes row has no distance/bearing line (needs my position),
   and the tap helper `tap.py "Connect"` matches "Connected" first; tap the tab by
   coordinates (930,2060 on the Note 20) instead.

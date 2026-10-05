@@ -104,6 +104,9 @@ fun MessagesScreen(vm: MessagesViewModel = viewModel()) {
         }
     }
 
+    if (openThread != null) {
+        BackHandler { openThread = null }
+    }
     when (val thread = openThread) {
         null -> ThreadList(vm, onOpen = { openThread = it })
         is ThreadTarget.Channel -> ThreadView(
