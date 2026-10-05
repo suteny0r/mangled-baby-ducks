@@ -18,6 +18,11 @@ Meshtastic LLC.
 - Android Auto: nodes on the host map, messages with canned replies, voice replies through
   messaging notifications.
 
+## Privacy
+
+The app has no server, no accounts and no analytics; the developer receives no data. The
+full policy is [docs/PRIVACY.md](docs/PRIVACY.md).
+
 ## Build
 
 Requires Android Studio (or its bundled JDK) and an Android SDK. `local.properties` holds

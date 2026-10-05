@@ -60,11 +60,14 @@ Esri World Imagery.
 
 - Category: Communication
 - Price: Free, no ads, no in-app purchases
-- Privacy policy URL: required by Play for apps requesting location and Bluetooth. Publish
-  one (a page in this repository is enough) stating that location is sent only to the
-  user's own radio and the mesh, and that no data is sent to the developer.
-- Data safety form: declare location (shared with the mesh when the user enables sharing),
-  messages (stored on device only), no collection by the developer.
+- Privacy policy URL: https://github.com/suteny0r/mangled-baby-ducks/blob/main/docs/PRIVACY.md
+- Data safety form (answers follow `docs/PRIVACY.md`): the developer collects no data.
+  Declare "Location > Precise location" as shared (optional, user-controlled, app
+  functionality) because the user can send GPS to the mesh; "Messages > Other in-app
+  messages" is stored on device only and not collected or shared. Data is not encrypted in
+  transit to the developer because nothing is sent to the developer. Users can delete all
+  data by uninstalling. Map tile requests to OpenFreeMap and Esri are ordinary web
+  requests and do not need declaring as collection.
 - Website: https://github.com/suteny0r/mangled-baby-ducks
 
 ## Release checklist

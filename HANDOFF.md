@@ -40,8 +40,14 @@ bundles GPL-3.0 protobufs, and until this round the repo had no license at all.
   source attribution so the "i" showed nothing for streets). The user asked for a fade
   after 10 s; the icon stays because OSM and Esri require credit on the map itself.
 - Still open: Esri World Imagery is attributed but the user has to decide whether use
-  outside ArcGIS is acceptable under Esri's terms or drop the layer. Play also needs a
-  privacy policy URL (location + Bluetooth permissions); none is written yet.
+  outside ArcGIS is acceptable under Esri's terms or drop the layer.
+- `docs/PRIVACY.md` is the Play privacy policy (URL is the GitHub blob link; About has a
+  row for it; `docs/play-listing.md` has the Data safety answers). It states facts
+  checked in code: location sharing off by default and sent only to the radio, the only
+  network hosts are the two tile servers, no analytics. It also discloses that the
+  manifest does not set `allowBackup`, so Android's default may back up the message DB
+  and channel keys to the user's Google account. Setting `allowBackup=false` is a
+  one-line change if the user prefers; the policy would then need that paragraph removed.
 - Verified on the phone: Settings footer, About screen, GPL text view, third-party
   notices view, map chip expanded and collapsed on both layers. No crashes in logcat.
 

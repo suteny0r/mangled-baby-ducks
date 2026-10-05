@@ -50,6 +50,7 @@ import kotlinx.coroutines.withContext
 
 const val SOURCE_URL = "https://github.com/suteny0r/mangled-baby-ducks"
 private const val ISSUES_URL = "$SOURCE_URL/issues"
+private const val PRIVACY_URL = "$SOURCE_URL/blob/main/docs/PRIVACY.md"
 
 /** A bundled text file the screen can open full-page. */
 enum class AboutDoc(val title: String, val asset: String) {
@@ -152,6 +153,14 @@ fun AboutScreen(onBack: () -> Unit) {
                     headlineContent = { Text("Report a problem") },
                     supportingContent = { Text("Issues on GitHub") },
                     modifier = Modifier.clickable { openUrl(context, ISSUES_URL) },
+                )
+                HorizontalDivider()
+                ListItem(
+                    headlineContent = { Text("Privacy policy") },
+                    supportingContent = {
+                        Text("No server, no accounts, no analytics. Location goes only to your radio.")
+                    },
+                    modifier = Modifier.clickable { openUrl(context, PRIVACY_URL) },
                 )
             }
         }
