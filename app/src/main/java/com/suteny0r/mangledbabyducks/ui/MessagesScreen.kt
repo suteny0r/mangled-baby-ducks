@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.AlertDialog
@@ -85,6 +86,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.suteny0r.mangledbabyducks.container
 import com.suteny0r.mangledbabyducks.db.ChannelEntity
 import com.suteny0r.mangledbabyducks.db.MessageEntity
+import com.suteny0r.mangledbabyducks.db.NodeEntity
 import com.suteny0r.mangledbabyducks.db.UserEntity
 import com.suteny0r.mangledbabyducks.db.nodeNumString
 import com.suteny0r.mangledbabyducks.radio.MeshProtocol
@@ -93,7 +95,6 @@ import com.suteny0r.mangledbabyducks.ui.theme.IosOrange
 import com.suteny0r.mangledbabyducks.ui.theme.IosRed
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import org.meshtastic.proto.MeshProtos
 
 /*
  * Port of the iOS Messages stack: Messages.swift (two-row sidebar), ChannelList.swift and
@@ -536,6 +537,7 @@ private fun ThreadView(
     // the row: LazyColumn discards a row's state when it scrolls off, which happened
     // whenever a new message auto-scrolled the thread while the dialog was up.
     var statusFor by rememberSaveable { mutableStateOf<Long?>(null) }
+    var detailsFor by rememberSaveable { mutableStateOf<Long?>(null) }
     var deleteFor by rememberSaveable { mutableStateOf<Long?>(null) }
 
     val byId = remember(list) { list.associateBy { it.messageId } }
@@ -649,6 +651,7 @@ private fun ThreadView(
                         replyTo = ReplyContext(message.messageId, (message.payload ?: "").take(80))
                     },
                     onShowStatus = { statusFor = message.messageId },
+                    onShowDetails = { detailsFor = message.messageId },
                     onRetry = { vm.retry(message) },
                     onDelete = { deleteFor = message.messageId },
                     onOpenNode = { detailNode = message.fromNum },
@@ -667,6 +670,22 @@ private fun ThreadView(
                 },
                 dismissButton = { TextButton(onClick = { deleteFor = null }) { Text("Cancel") } },
             )
+        }
+        detailsFor?.let { id ->
+            val message = byId[id]
+            if (message == null) {
+                detailsFor = null
+            } else {
+                MessageDetailsDialog(
+                    message = message,
+                    mine = message.fromNum == myNum,
+                    status = if (message.fromNum == myNum) {
+                        deliveryOf(message, target is ThreadTarget.Direct, now)
+                    } else null,
+                    vm = vm,
+                    onDismiss = { detailsFor = null },
+                )
+            }
         }
         statusFor?.let { id ->
             // The row's message is looked up fresh so the dialog reflects the latest ack,
@@ -713,6 +732,7 @@ private fun MessageRow(
     onTapback: (String) -> Unit,
     onReply: () -> Unit,
     onShowStatus: () -> Unit,
+    onShowDetails: () -> Unit,
     onRetry: () -> Unit,
     onDelete: () -> Unit,
     onOpenNode: () -> Unit,
@@ -781,7 +801,12 @@ private fun MessageRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Bubble(message, mine, onTapback, onReply, onRetry = if (status?.canRetry == true) onRetry else null, onDelete = onDelete)
+                Bubble(
+                    message, mine, onTapback, onReply,
+                    onRetry = if (status?.canRetry == true) onRetry else null,
+                    onDelete = onDelete,
+                    onDetails = onShowDetails,
+                )
                 if (tapbacks.isNotEmpty()) {
                     TapbackPill(tapbacks, vm)
                 }
@@ -804,6 +829,7 @@ private fun Bubble(
     onReply: () -> Unit,
     onRetry: (() -> Unit)? = null,
     onDelete: () -> Unit,
+    onDetails: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     Box {
@@ -842,6 +868,14 @@ private fun Bubble(
                 onClick = {
                     menuOpen = false
                     onReply()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("Message Details") },
+                leadingIcon = { Icon(Icons.Outlined.Info, contentDescription = null) },
+                onClick = {
+                    menuOpen = false
+                    onDetails()
                 },
             )
             if (onRetry != null) {
@@ -912,7 +946,8 @@ private fun deliveryOf(message: MessageEntity, isDirect: Boolean, now: Long): De
     val secondary = MaterialTheme.colorScheme.onSurfaceVariant
     return when {
         message.receivedAck && isDirect && message.realAck -> Delivery(
-            Icons.Filled.CheckCircle, "Delivered", "The recipient confirmed this message.", secondary, false,
+            Icons.Filled.CheckCircle, "Delivered to recipient",
+            "The recipient confirmed this message.", secondary, false,
         )
         message.receivedAck && isDirect -> Delivery(
             Icons.Filled.Error, "Relayed, not confirmed by recipient",
@@ -921,24 +956,37 @@ private fun deliveryOf(message: MessageEntity, isDirect: Boolean, now: Long): De
         message.receivedAck -> Delivery(
             Icons.Filled.CheckCircle, "Delivered to mesh", "A node on the mesh confirmed this message.", secondary, false,
         )
-        message.ackError != 0 -> Delivery(
-            Icons.Filled.Error, "Not delivered: ${routingErrorLabel(message.ackError)}",
-            "The radio reported a delivery error.", IosOrange, true,
-        )
+        message.ackError != 0 -> {
+            // MessageDeliveryStatus.failed(error): the error's own label, and a retry
+            // offered only where one could work. Orange when it can, red with an X when
+            // it cannot, exactly as RoutingError.color does.
+            val error = RoutingError.forCode(message.ackError)
+            if (error == null) {
+                Delivery(
+                    Icons.Filled.Error, "Could not send message",
+                    "The radio reported an unknown delivery error.", IosOrange, true,
+                )
+            } else {
+                Delivery(
+                    if (error.canRetry) Icons.Filled.Error else Icons.Filled.Cancel,
+                    error.display,
+                    error.detail,
+                    if (error.canRetry) IosOrange else MaterialTheme.colorScheme.error,
+                    error.canRetry,
+                )
+            }
+        }
         message.timestamp > 0 && now - message.timestamp > SEND_ACK_TIMEOUT_MS -> Delivery(
+            // notDelivered reuses maxRetransmit's detail so the two cannot drift: to the
+            // user the outcome is the same, the mesh never confirmed it.
             Icons.Filled.Error, "Not delivered",
-            "The mesh never acknowledged this message. Coverage may be weak or absent, or the app was disconnected when the reply came.",
-            IosOrange, true,
+            RoutingError.MAX_RETRANSMIT.detail, IosOrange, true,
         )
         else -> Delivery(
             Icons.Filled.Schedule, "Sending...", "Waiting for the mesh to acknowledge this message.", IosOrange, false,
         )
     }
 }
-
-/** Routing.Error names as the iOS RoutingError descriptions read, lowercased. */
-private fun routingErrorLabel(code: Int): String =
-    MeshProtos.Routing.Error.forNumber(code)?.name?.lowercase()?.replace('_', ' ') ?: "error $code"
 
 /** MessageDeliveryStatusLabel: the badge under our bubble; a tap asks the thread for the dialog. */
 @Composable
@@ -954,6 +1002,63 @@ private fun DeliveryStatus(status: Delivery, onClick: () -> Unit) {
         Text(status.text, style = MaterialTheme.typography.labelSmall, color = status.tint)
     }
 }
+
+/**
+ * MessageContextMenuItems' "Message Details" submenu: the send time, who relayed it, the
+ * link quality of a direct neighbour or the hop count otherwise, the relay tally, and for
+ * our own sends the delivery status with its explanation.
+ */
+@Composable
+private fun MessageDetailsDialog(
+    message: MessageEntity,
+    mine: Boolean,
+    status: Delivery?,
+    vm: MessagesViewModel,
+    onDismiss: () -> Unit,
+) {
+    val relay by produceState<String?>(initialValue = null, message.messageId) {
+        value = vm.relayDisplay(message)
+    }
+    val node by produceState<NodeEntity?>(initialValue = null, message.fromNum) {
+        value = vm.nodeFor(message.fromNum)
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Message Details") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(detailTimestamp(message.timestamp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Channel: ${message.channel}")
+                relay?.let {
+                    // "Ack Relay:" once the recipient itself confirmed, plain "Relay:" while
+                    // only a relaying node has been heard from.
+                    Text((if (message.realAck) "Ack Relay: " else "Relay: ") + it)
+                }
+                val hops = node?.hopsAway ?: -1
+                if (!mine && node?.viaMqtt != true) {
+                    if (hops == 0) {
+                        Text("SNR ${"%.2f".format(message.snr)} dB")
+                        Text("RSSI ${message.rssi} dBm")
+                    } else {
+                        Text("Hops Away ${hops.coerceAtLeast(0)}")
+                    }
+                }
+                if (message.relays != 0 && !message.realAck) {
+                    Text("Relayed by ${message.relays} ${if (message.relays == 1) "node" else "nodes"}")
+                }
+                status?.let {
+                    Text(it.text)
+                    Text(it.detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
+    )
+}
+
+/** "10/5/2026, 1:24:07 PM": messageDate.formatted(date: .numeric, time: .standard). */
+private fun detailTimestamp(epochMillis: Long): String =
+    java.text.SimpleDateFormat("M/d/yyyy, h:mm:ss a", java.util.Locale.getDefault()).format(epochMillis)
 
 /** RetryButton.swift's alert: the status, its detail, and Try Again when a resend makes sense. */
 @Composable

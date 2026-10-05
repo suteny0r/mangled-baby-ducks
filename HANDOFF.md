@@ -16,6 +16,33 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Delivery status matched to iOS, with the first real Room migration (2026-10-05, installed and verified)
+
+- `ui/RoutingError.kt` ports RoutingError.swift: per-error label, explanation and
+  `canRetry`. `deliveryOf` now shows the error's own label ("Channel/key mismatch",
+  "Recipient needs your key", ...), red with an X and no Try Again where a retry cannot
+  work, orange with Try Again where it can. DM success reads "Delivered to recipient", and
+  the 5 minute timeout reuses MAX_RETRANSMIT's paragraph as `notDelivered` does.
+- Ack flags now only go up (`CASE WHEN :receivedAck THEN 1 ELSE receivedAck END`), which is
+  what MeshPackets.routingPacket does: a nak after an ack can no longer pull a delivered
+  row back to an error. `realAck` is set for any DM reply where `to != from`, whatever the
+  error, with the DM test done through `destinationOf(messageId)`.
+- `messages` gained `relayNode` and `relays`, written from the routing reply, and
+  `MessagesViewModel.relayDisplay` resolves the low byte to a node name the way
+  MessageEntityExtension.relayDisplay does (single match, else fewest hops, else hex).
+- New "Message Details" item in the bubble's long-press menu, the content of iOS's
+  submenu: time, channel, Ack Relay / Relay line, SNR+RSSI for a zero-hop neighbour or
+  Hops Away otherwise, the relay tally, and the delivery status for our own sends. Its
+  state is hoisted to ThreadView so an auto-scroll cannot close it.
+- **First real migration in this repo.** `MIGRATION_4_5` adds the two columns with ALTER
+  TABLE and is registered with `addMigrations`; the destructive fallback stays for
+  everything else. Verified on the phone by upgrading in place: user_version 4 to 5, 656
+  messages / 191 nodes / 360 users before and after, no crash, Room's post-migration schema
+  check passed. A sideload over the top keeps user data; only a DB older than version 4, an
+  uninstall, or a rollback to an older APK wipes.
+- Not ported: per-message `pkiEncrypted` and `xeddsaSigned`, so iOS's "Encrypted" and
+  "Signed · verified" lines are still missing. Another migration when wanted.
+
 ## Back from a thread skipped a level (2026-10-05, installed)
 
 - `ThreadList` held the open section ("channels" / "direct") in its own `rememberSaveable`.

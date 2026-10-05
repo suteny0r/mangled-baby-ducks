@@ -51,6 +51,9 @@ interface UserDao {
     @Query("SELECT * FROM users WHERE num = :num")
     fun userFlow(num: Long): Flow<UserEntity?>
 
+    @Query("SELECT * FROM users")
+    suspend fun all(): List<UserEntity>
+
     @Query("SELECT * FROM users WHERE lastMessage IS NOT NULL ORDER BY lastMessage DESC")
     fun dmContacts(): Flow<List<UserEntity>>
 
@@ -110,9 +113,24 @@ interface MessageDao {
     )
     fun directTapbacks(myNum: Long, peer: Long): Flow<List<MessageEntity>>
 
+    /** Whether a correlated ack belongs to a DM, which is iOS's `toUser != nil` test. */
+    @Query("SELECT toNum FROM messages WHERE messageId = :messageId")
+    suspend fun destinationOf(messageId: Long): Long?
+
+    /**
+     * MeshPackets.routingPacket: the ack flags only ever go up. A packet can draw several
+     * routing replies (each relay answers), and iOS sets receivedACK / realACK to true
+     * without ever writing false, so a nak arriving after an ack cannot take a delivered
+     * row back to an error. ackError, SNR and timestamp always take the latest reply.
+     */
     @Query(
-        "UPDATE messages SET receivedAck = :receivedAck, realAck = :realAck, ackError = :ackError, " +
-            "ackSnr = :ackSnr, ackTimestamp = :ackTimestamp WHERE messageId = :messageId"
+        "UPDATE messages SET " +
+            "receivedAck = CASE WHEN :receivedAck THEN 1 ELSE receivedAck END, " +
+            "realAck = CASE WHEN :realAck THEN 1 ELSE realAck END, " +
+            "ackError = :ackError, ackSnr = :ackSnr, ackTimestamp = :ackTimestamp, " +
+            "relayNode = :relayNode, " +
+            "relays = relays + CASE WHEN :receivedAck THEN 1 ELSE 0 END " +
+            "WHERE messageId = :messageId"
     )
     suspend fun applyAck(
         messageId: Long,
@@ -121,6 +139,7 @@ interface MessageDao {
         ackError: Int,
         ackSnr: Float,
         ackTimestamp: Long,
+        relayNode: Long,
     )
 
     @Query("SELECT COUNT(*) FROM messages WHERE read = 0 AND isEmoji = 0")

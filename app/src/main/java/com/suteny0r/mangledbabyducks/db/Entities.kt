@@ -81,6 +81,10 @@ data class MessageEntity(
     val ackSnr: Float = 0f,
     val snr: Float = 0f,
     val rssi: Int = 0,
+    /** MeshPacket.relayNode from the last routing reply: the low byte of a relaying node. */
+    val relayNode: Long = 0,
+    /** How many clean routing replies this send drew, which is how many nodes relayed it. */
+    val relays: Int = 0,
 )
 
 @Entity(tableName = "channels")

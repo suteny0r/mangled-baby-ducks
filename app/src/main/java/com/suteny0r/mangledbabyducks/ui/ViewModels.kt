@@ -17,6 +17,7 @@ import com.suteny0r.mangledbabyducks.rememberedRadio
 import com.suteny0r.mangledbabyducks.db.ChannelEntity
 import com.suteny0r.mangledbabyducks.db.MessageEntity
 import com.suteny0r.mangledbabyducks.db.MyInfoEntity
+import com.suteny0r.mangledbabyducks.db.NodeEntity
 import com.suteny0r.mangledbabyducks.db.NodeWithUser
 import com.suteny0r.mangledbabyducks.db.UserEntity
 import com.suteny0r.mangledbabyducks.radio.ChannelCodec
@@ -427,6 +428,30 @@ class MessagesViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     suspend fun userFor(num: Long): UserEntity? = db.userDao().get(num)
+
+    suspend fun nodeFor(num: Long): NodeEntity? = db.nodeDao().get(num)
+
+    /**
+     * MessageEntityExtension.relayDisplay(): `relayNode` carries only the low byte of the
+     * relaying node's number, so every known user whose number ends in that byte is a
+     * candidate. One candidate names it outright; several are ranked by fewest hops away,
+     * with nodes of unknown hops unrankable and only used as a fallback; none at all
+     * leaves the hex byte.
+     */
+    suspend fun relayDisplay(message: MessageEntity): String? {
+        if (message.relayNode == 0L) return null
+        val suffix = message.relayNode and 0xFF
+        val hexFallback = "Node 0x%02X".format(suffix)
+        val matching = db.userDao().all().filter { (it.num and 0xFF) == suffix }
+        if (matching.size == 1) {
+            return matching[0].longName?.takeIf { it.isNotEmpty() } ?: hexFallback
+        }
+        val rankable = matching.mapNotNull { user ->
+            db.nodeDao().get(user.num)?.hopsAway?.takeIf { it >= 0 }?.let { user to it }
+        }
+        val closest = rankable.minByOrNull { it.second }?.first ?: matching.firstOrNull()
+        return closest?.longName?.takeIf { it.isNotEmpty() } ?: hexFallback
+    }
 
     /**
      * The message rows push NodeDetail (ChannelMessageRow's NavigationLink on the avatar),

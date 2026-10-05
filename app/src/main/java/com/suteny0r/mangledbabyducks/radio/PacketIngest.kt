@@ -254,14 +254,19 @@ class PacketIngest(private val db: MeshDatabase) {
         val requestId = packet.decoded.requestId.uint()
         if (requestId == 0L) return null
         val errorReason = routing.errorReason.number
-        val realAck = packet.to.uint() != packet.from.uint()
+        // A routing packet the radio addresses to itself is its own implicit ack, not the
+        // far end's; iOS marks realACK on any other DM reply, whatever the error, and lets
+        // the receivedACK test in deliveryStatus decide whether it is shown.
+        val realAck = packet.to.uint() != packet.from.uint() &&
+            db.messageDao().destinationOf(requestId) != null
         db.messageDao().applyAck(
             messageId = requestId,
             receivedAck = errorReason == 0,
-            realAck = realAck && errorReason == 0,
+            realAck = realAck,
             ackError = errorReason,
             ackSnr = packet.rxSnr,
             ackTimestamp = if (packet.rxTime != 0) packet.rxTime.uint() * 1000 else System.currentTimeMillis(),
+            relayNode = packet.relayNode.uint(),
         )
         return AckResult(requestId, errorReason)
     }
