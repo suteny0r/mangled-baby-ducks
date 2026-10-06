@@ -74,10 +74,12 @@ import androidx.compose.material.icons.outlined.Thermostat
 import androidx.compose.material.icons.outlined.WaterDrop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -581,6 +583,44 @@ private fun ActionRow(
     )
 }
 
+/**
+ * TraceRouteButton.swift: the action is behind a shared 30 s cooldown, and while it runs
+ * the row is disabled, counts the seconds down and draws a draining ring where the icon
+ * goes (iOS uses the variable-value "progress.ring.dashed" symbol).
+ */
+@Composable
+private fun RateLimitedActionRow(
+    icon: ImageVector,
+    label: String,
+    key: String,
+    limitSeconds: Double,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    val limit = rememberRateLimit(key)
+    if (!limit.running) {
+        ActionRow(icon, label, enabled = enabled) {
+            RateLimitStorage.actionOccurred(key, limitSeconds)
+            onClick()
+        }
+        return
+    }
+    val color = MaterialTheme.colorScheme.onSurfaceVariant
+    ListItem(
+        headlineContent = { Text("$label (in ${limit.secondsRemaining}s)", color = color) },
+        leadingContent = {
+            CircularProgressIndicator(
+                progress = { limit.fractionRemaining },
+                color = color,
+                trackColor = Color.Transparent,
+                strokeWidth = 3.dp,
+                modifier = Modifier.size(26.dp),
+            )
+        },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+    )
+}
+
 @Composable
 private fun KeyMismatchRow(nodeNum: Long, publicKey: ByteArray?, newKey: ByteArray?, vm: NodeDetailViewModel) {
     var confirmAccept by remember { mutableStateOf(false) }
@@ -837,7 +877,31 @@ private fun LogPage(
                     }
                 }
                 DetailLog.TRACEROUTE -> {
-                    Button(onClick = { vm.runTraceroute(nodeNum) }) { Text("Run trace route") }
+                    val limit = rememberRateLimit(TRACEROUTE_RATE_LIMIT_KEY)
+                    Button(
+                        enabled = !limit.running,
+                        onClick = {
+                            RateLimitStorage.actionOccurred(
+                                TRACEROUTE_RATE_LIMIT_KEY,
+                                TRACEROUTE_RATE_LIMIT_SECONDS,
+                            )
+                            vm.runTraceroute(nodeNum)
+                        },
+                    ) {
+                        if (limit.running) {
+                            CircularProgressIndicator(
+                                progress = { limit.fractionRemaining },
+                                color = LocalContentColor.current,
+                                trackColor = Color.Transparent,
+                                strokeWidth = 2.dp,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("Run trace route (in ${limit.secondsRemaining}s)")
+                        } else {
+                            Text("Run trace route")
+                        }
+                    }
                     if (traceroutes.isEmpty()) {
                         Text("No traceroutes yet", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -1046,7 +1110,13 @@ private fun NodeActions(
             RowDivider()
             ActionRow(Icons.Outlined.Badge, "Exchange User Info", enabled = connected) { vm.exchangeUser(target = nodeNum) }
             RowDivider()
-            ActionRow(Icons.Outlined.Route, "Trace Route", enabled = connected) { vm.runTraceroute(nodeNum) }
+            RateLimitedActionRow(
+                Icons.Outlined.Route,
+                "Trace Route",
+                key = TRACEROUTE_RATE_LIMIT_KEY,
+                limitSeconds = TRACEROUTE_RATE_LIMIT_SECONDS,
+                enabled = connected,
+            ) { vm.runTraceroute(nodeNum) }
             RowDivider()
             ActionRow(Icons.Outlined.History, "Client History", enabled = connected) { vm.sfHistory(target = nodeNum) }
             RowDivider()

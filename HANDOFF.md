@@ -16,6 +16,21 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Trace Route rate limit, ported from iOS (2026-10-06, installed and verified)
+
+- `ui/RateLimit.kt` is `RateLimitedButton.swift` + `RateLimitStorage`: in-memory, never
+  persisted, keyed by action (not by node), so "traceroute" is one 30 s floor shared by
+  every node. `rememberRateLimit(key)` ticks at 100 ms only while a key is running.
+- Both Trace Route entry points use it: the Actions row (`RateLimitedActionRow`) and the
+  Trace Route Log page's button. While running they are disabled, read
+  "Trace Route (in 21s)" and draw a draining `CircularProgressIndicator` where the icon
+  goes; iOS uses the variable-value `progress.ring.dashed` symbol.
+- Verified on the phone: the log-page button showed "Run trace route (in 21s)" with the
+  ring part-drained, and a further tap was refused.
+- **Gotcha: `uiautomator dump` served stale XML here.** Three dumps after taps still
+  showed the old label while a screencap showed the countdown. Trust `adb shell screencap`
+  over the XML when checking whether a tap landed.
+
 ## Settings scroll, node number wrap, broadcast confirmation (2026-10-06, installed; 0.2.5)
 
 - **Settings list position was lost on back.** The main column's `rememberScrollState()`
