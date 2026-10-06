@@ -16,6 +16,32 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Connect box named the wrong radio; LoRa frequency is now shown (2026-10-05, installed and verified)
+
+- **The box wore the previous radio's identity.** While connecting, it filled itself from
+  `my_info` and our own user row, which still describe the radio from before until the new
+  radio's handshake rewrites them: the box said `_4fae` while the pairing prompt said
+  `_8e18`. Gating on the connection state was not enough, because `myNodeNum`, `my_info`
+  and the user row only turn over at MY_INFO, after Communicating begins, and `_myNodeNum`
+  was never cleared on connect or disconnect. `RadioManager.identityReady` now says
+  whether the stored identity belongs to THIS session (false from the start of any
+  connect, true once this radio's MyNodeInfo is ingested) and the box keys off that.
+  Until it flips the box shows only the name of the radio being reached for.
+- Connect rows are wrapped in `key(radio.key)` and hand `connectByKey(key)` to the
+  ViewModel instead of a captured device. Scan results arrive while the list is up, and an
+  unkeyed row can adopt its neighbour's data when the list shifts. A `connect requested:`
+  log line (tag ConnectViewModel) names the radio every tap asks for.
+- **Frequency slot 0 is not "no slot", it is "derive one".** `ui/LoRaChannelCalculator.kt`
+  ports LoRaChannelCalculator.swift: slot count from the region band and preset bandwidth,
+  djb2 hash of the primary channel name (or the preset's own name when the channel is
+  unnamed, which is the case after a factory reset) into a 1-based slot, then the centre
+  frequency. US + MEDIUM_FAST gives slot 45 at 913.125 MHz, verified on the phone.
+- The LoRa section gained a read-only Frequency row (region, slot, MHz) computed from the
+  DRAFT so it moves as you pick a region or preset, and the slot field shows `0 (now 45)`.
+  The stored 0 stays as-is: writing the derived number would PIN the slot, and the radio
+  would stay there even if the channel name changed. iOS binds its field to channel_num
+  the same way.
+
 ## Per-message security flags and badges (2026-10-05, installed and verified)
 
 - `messages` gained `pkiEncrypted` and `xeddsaSigned` behind `MIGRATION_5_6` (two more

@@ -77,7 +77,27 @@ fun ConfigSectionDetail(section: ConfigSection, vm: SettingsViewModel, connected
 @Composable
 private fun LoRaSection(vm: SettingsViewModel, connected: Boolean) {
     val current by vm.loraConfig.collectAsState()
+    val primaryChannelName by vm.primaryChannelName.collectAsState()
     ConfigForm(current, connected, vm, vm::writeLoraConfig) { draft, update ->
+        // ChannelFrequencySummary: the radio tunes itself from region + preset + the
+        // primary channel name, so a stored slot of 0 is not "no frequency", it is
+        // "derive it". Shown against the draft, so picking a region or preset updates it
+        // before the write.
+        val calculator = LoRaChannelCalculator(draft)
+        val slot = calculator.effectiveSlot(
+            LoRaChannelCalculator.hashName(primaryChannelName, draft)
+        )
+        val frequency = calculator.frequencyMHz(slot)
+        ConfigReadOnlyRow(
+            "Frequency",
+            if (frequency > 0) "%.3f MHz".format(frequency) else "Unknown",
+            buildString {
+                append(calculator.regionName)
+                append("  •  slot ")
+                append(if (slot > 0) slot.toString() else "unknown")
+                if (draft.channelNum == 0) append(" (derived)")
+            },
+        )
         ConfigEnumRow(
             "Region",
             draft.region,
@@ -110,7 +130,12 @@ private fun LoRaSection(vm: SettingsViewModel, connected: Boolean) {
         ConfigNumberRow(
             "Frequency slot",
             draft.channelNum,
-            hint = "0 uses the default slot for the region and preset",
+            // iOS shows the stored number too (LoRaConfig.swift's Frequency Slot field is
+            // bound straight to channelNum): typing the derived slot in would PIN it, and
+            // the radio would stay there even if the channel name changed. So the stored
+            // 0 stands, with what it currently resolves to beside it.
+            derived = if (draft.channelNum == 0 && slot > 0) "(now $slot)" else null,
+            hint = "0 derives the slot from the region, preset and channel name",
             allowZero = true,
         ) { update(draft.toBuilder().setChannelNum(it).build()) }
         ConfigSwitchRow(
@@ -545,6 +570,17 @@ private fun <T : Any> ConfigForm(
 
 // ---------------------------------------------------------------- rows
 
+/** A row the radio owns: shown, never edited. */
+@Composable
+private fun ConfigReadOnlyRow(title: String, value: String, subtitle: String?) {
+    ListItem(
+        headlineContent = { Text(title) },
+        supportingContent = if (subtitle == null) null else ({ Text(subtitle) }),
+        trailingContent = { Text(value) },
+    )
+    HorizontalDivider()
+}
+
 @Composable
 private fun ConfigSwitchRow(
     title: String,
@@ -605,6 +641,8 @@ private fun ConfigNumberRow(
     hint: String? = null,
     enabled: Boolean = true,
     allowZero: Boolean = false,
+    /** Shown after the stored value, for a field the radio resolves itself when left at 0. */
+    derived: String? = null,
     // Most of these fields are proto uint32, which the generated Java exposes as a signed
     // Int: the firmware's "disabled" sentinel 0xFFFFFFFF would otherwise read as -1.
     unsigned: Boolean = true,
@@ -617,7 +655,7 @@ private fun ConfigNumberRow(
         supportingContent = {
             Text(
                 if (value == 0 && !allowZero) "unset"
-                else listOfNotNull(shown, suffix).joinToString(" ")
+                else listOfNotNull(shown, suffix, derived).joinToString(" ")
             )
         },
         modifier = Modifier.clickable(enabled = enabled) { open = true },

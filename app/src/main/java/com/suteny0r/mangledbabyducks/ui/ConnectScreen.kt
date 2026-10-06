@@ -55,6 +55,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -107,6 +108,7 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
     val linkRssi by vm.linkRssi.collectAsState()
     val lanDevices by vm.lanDevices.collectAsState()
     val bluetoothOff by vm.bluetoothOff.collectAsState()
+    val identityReady by vm.identityReady.collectAsState()
 
     // isConnected || isConnecting on iOS: the device box owns the screen and the lists go.
     val idle = state is RadioState.Idle || state is RadioState.Failed
@@ -144,16 +146,29 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
             } else {
                 SwipeToDisconnect(onDisconnect = vm::disconnect) {
                     if (hasDevice) {
+                        // my_info and our own user row still describe the PREVIOUS radio
+                        // until this radio's handshake rewrites them. Showing them while a
+                        // different radio is being reached for named the old radio in the
+                        // box while the pairing prompt named the new one. Until the
+                        // handshake is under way the box shows only the target's name,
+                        // which is iOS's "the rows whose data has arrived".
+                        // Keyed on this session's MyNodeInfo having landed, not on the
+                        // connection state: myNodeNum, my_info and our user row all still
+                        // hold the previous radio's identity through Communicating and
+                        // RetrievingDatabase, which is how a finished connect could sit
+                        // there wearing the old radio's name until a reconnect.
+                        val live = identityReady
                         ConnectedDeviceBox(
                             state = state,
-                            longName = myUser?.longName,
-                            shortName = myUser?.shortName,
-                            nodeNum = myNodeNum,
-                            connectionName = myInfo?.bleName ?: deviceName ?: "?",
+                            longName = if (live) myUser?.longName else null,
+                            shortName = if (live) myUser?.shortName else null,
+                            nodeNum = if (live) myNodeNum else 0L,
+                            connectionName = if (live) myInfo?.bleName ?: deviceName ?: "?"
+                                else deviceName ?: target ?: "?",
                             tcp = tcp,
                             rssi = linkRssi,
-                            battery = myBattery,
-                            firmware = myInfo?.firmwareVersion,
+                            battery = if (live) myBattery else null,
+                            firmware = if (live) myInfo?.firmwareVersion else null,
                             onDisconnect = vm::disconnect,
                             onShutdown = vm::shutdownConnectedRadio,
                         )
@@ -233,17 +248,26 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
                         modifier = Modifier.padding(16.dp),
                     )
                 }
+                // Keyed on the radio, not on the slot. Scan results arrive while the list
+                // is on screen, and an insertion or removal shifts every row below it into
+                // the next slot: an unkeyed row kept the slot and silently adopted its
+                // neighbour's data, so a press that had already landed fired the
+                // neighbour's connect. That is the "it connected to the one below" bug.
                 available.forEachIndexed { index, radio ->
-                    if (index > 0 || bluetoothOff) RowDivider()
-                    DeviceConnectRow(
-                        name = radio.name,
-                        tcp = radio.tcp,
-                        preferred = radio.key == preferred,
-                        rssi = radio.rssi,
-                        lastSeen = null,
-                        onConnect = radio.connect,
-                        onForget = radio.saved?.let { saved -> { vm.forget(saved) } },
-                    )
+                    key(radio.key) {
+                        if (index > 0 || bluetoothOff) RowDivider()
+                        DeviceConnectRow(
+                            name = radio.name,
+                            tcp = radio.tcp,
+                            preferred = radio.key == preferred,
+                            rssi = radio.rssi,
+                            lastSeen = null,
+                            // The row hands over an identity, never a captured object, and
+                            // the ViewModel resolves it against live state when it fires.
+                            onConnect = { vm.connectByKey(radio.key) },
+                            onForget = radio.saved?.let { saved -> { vm.forget(saved) } },
+                        )
+                    }
                 }
             }
         }
@@ -255,17 +279,19 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
             item {
                 GroupCard(Modifier.padding(horizontal = 16.dp)) {
                     manual.forEachIndexed { index, radio ->
-                        if (index > 0) RowDivider()
-                        val seen = lanDevices[radio.address]
-                        DeviceConnectRow(
-                            name = radio.address,
-                            tcp = true,
-                            preferred = radio.address == preferred,
-                            rssi = null,
-                            lastSeen = (seen?.name ?: radio.name)?.takeIf { it != radio.address.substringBefore(':') },
-                            onConnect = { vm.connectKnown(radio) },
-                            onForget = { vm.forget(radio) },
-                        )
+                        key(radio.address) {
+                            if (index > 0) RowDivider()
+                            val seen = lanDevices[radio.address]
+                            DeviceConnectRow(
+                                name = radio.address,
+                                tcp = true,
+                                preferred = radio.address == preferred,
+                                rssi = null,
+                                lastSeen = (seen?.name ?: radio.name)?.takeIf { it != radio.address.substringBefore(':') },
+                                onConnect = { vm.connectByKey(radio.address) },
+                                onForget = { vm.forget(radio) },
+                            )
+                        }
                     }
                 }
             }

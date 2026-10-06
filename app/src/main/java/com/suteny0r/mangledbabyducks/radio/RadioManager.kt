@@ -77,6 +77,15 @@ class RadioManager(
     private val _myNodeNum = MutableStateFlow(0L)
     val myNodeNum: StateFlow<Long> = _myNodeNum.asStateFlow()
 
+    /**
+     * Whether the stored identity (my_info, our own user row, myNodeNum) belongs to the
+     * radio of the CURRENT session. False from the moment a connect starts until that
+     * radio's MyNodeInfo has been ingested, because until then every one of those still
+     * describes the radio we were talking to before, and the Connect box was naming it.
+     */
+    private val _identityReady = MutableStateFlow(false)
+    val identityReady: StateFlow<Boolean> = _identityReady.asStateFlow()
+
     private val _deviceName = MutableStateFlow<String?>(null)
     val deviceName: StateFlow<String?> = _deviceName.asStateFlow()
 
@@ -163,6 +172,7 @@ class RadioManager(
         factory: () -> RadioConnection,
     ) {
         val gen = beginRequest()
+        _identityReady.value = false
         connectionFactory = factory
         lastName = name
         lastPresence = presence
@@ -352,6 +362,7 @@ class RadioManager(
         beginRequest()
         connectionFactory = null
         _state.value = RadioState.Idle
+        _identityReady.value = false
         _deviceName.value = null
         _linkRssi.value = null
     }
@@ -391,6 +402,7 @@ class RadioManager(
         when (fromRadio.payloadVariantCase) {
             MeshProtos.FromRadio.PayloadVariantCase.MY_INFO -> {
                 _myNodeNum.value = ingest.myInfo(fromRadio.myInfo, _deviceName.value)
+                _identityReady.value = true
             }
             MeshProtos.FromRadio.PayloadVariantCase.NODE_INFO -> {
                 ingest.nodeInfo(fromRadio.nodeInfo)

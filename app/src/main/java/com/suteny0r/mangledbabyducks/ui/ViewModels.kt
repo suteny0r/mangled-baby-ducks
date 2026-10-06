@@ -6,6 +6,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.util.Log
 import androidx.datastore.preferences.core.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -50,6 +51,9 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
 
     val state: StateFlow<RadioState> = radio.state
     val deviceName: StateFlow<String?> = radio.deviceName
+
+    /** True once this session's own MyNodeInfo has landed; see RadioManager.identityReady. */
+    val identityReady: StateFlow<Boolean> = radio.identityReady
 
     // The connected-device box (Connect.swift) shows our own node: name, short name
     // avatar, battery, firmware and the BLE name.
@@ -197,6 +201,28 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Connect to a saved radio: the no-scan path, also used by the failed-state retry. */
+    /**
+     * Connect to whatever the tapped row identifies, resolved against live state at the
+     * moment of the tap: a saved radio's address, a scanned BLE address, or a LAN host.
+     * The Connect list passes this key instead of a captured device, so a list that
+     * reshuffles between the press and the release cannot redirect the connect.
+     */
+    fun connectByKey(key: String) {
+        knownRadios.value.find { it.address == key }?.let {
+            Log.i("ConnectViewModel", "connect requested: saved ${it.label} ($key)")
+            return connectKnown(it)
+        }
+        devices.value[key]?.let {
+            Log.i("ConnectViewModel", "connect requested: scanned ${it.name} ($key)")
+            return connectBle(it)
+        }
+        lanDevices.value[key]?.let {
+            Log.i("ConnectViewModel", "connect requested: lan ${it.name} ($key)")
+            return connectLan(it)
+        }
+        Log.w("ConnectViewModel", "connect requested for unknown radio $key")
+    }
+
     fun connectKnown(target: RememberedRadio) {
         scanJob?.cancel()
         _scanning.value = false
@@ -511,6 +537,17 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
     val loraConfig: StateFlow<ConfigProtos.Config.LoRaConfig?> =
         configFlow("config.lora") { it.lora }
+
+    /**
+     * The primary channel's name, which is what the firmware hashes into a frequency slot
+     * when channel_num is 0. Blank means the preset's own name is hashed instead; see
+     * LoRaChannelCalculator.hashName.
+     */
+    val primaryChannelName: StateFlow<String?> = container.database.channelDao().activeChannels()
+        .map { channels ->
+            channels.firstOrNull { it.index == 0 || it.role == 1 }?.name?.takeIf { it.isNotEmpty() }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
     val deviceConfig: StateFlow<ConfigProtos.Config.DeviceConfig?> =
         configFlow("config.device") { it.device }
     val bluetoothConfig: StateFlow<ConfigProtos.Config.BluetoothConfig?> =
