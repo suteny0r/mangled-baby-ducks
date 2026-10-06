@@ -25,8 +25,13 @@ invariants worth not breaking. Read it first; this file is the session log on to
   Trace Route Log page's button. While running they are disabled, read
   "Trace Route (in 21s)" and draw a draining `CircularProgressIndicator` where the icon
   goes; iOS uses the variable-value `progress.ring.dashed` symbol.
-- Verified on the phone: the log-page button showed "Run trace route (in 21s)" with the
-  ring part-drained, and a further tap was refused.
+- The ring is `DashedProgressRing`, 20 dashes with the leading fraction lit, standing in
+  for the SF Symbol.
+- `TraceRouteLog.swift` has NO run button: it is a log, and the send lives on the node
+  detail Actions row. I had added one here; it is removed. **Do not add UI the original
+  does not have.**
+- Verified on the phone against RAZOREDG Base: the Actions row read "Trace Route (in 27s)"
+  greyed with the ring drawn, matching the iPhone screenshot exactly.
 - **Gotcha: `uiautomator dump` served stale XML here.** Three dumps after taps still
   showed the old label while a screencap showed the countdown. Trust `adb shell screencap`
   over the XML when checking whether a tap landed.

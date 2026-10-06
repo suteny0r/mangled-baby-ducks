@@ -74,12 +74,10 @@ import androidx.compose.material.icons.outlined.Thermostat
 import androidx.compose.material.icons.outlined.WaterDrop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -108,6 +106,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -135,6 +134,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import org.meshtastic.proto.AdminProtos
 import org.meshtastic.proto.MeshProtos
+import kotlin.math.roundToInt
 
 class NodeDetailViewModel(app: Application) : AndroidViewModel(app) {
     private val container = app.container
@@ -608,17 +608,37 @@ private fun RateLimitedActionRow(
     val color = MaterialTheme.colorScheme.onSurfaceVariant
     ListItem(
         headlineContent = { Text("$label (in ${limit.secondsRemaining}s)", color = color) },
-        leadingContent = {
-            CircularProgressIndicator(
-                progress = { limit.fractionRemaining },
-                color = color,
-                trackColor = Color.Transparent,
-                strokeWidth = 3.dp,
-                modifier = Modifier.size(26.dp),
-            )
-        },
+        leadingContent = { DashedProgressRing(limit.fractionRemaining, color) },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
     )
+}
+
+/**
+ * Stand-in for SF Symbols' variable-value "progress.ring.dashed": a ring of 20 dashes
+ * where the leading fraction is drawn solid and the rest faded, so it drains as the
+ * cooldown runs down.
+ */
+@Composable
+private fun DashedProgressRing(fraction: Float, color: Color, size: Dp = 26.dp) {
+    val dashes = 20
+    val lit = (fraction * dashes).roundToInt()
+    Canvas(Modifier.size(size)) {
+        val stroke = 3.dp.toPx()
+        val inset = stroke / 2
+        val sweep = 360f / dashes
+        val gap = sweep * 0.35f
+        repeat(dashes) { index ->
+            drawArc(
+                color = if (index < lit) color else color.copy(alpha = 0.25f),
+                startAngle = -90f + index * sweep + gap / 2,
+                sweepAngle = sweep - gap,
+                useCenter = false,
+                topLeft = Offset(inset, inset),
+                size = Size(this.size.width - stroke, this.size.height - stroke),
+                style = Stroke(width = stroke, cap = StrokeCap.Round),
+            )
+        }
+    }
 }
 
 @Composable
@@ -877,31 +897,8 @@ private fun LogPage(
                     }
                 }
                 DetailLog.TRACEROUTE -> {
-                    val limit = rememberRateLimit(TRACEROUTE_RATE_LIMIT_KEY)
-                    Button(
-                        enabled = !limit.running,
-                        onClick = {
-                            RateLimitStorage.actionOccurred(
-                                TRACEROUTE_RATE_LIMIT_KEY,
-                                TRACEROUTE_RATE_LIMIT_SECONDS,
-                            )
-                            vm.runTraceroute(nodeNum)
-                        },
-                    ) {
-                        if (limit.running) {
-                            CircularProgressIndicator(
-                                progress = { limit.fractionRemaining },
-                                color = LocalContentColor.current,
-                                trackColor = Color.Transparent,
-                                strokeWidth = 2.dp,
-                                modifier = Modifier.size(16.dp),
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text("Run trace route (in ${limit.secondsRemaining}s)")
-                        } else {
-                            Text("Run trace route")
-                        }
-                    }
+                    // TraceRouteLog.swift is a log only: the send lives on the node detail's
+                    // Actions row, so there is deliberately no Run button here.
                     if (traceroutes.isEmpty()) {
                         Text("No traceroutes yet", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
