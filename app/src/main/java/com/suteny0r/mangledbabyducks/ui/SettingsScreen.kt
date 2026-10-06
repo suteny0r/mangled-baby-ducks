@@ -81,6 +81,9 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
     // Settings is a tab, not a nav graph, so a config section is a sub-screen held in
     // local state with the system back gesture wired to it.
     var section by rememberSaveable { mutableStateOf<ConfigSection?>(null) }
+    // Remembered above the sub-screen early returns: state created below them leaves the
+    // composition when a section opens, so the list would come back scrolled to the top.
+    val listScroll = rememberScrollState()
     var showChannels by rememberSaveable { mutableStateOf(false) }
     var showAbout by rememberSaveable { mutableStateOf(false) }
     val router = LocalContext.current.container.router
@@ -130,7 +133,7 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
     Column(
         Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState()),
+            .verticalScroll(listScroll),
     ) {
         AppHeader("Settings")
         Column(
@@ -220,11 +223,7 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                 NavRow(
                     "Broadcast node info",
                     Icons.Outlined.Campaign,
-                    subtitle = when (broadcastResult) {
-                        true -> "Node info broadcast sent"
-                        false -> "Broadcast failed"
-                        null -> "Re-announce this node to the mesh"
-                    },
+                    subtitle = "Re-announce this node to the mesh",
                     enabled = connected,
                     chevron = false,
                 ) { vm.broadcastNodeInfo() }
@@ -256,6 +255,21 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
     }
     if (showImport) {
         ChannelImportDialog(vm, onDismiss = { showImport = false })
+    }
+    // ExchangeUserInfoButton.swift confirms the send with an alert; the row's subtitle
+    // alone was too quiet to read as feedback.
+    broadcastResult?.let { ok ->
+        AlertDialog(
+            onDismissRequest = { vm.clearBroadcastResult() },
+            title = { Text(if (ok) "Node Info Sent" else "Broadcast Failed") },
+            text = {
+                Text(
+                    if (ok) "Your node info has been broadcast to the mesh."
+                    else "Could not send the node info broadcast."
+                )
+            },
+            confirmButton = { TextButton(onClick = { vm.clearBroadcastResult() }) { Text("OK") } },
+        )
     }
 }
 

@@ -536,8 +536,10 @@ private fun DetailRow(
         Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(26.dp))
         Spacer(Modifier.width(16.dp))
         Text(label, style = MaterialTheme.typography.bodyLarge)
-        Spacer(Modifier.weight(1f).width(12.dp))
+        Spacer(Modifier.width(12.dp))
         if (value != null) {
+            // The value takes every remaining pixel and right-aligns inside it. Capping it
+            // at a fraction of the row wrapped a 10-digit node number onto two lines.
             Text(
                 value,
                 style = MaterialTheme.typography.bodyLarge,
@@ -545,8 +547,10 @@ private fun DetailRow(
                 textAlign = TextAlign.End,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(2f, fill = false),
+                modifier = Modifier.weight(1f),
             )
+        } else {
+            Spacer(Modifier.weight(1f))
         }
         trailing?.invoke()
     }

@@ -16,6 +16,26 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Settings scroll, node number wrap, broadcast confirmation (2026-10-06, installed; 0.2.5)
+
+- **Settings list position was lost on back.** The main column's `rememberScrollState()`
+  sat BELOW the `showAbout` / `showChannels` / `section` early returns, so opening a
+  sub-screen took it out of composition and the offset was discarded. It is now
+  `listScroll`, remembered above the returns. Same trap as the Nodes list, the thread
+  scroll and the Messages `section` before it: state created under an early return does
+  not survive that return. The section detail's own scroll is still shared between
+  sections, so switching section to section keeps the previous offset; not keyed yet.
+- **Node number wrapped onto two lines.** `DetailRow` capped the value at
+  `weight(2f, fill = false)` against a `Spacer(weight(1f))`, which with the Copy button
+  left a 10-digit node number ~297px when it needed more. The spacer is now a fixed 12dp
+  and the value takes `weight(1f)` with `TextAlign.End`. Verified by uiautomator dump:
+  the value went from a 138px two-line box to one 39px line.
+- **Broadcast node info had no visible response.** The only feedback was the row's own
+  subtitle flipping, which reads as part of the row. Now an AlertDialog ("Node Info Sent"
+  / "Broadcast Failed"), matching `ExchangeUserInfoButton.swift`, with
+  `clearBroadcastResult()` on dismiss so a second tap raises it again. NOT verified on
+  hardware: tapping it transmits a real mesh-wide announce.
+
 ## Channels screen with a real editor (2026-10-06, installed; no-op write verified)
 
 - Settings > Channels was an import dialog only. `ui/ChannelsScreen.kt` ports

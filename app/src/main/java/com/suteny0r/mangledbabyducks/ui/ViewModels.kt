@@ -721,4 +721,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             _broadcastResult.value = container.radioManager.broadcastNodeInfo()
         }
     }
+
+    /** Dismiss the sent/failed alert so a second broadcast can raise it again. */
+    fun clearBroadcastResult() { _broadcastResult.value = null }
 }
