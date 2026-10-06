@@ -41,7 +41,9 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import com.google.protobuf.ByteString
 import org.meshtastic.proto.AppOnlyProtos
+import org.meshtastic.proto.ChannelProtos
 import org.meshtastic.proto.ConfigProtos
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -621,6 +623,72 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
                 ConfigProtos.Config.newBuilder().apply(build).build()
             )
         }
+    }
+
+    /** Channels.swift's list, disabled slots included so the editor knows what is free. */
+    val channels: StateFlow<List<ChannelEntity>> = container.database.channelDao().allChannels()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /**
+     * Channels.swift Save: one setChannel admin, then the local row follows. A channel
+     * saved as DISABLED is deleted locally, as iOS deletes the entity and its messages.
+     */
+    fun saveChannel(
+        index: Int,
+        name: String,
+        psk: ByteArray,
+        role: Int,
+        uplink: Boolean,
+        downlink: Boolean,
+        positionPrecision: Int,
+    ) {
+        viewModelScope.launch {
+            _writeResult.value = null
+            val settings = ChannelProtos.ChannelSettings.newBuilder()
+                .setName(name)
+                .setPsk(ByteString.copyFrom(psk))
+                .setUplinkEnabled(uplink)
+                .setDownlinkEnabled(downlink)
+                .setModuleSettings(
+                    ChannelProtos.ModuleSettings.newBuilder()
+                        .setPositionPrecision(positionPrecision)
+                        .build()
+                )
+                .build()
+            val channel = ChannelProtos.Channel.newBuilder()
+                .setIndex(index)
+                .setRole(ChannelProtos.Channel.Role.forNumber(role) ?: ChannelProtos.Channel.Role.SECONDARY)
+                .setSettings(settings)
+                .build()
+            val ok = container.radioManager.saveChannel(channel)
+            if (ok) {
+                val db = container.database.channelDao()
+                if (role == 0) {
+                    db.delete(index)
+                    container.database.messageDao().deleteChannelMessages(index)
+                } else {
+                    db.upsert(
+                        ChannelEntity(
+                            index = index,
+                            name = name,
+                            role = role,
+                            psk = psk,
+                            positionPrecision = positionPrecision,
+                            mute = container.database.channelDao().get(index)?.mute ?: false,
+                            uplinkEnabled = uplink,
+                            downlinkEnabled = downlink,
+                        )
+                    )
+                }
+            }
+            _writeResult.value = ok
+        }
+    }
+
+    /** generateChannelKey(size:): the editor's dice button. */
+    fun generateChannelKey(size: Int): ByteArray = when {
+        size <= 0 -> ByteArray(0)
+        else -> ByteArray(size).also { java.security.SecureRandom().nextBytes(it) }
     }
 
     fun writeLoraConfig(lora: ConfigProtos.Config.LoRaConfig) = writeConfig { setLora(lora) }

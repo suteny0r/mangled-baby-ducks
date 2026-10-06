@@ -100,6 +100,9 @@ data class ChannelEntity(
     val psk: ByteArray? = null,
     val positionPrecision: Int = 32,
     val mute: Boolean = false,
+    /** ChannelSettings.uplink_enabled / downlink_enabled, round-tripped by the editor. */
+    val uplinkEnabled: Boolean = false,
+    val downlinkEnabled: Boolean = false,
 )
 
 @Entity(tableName = "my_info")

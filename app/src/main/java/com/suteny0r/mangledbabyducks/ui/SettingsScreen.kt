@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Lan
+import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.MyLocation
 import androidx.compose.material.icons.outlined.QrCode2
@@ -80,6 +81,7 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
     // Settings is a tab, not a nav graph, so a config section is a sub-screen held in
     // local state with the system back gesture wired to it.
     var section by rememberSaveable { mutableStateOf<ConfigSection?>(null) }
+    var showChannels by rememberSaveable { mutableStateOf(false) }
     var showAbout by rememberSaveable { mutableStateOf(false) }
     val router = LocalContext.current.container.router
     val pendingAbout by router.pendingAbout.collectAsState()
@@ -95,6 +97,12 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
 
     if (showAbout) {
         AboutScreen(onBack = { showAbout = false })
+        return
+    }
+
+    if (showChannels) {
+        BackHandler { showChannels = false }
+        ChannelsScreen(vm, connected, onBack = { showChannels = false })
         return
     }
 
@@ -169,7 +177,11 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                     section = ConfigSection.LORA
                 }
                 RowDivider()
-                NavRow("Channels", Icons.Outlined.Tag, "Import from a meshtastic.org/e/# link", enabled = connected) {
+                NavRow("Channels", Icons.Outlined.Tag, "Primary and secondary channels, keys, MQTT") {
+                    showChannels = true
+                }
+                RowDivider()
+                NavRow("Import channels", Icons.Outlined.Link, "From a meshtastic.org/e/# link", enabled = connected) {
                     showImport = true
                 }
                 RowDivider()

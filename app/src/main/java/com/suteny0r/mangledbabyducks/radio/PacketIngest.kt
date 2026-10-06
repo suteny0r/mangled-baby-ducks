@@ -171,6 +171,8 @@ class PacketIngest(private val db: MeshDatabase) {
                 role = channel.roleValue,
                 psk = channel.settings.psk.toByteArray(),
                 positionPrecision = channel.settings.moduleSettings.positionPrecision,
+                uplinkEnabled = channel.settings.uplinkEnabled,
+                downlinkEnabled = channel.settings.downlinkEnabled,
             )
         )
     }

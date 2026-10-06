@@ -703,6 +703,17 @@ class RadioManager(
         return sendAdmin { it.setCommitEditSettings(true) }
     }
 
+    /**
+     * AccessoryManager.saveChannel: one channel written on its own, wrapped in the same
+     * begin/commit the other config writes use so the radio stores it and reboots once.
+     * A role of DISABLED is how the firmware is told to drop a secondary channel.
+     */
+    suspend fun saveChannel(channel: ChannelProtos.Channel): Boolean {
+        if (!sendAdmin { it.setBeginEditSettings(true) }) return false
+        if (!sendAdmin { it.setSetChannel(channel) }) return false
+        return sendAdmin { it.setCommitEditSettings(true) }
+    }
+
     /** Broadcast the phone's GPS fix as this node's position. */
     suspend fun sendPhonePosition(latitudeI: Int, longitudeI: Int, altitude: Int): Boolean {
         val myNum = _myNodeNum.value

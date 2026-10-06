@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TracerouteEntity::class,
         WaypointEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 abstract class MeshDatabase : RoomDatabase() {
@@ -56,9 +56,17 @@ abstract class MeshDatabase : RoomDatabase() {
             }
         }
 
+        /** The MQTT flags the channel editor has to round-trip rather than clobber. */
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE channels ADD COLUMN uplinkEnabled INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE channels ADD COLUMN downlinkEnabled INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun build(context: Context): MeshDatabase =
             Room.databaseBuilder(context, MeshDatabase::class.java, "mesh.db")
-                .addMigrations(MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                 .fallbackToDestructiveMigration()
                 .build()
     }

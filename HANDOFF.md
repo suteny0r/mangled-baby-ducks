@@ -16,6 +16,29 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Channels screen with a real editor (2026-10-06, installed; no-op write verified)
+
+- Settings > Channels was an import dialog only. `ui/ChannelsScreen.kt` ports
+  Channels.swift: the frequency summary row (region, MHz, slot, from
+  LoRaChannelCalculator), a row per enabled channel (index disc, lock glyph, name, role
+  caption, pin when it shares position), and Add Channel while fewer than 8 exist. The
+  meshtastic.org/e/# import moved to its own row below.
+- The editor is ChannelForm.swift: name (spaces stripped, 11 bytes max), key size
+  (Empty / Default / 1 byte / 128 / 256) with a regenerate button, an editable base64 key
+  that blocks Save when its length does not match the chosen size, role (Primary fixed on
+  index 0, else Secondary / Disabled), Positions Enabled plus the 12..15 precision slider,
+  and MQTT uplink / downlink. Save sends ONE setChannel wrapped in begin/commit.
+- `ChannelEntity` gained `uplinkEnabled` / `downlinkEnabled` behind `MIGRATION_6_7`, so
+  the editor round-trips the MQTT flags instead of clobbering them. **A migrated row
+  defaults both to false**, and they only become the radio's truth after the next
+  handshake re-sends the channel dump: do not Save before reconnecting after an upgrade.
+- Write path proven with a no-op save on channel 0: two QUEUESTATUS acks, `Link lost`
+  (the radio saving and rebooting), reconnect on attempt 3, then the post-reboot dump
+  compared byte-for-byte (PSK hashed) against the pre-write snapshot. Identical, and
+  channel 1 untouched.
+- Still untested against hardware: a real edit, Add Channel, and Save with role Disabled
+  (which is how a secondary channel is deleted, locally dropping its messages too).
+
 ## Connect box named the wrong radio; LoRa frequency is now shown (2026-10-05, installed and verified)
 
 - **The box wore the previous radio's identity.** While connecting, it filled itself from

@@ -205,6 +205,13 @@ interface ChannelDao {
     @Query("SELECT * FROM channels WHERE role != 0 ORDER BY `index` ASC")
     fun activeChannels(): Flow<List<ChannelEntity>>
 
+    /** The editor needs the disabled slots too, to know which indexes are free. */
+    @Query("SELECT * FROM channels ORDER BY `index` ASC")
+    fun allChannels(): Flow<List<ChannelEntity>>
+
+    @Query("DELETE FROM channels WHERE `index` = :index")
+    suspend fun delete(index: Int)
+
     @Query("SELECT * FROM channels WHERE `index` = :index")
     suspend fun get(index: Int): ChannelEntity?
 
