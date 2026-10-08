@@ -18,10 +18,15 @@ invariants worth not breaking. Read it first; this file is the session log on to
 
 ## Release 0.2.6 (2026-10-08, tag v0.2.6, versionCode 8; first Play-ready bundle)
 
-- Same recipe as 0.2.0; `:app:bundleRelease` also produced
-  `app/build/outputs/bundle/release/app-release.aab` for the Play Console, signed with the
-  same release keystore. On first upload Play App Signing makes that key the upload key;
-  let Google hold the app signing key.
+- Same recipe as 0.2.0, plus `:app:bundleRelease` for the Play Console. The upload set
+  (both APKs, the `.aab`, 512 icon, feature graphic, six 1080 x 2160 screenshots) lives in
+  `art/play/0.2.6/` (untracked `art/` folder). Deliverables go in the project tree, never
+  the scratchpad. On first upload Play App Signing makes the release key the upload key;
+  let Google hold the app signing key. `allowBackup="false"` was added after the first
+  publish, so the v0.2.6 tag was moved and the release APKs replaced before anyone had
+  them; `docs/PRIVACY.md` now states the opt-out.
+- GitHub pushes and `gh` must run as `suteny0r`; the gh active account had drifted to the
+  other login, which made git prompt for a password it could not read.
 - Node map after node detail: the style callback drew the full mesh from the raw list and
   fitted to it, and `update`'s single-node set never re-ran. `displayNodes` is now computed
   once and shared. Reduced-precision positions draw their circle (node colour at 25 %,
