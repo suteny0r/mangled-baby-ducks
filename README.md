@@ -18,6 +18,34 @@ Meshtastic LLC.
 - Android Auto: nodes on the host map, messages with canned replies, voice replies through
   messaging notifications.
 
+## Backups
+
+Settings > Backup Management keeps one snapshot per radio. The app takes one on its own
+whenever you switch radios, and Backup Now takes one on demand. Switching back to a radio
+restores its snapshot before the new node dump lands.
+
+A snapshot is the app's whole database. Much of it exists nowhere else: the radio does
+not hold it, so a fresh install cannot recover it from the radio.
+
+| Only in the backup | Why the radio cannot supply it |
+|---|---|
+| Messages: every channel and direct message, read state, acks and naks, replies, tapbacks | The radio keeps no message history for the phone |
+| Node positions: latest fix per node and the position log | The radio's node table carries no positions; a fresh install refills only as nodes broadcast again |
+| Telemetry history: battery, voltage, channel utilisation, air time, environment readings | The radio keeps one latest reading per node |
+| Traceroute log: every traceroute with its reply paths and per-hop SNR | Not stored on the radio |
+| Nodes beyond the radio's table, with names, hardware, roles, first-heard times | The radio evicts older nodes as its table fills |
+| Local flags: mute per node, the key-mismatch warning and refused key, first-heard times, device metadata | Phone-side state |
+| Waypoints received over the mesh | Not retained by the radio |
+
+Favorites and ignored nodes live in both places. Channels, radio configuration and the
+radio's identity are in the snapshot too, but the radio supplies those on every connect.
+
+Backups live in the app's data folder, which Android deletes with the app. Before an
+uninstall or a move to another phone: Backup Now, then Export Backups to File, and keep
+the zip in Documents, not Downloads (some phones delete an app's downloads along with the
+app). On the new install, Import Backups from File brings the snapshots back, then
+Restore the one for your radio.
+
 ## Privacy
 
 The app has no server, no accounts and no analytics; the developer receives no data. The
