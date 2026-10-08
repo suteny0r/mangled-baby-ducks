@@ -16,6 +16,23 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Test rig change: the phone runs the Play internal-testing build (2026-10-08 02:10)
+
+- Mangled Baby Ducks 0.2.7 (versionCode 9) is installed from Google Play (internal
+  testing track, Play-signed). It is a release build: `run-as` is refused, so no database
+  pulls, no index edits, no `exec-out ... cat`. `adb logcat` still works (release keeps
+  `Log.i/w/e`; the `Log.d` handshake timings are gone). The external files folder
+  `Android/data/<pkg>/files/NodeBackups` is still reachable with `adb push`/`adb shell ls`.
+- A debug APK cannot be installed over it (signature mismatch). To go back to the bench
+  setup: pull `NodeBackups` first (plain `adb pull` works), uninstall, sideload debug,
+  push `NodeBackups` back, restore from Backup Management.
+- The user's data was carried across the reinstall this way: `backups/2026-10-08/`
+  (git-ignored) holds the pulled snapshots, the live store checkpointed into a 409600-byte
+  9f4a snapshot (384 nodes, 854 messages, 30 traceroutes), and `restore/NodeBackups/` with
+  the rewritten index. After restore the Play build shows 384 nodes.
+- Saved radios and the location-sharing preference did not carry over (DataStore is app
+  private); the user reconnects to each radio once.
+
 ## Release 0.2.7 (2026-10-08, tag v0.2.7, versionCode 9): targetSdk 36 for Play
 
 - The Play Console rejected the 0.2.6 bundle: new apps must target API 36 (Android 16).
