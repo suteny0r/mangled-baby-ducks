@@ -4,6 +4,7 @@ import android.util.Log
 import com.google.protobuf.ByteString
 import com.suteny0r.mangledbabyducks.db.MeshDatabase
 import com.suteny0r.mangledbabyducks.db.MessageEntity
+import com.suteny0r.mangledbabyducks.db.NodeEntity
 import com.suteny0r.mangledbabyducks.db.TracerouteEntity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -318,6 +319,10 @@ class RadioManager(
                 // History whose node row is gone (radio switch, removed node) is noise.
                 db.positionDao().pruneOrphans()
                 db.telemetryDao().pruneOrphans()
+                // Repair the other direction: a user with no node row is invisible in the
+                // node list and its detail screen renders empty. Older builds could leave
+                // these behind, and the row costs nothing to recreate.
+                db.nodeDao().orphanUserNums().forEach { db.nodeDao().upsert(NodeEntity(num = it)) }
             }
 
             if (conn.requiresPeriodicHeartbeat) startPeriodicHeartbeat()

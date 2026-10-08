@@ -16,6 +16,25 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Users without a node row rendered empty detail pages (2026-10-07, installed and verified)
+
+- The DB held 383 users but only 127 `nodes` rows: **256 orphans**. `NodeDetailViewModel.node()`
+  queries `nodes`, so an orphan's page showed "Node <num>" with Unknown hardware, and the
+  node never appeared in the Nodes list at all. KZ4DE G3 (`!c1f5a508`) was one, despite
+  having sent a channel message hours earlier.
+- Cause: `PacketIngest.myInfo`'s cross-radio defensive reset clears `nodes`, `positions`,
+  `telemetry` and `my_info` but NOT `users`, so every reset stranded the whole contact
+  list. (Every `nodes.firstHeard` in the dump was within one 40-minute window, which is
+  how the reset showed up.) iOS cannot have this: a `UserEntity` is reached through its
+  `NodeInfoEntity`, and its cross-device guard calls `clearDatabase`.
+- Three fixes: the reset now clears `users` too; `upsertUser` creates the node row first,
+  matching `upsertNodeInfoPacket`'s bare-User branch; and connect backfills a minimal
+  `NodeEntity` for any `NodeDao.orphanUserNums()`, which repairs an existing DB without a
+  wipe. Messages are deliberately NOT cleared by the reset (iOS backs the store up first
+  and we have no backup path), so old threads keep their text either way.
+- Verified: orphans 256 -> 0, nodes 127 -> 383, and KZ4DE G3 now opens with its Station G2
+  hardware card, name, node number and the rest.
+
 ## Node Map and map node taps stay where the Swift app puts them (2026-10-07, installed and verified)
 
 - **"Node Map" used to jump to the Map tab** (`Router.openMapNode`), so back landed on the

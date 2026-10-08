@@ -38,6 +38,9 @@ class PacketIngest(private val db: MeshDatabase) {
             // must go too, or the single-row LIMIT 1 queries keep serving the
             // old radio's identity.
             db.nodeDao().clear()
+            // Users go with their nodes, or the next connect inherits a foreign radio's
+            // contacts as node-less orphans. iOS clears the whole store here.
+            db.userDao().clear()
             db.positionDao().clear()
             db.telemetryDao().clear()
             db.myInfoDao().clear()
@@ -127,6 +130,10 @@ class PacketIngest(private val db: MeshDatabase) {
     }
 
     private suspend fun upsertUser(num: Long, user: MeshProtos.User) {
+        // A user must never exist without its node (see NodeDao.orphanUserNums): a bare
+        // User broadcast on NODEINFO_APP is upsertNodeInfoPacket's "Mesh broadcast sends a
+        // User protobuf" branch, which on iOS runs against a node row it created first.
+        if (db.nodeDao().get(num) == null) db.nodeDao().upsert(NodeEntity(num = num))
         val existing = db.userDao().get(num)
         // First-wins public key policy (UserEntity.applyInboundPublicKey): a differing
         // inbound key is refused, flagged so the UI can warn, and recorded for review.

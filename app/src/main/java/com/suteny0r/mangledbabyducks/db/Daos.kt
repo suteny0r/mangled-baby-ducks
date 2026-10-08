@@ -27,6 +27,15 @@ interface NodeDao {
     @Query("SELECT COUNT(*) FROM nodes")
     fun count(): Flow<Int>
 
+    /**
+     * Users whose node row is missing. On iOS a UserEntity is reached through its
+     * NodeInfoEntity and cannot exist without one; here they are separate tables, so the
+     * invariant has to be enforced. An orphan is invisible in the node list and its detail
+     * screen renders empty.
+     */
+    @Query("SELECT u.num FROM users u LEFT JOIN nodes n ON n.num = u.num WHERE n.num IS NULL")
+    suspend fun orphanUserNums(): List<Long>
+
     @Query("DELETE FROM nodes")
     suspend fun clear()
 
@@ -87,6 +96,9 @@ interface UserDao {
 
     @Query("DELETE FROM users WHERE num = :num")
     suspend fun delete(num: Long)
+
+    @Query("DELETE FROM users")
+    suspend fun clear()
 }
 
 @Dao
