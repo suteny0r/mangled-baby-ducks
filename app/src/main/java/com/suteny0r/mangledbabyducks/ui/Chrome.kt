@@ -266,17 +266,21 @@ fun AppHeader(
         Row(verticalAlignment = Alignment.CenterVertically) {
             AppLogo()
             if (!large) {
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    title,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
+                // Inline title: centred in whatever is left between the logo and the
+                // trailing cluster. (A weighted title next to a weighted spacer split
+                // that space in half and ellipsised "Nodes (nnn)".)
+                Box(Modifier.weight(1f).padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            } else {
+                Spacer(Modifier.weight(1f))
             }
-            Spacer(Modifier.weight(1f))
             trailing()
             if (showStatus) ConnectedDevicePill()
         }
