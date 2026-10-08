@@ -41,6 +41,8 @@ when present, else the phone's (user: radios can wait a long time for a GPS lock
   was on or the radio had broadcast its own position: the user saw PA-I with a position on
   the node map but no distance line. `docs/PRIVACY.md` updated to match. Not yet verified
   on the phone (it runs the Play build); next upload.
+- Shipped as 0.2.11 (versionCode 13): commits c57d643 + f801281, tag v0.2.11, GitHub release
+  with both APKs, upload set in `art/play/0.2.11/` for the Play internal testing track.
 - Exported zip vanished with the app (2026-10-08 15:20): the user saved through the
   picker's Downloads root on the Note 20 Ultra (Android 13), uninstalled, reinstalled, and
   the zip was gone from `/sdcard/Download` and the media index. On the AOSP emulator the
