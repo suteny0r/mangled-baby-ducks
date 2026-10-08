@@ -84,6 +84,11 @@ Esri World Imagery.
    the upload key; let Google hold the app signing key.
 4. Push and release as GitHub user `suteny0r` (`gh auth switch --user suteny0r` first).
 
+## Target API
+
+New apps and updates must target the current Android API level (36 as of October 2026);
+the console rejects the bundle otherwise ("must target at least API level 36").
+
 ## Console assets
 
 - Icon: `art/icon-crops/play-icon-512.png` (512 x 512 PNG).

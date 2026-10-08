@@ -11,14 +11,14 @@ plugins {
 
 android {
     namespace = "com.suteny0r.mangledbabyducks"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.suteny0r.mangledbabyducks"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 8
-        versionName = "0.2.6"
+        targetSdk = 36
+        versionCode = 9
+        versionName = "0.2.7"
     }
 
     // Release signing comes from local.properties (untracked): release.store.file,

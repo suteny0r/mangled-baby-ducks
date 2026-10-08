@@ -16,6 +16,21 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Release 0.2.7 (2026-10-08, tag v0.2.7, versionCode 9): targetSdk 36 for Play
+
+- The Play Console rejected the 0.2.6 bundle: new apps must target API 36 (Android 16).
+  `compileSdk`/`targetSdk` are 36; AGP 8.7.3 builds it with
+  `android.suppressUnsupportedCompileSdk=36` in gradle.properties. Native libs (MapLibre,
+  androidx graphics path, datastore) verify 16 KB aligned (`zipalign -c -P 16 -v 4`).
+- Smoke-tested on the Note 20 Ultra only (Android 13). Target-36 behaviour changes apply on
+  Android 15/16 hardware, which is not on the bench: edge-to-edge is enforced (the thread
+  screen's "window shrinks for the keyboard" assumption in MessagesScreen.kt needs
+  `imePadding` there), predictive back is on by default, and orientation/resizability
+  restrictions are ignored on large screens. Test on an Android 16 emulator before
+  production.
+- Upload set in `art/play/0.2.7/`. The 0.2.6 GitHub release stays because the foreground
+  service declaration video URL points at it.
+
 ## Release 0.2.6 (2026-10-08, tag v0.2.6, versionCode 8; first Play-ready bundle)
 
 - Same recipe as 0.2.0, plus `:app:bundleRelease` for the Play Console. The upload set
