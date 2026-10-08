@@ -324,16 +324,19 @@ class NodesViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
     /**
-     * Where we are, for distance and bearing: the phone's GPS fix while location sharing
-     * runs (LocationsHandler on iOS), else the connected radio's own last position.
+     * Where we are, for distance and bearing: the connected radio's own position once it
+     * has one (that is the node whose distances these are), and the phone's fix until
+     * then. Radios without a GPS, or still waiting for a lock, would otherwise leave the
+     * lists without a reference point; the switch happens on its own when the radio's
+     * first position lands.
      */
     val myLocation: StateFlow<Pair<Double, Double>?> = combine(
         container.locationSharer.lastFix,
         positionByNode,
         myNodeNum,
     ) { fix, positions, me ->
-        fix?.let { it.latitudeI / 1e7 to it.longitudeI / 1e7 }
-            ?: positions[me]?.let { it.latitude to it.longitude }
+        positions[me]?.let { it.latitude to it.longitude }
+            ?: fix?.let { it.latitudeI / 1e7 to it.longitudeI / 1e7 }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     /** Latest battery % per node for the list rows (empty for nodes without telemetry). */

@@ -136,10 +136,14 @@ abstract class MeshCarScreen(carContext: CarContext) : Screen(carContext) {
         ContextCompat.checkSelfPermission(carContext, Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
 
-    /** The car's own fix (phone GPS), else the connected node's last position. */
+    /**
+     * The connected radio's position once it has one, else the phone's fix. Same rule as
+     * NodesViewModel.myLocation: radios waiting for a GPS lock fall back to the phone and
+     * take over when their first position lands.
+     */
     protected fun carLocation(myNum: Long, positions: List<MapNode>): Pair<Double, Double>? {
-        container.locationSharer.lastFix.value?.let { return it.latitudeI / 1e7 to it.longitudeI / 1e7 }
-        return positions.firstOrNull { it.nodeNum == myNum }?.let { it.latitude to it.longitude }
+        positions.firstOrNull { it.nodeNum == myNum }?.let { return it.latitude to it.longitude }
+        return container.locationSharer.lastFix.value?.let { it.latitudeI / 1e7 to it.longitudeI / 1e7 }
     }
 }
 
