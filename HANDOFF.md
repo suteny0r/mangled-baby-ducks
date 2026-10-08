@@ -16,6 +16,25 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Release 0.2.6 (2026-10-08, tag v0.2.6, versionCode 8; first Play-ready bundle)
+
+- Same recipe as 0.2.0; `:app:bundleRelease` also produced
+  `app/build/outputs/bundle/release/app-release.aab` for the Play Console, signed with the
+  same release keystore. On first upload Play App Signing makes that key the upload key;
+  let Google hold the app signing key.
+- Node map after node detail: the style callback drew the full mesh from the raw list and
+  fitted to it, and `update`'s single-node set never re-ran. `displayNodes` is now computed
+  once and shared. Reduced-precision positions draw their circle (node colour at 25 %,
+  white edge) on both maps; the single-node camera uses the NodeMapSwiftUI distance
+  (10 km, or 10x the circle radius for 12..24 bits). `MapNode.precisionBits` comes from
+  the `mapNodes()` query.
+- Traceroute map starts at the first hop because our own node has no position row in any
+  store copy (9f4a and 8e18 both): the originator is dropped exactly as iOS drops hops
+  without a snapshot. User will retest with nodes that have positions; if the origin is
+  still missing, look at own-position ingest (the radio cc's its own POSITION_APP
+  broadcasts to the phone, and the connect dump's own NodeInfo carries a position when
+  the radio has one).
+
 ## Restore killed every Room observer, and a backup overwrote 845 messages (2026-10-07, installed and verified)
 
 - Symptom 1: after a radio switch, a sent channel message only appeared once the thread
