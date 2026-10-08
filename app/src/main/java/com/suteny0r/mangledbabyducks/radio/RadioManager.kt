@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.meshtastic.proto.AdminProtos
 import org.meshtastic.proto.AppOnlyProtos
@@ -107,6 +108,8 @@ class RadioManager(
     val incomingMessages = MutableSharedFlow<MessageEntity>(extraBufferCapacity = 64)
 
     private val configCompleteIds = MutableSharedFlow<Long>(extraBufferCapacity = 16)
+    /** When the last NodeInfo of the dump landed, to time the radio's trailing CONFIG_COMPLETE. */
+    private var lastNodeInfoAt = 0L
 
     private var connection: RadioConnection? = null
     private var eventJob: Job? = null
@@ -169,13 +172,22 @@ class RadioManager(
     }
 
     // `factory` is deliberately last: every call site passes it as a trailing lambda.
-    /** [address] is what the store records as the radio's identity (my_info.radioAddress). */
+    /**
+     * [address] is what the store records as the radio's identity (my_info.radioAddress).
+     *
+     * Runs on Default, never on the caller's dispatcher: every caller is a ViewModel on
+     * Main, and the handshake's nonce waiter resumes on the dispatcher it was started on.
+     * With the main thread busy after a node dump, the DB nonce arrived on an IO worker and
+     * the waiter did not get to run for 35 s, which showed as "Retrieving nodes N" sitting
+     * at its final count long after the radio had finished. iOS's connect pipeline is off
+     * the main actor for the same reason.
+     */
     suspend fun connect(
         name: String?,
         presence: PresenceProbe? = null,
         address: String? = null,
         factory: () -> RadioConnection,
-    ) {
+    ) = withContext(Dispatchers.Default) {
         val gen = beginRequest()
         _identityReady.value = false
         connectionFactory = factory
@@ -296,23 +308,31 @@ class RadioManager(
 
             // Step 3: wantConfig handshake — the radio streams config then echoes the nonce.
             sendHeartbeat()
+            // The drain is a loop that reads FROMRADIO until a zero-length read, and it is
+            // launched, not awaited: the waiter below only checks the nonce once request()
+            // returns, and after a node dump the radio keeps streaming queued packets for
+            // half a minute, so an awaited drain parked the handshake at "Retrieving nodes N"
+            // long after CONFIG_COMPLETE had arrived. The doorbell path launches it the same way.
             awaitConfigComplete(MeshProtocol.NONCE_ONLY_CONFIG.toLong(), timeoutMs = 30_000, lost = lost) {
                 send { it.setWantConfigId(MeshProtocol.NONCE_ONLY_CONFIG) }
-                conn.startDrainPendingPackets()
+                scope.launch { conn.startDrainPendingPackets() }
             }
 
             // Step 5: node DB dump under the second nonce.
             nodeCount = 0
+            lastNodeInfoAt = 0L
             _state.value = RadioState.RetrievingDatabase(0)
             awaitConfigComplete(MeshProtocol.NONCE_ONLY_DB.toLong(), timeoutMs = 120_000, lost = lost) {
                 send { it.setWantConfigId(MeshProtocol.NONCE_ONLY_DB) }
-                conn.startDrainPendingPackets()
+                scope.launch { conn.startDrainPendingPackets() }
             }
 
             // Step 7: set the radio's clock, then we are live. A Disconnect issued
             // mid-handshake must not end with a session declaring itself live.
             if (gen != requestGeneration) throw RadioException("Superseded by a newer request")
+            val setTimeStarted = System.currentTimeMillis()
             sendSetTime()
+            Log.d(TAG, "setTime took ${System.currentTimeMillis() - setTimeStarted} ms; Subscribed")
             sessionWentLive = true
             _state.value = RadioState.Subscribed
 
@@ -363,6 +383,7 @@ class RadioManager(
                 }
                 request()
                 nonceSeen.await()
+                Log.d(TAG, "Nonce $nonce seen by the handshake")
                 watchdog.cancel()
             }
         }
@@ -417,6 +438,7 @@ class RadioManager(
             MeshProtos.FromRadio.PayloadVariantCase.NODE_INFO -> {
                 ingest.nodeInfo(fromRadio.nodeInfo)
                 nodeCount++
+                lastNodeInfoAt = System.currentTimeMillis()
                 if (_state.value is RadioState.RetrievingDatabase) {
                     _state.value = RadioState.RetrievingDatabase(nodeCount)
                 }
@@ -429,8 +451,13 @@ class RadioManager(
                 ingest.moduleConfig(fromRadio.moduleConfig)
             MeshProtos.FromRadio.PayloadVariantCase.METADATA ->
                 ingest.deviceMetadata(fromRadio.metadata)
-            MeshProtos.FromRadio.PayloadVariantCase.CONFIG_COMPLETE_ID ->
-                configCompleteIds.emit(fromRadio.configCompleteId.uint())
+            MeshProtos.FromRadio.PayloadVariantCase.CONFIG_COMPLETE_ID -> {
+                val id = fromRadio.configCompleteId.uint()
+                if (id == MeshProtocol.NONCE_ONLY_DB.toLong() && lastNodeInfoAt != 0L) {
+                    Log.d(TAG, "Node DB complete: $nodeCount nodes, ${System.currentTimeMillis() - lastNodeInfoAt} ms after the last NodeInfo")
+                }
+                configCompleteIds.emit(id)
+            }
             MeshProtos.FromRadio.PayloadVariantCase.PACKET ->
                 processMeshPacket(fromRadio.packet)
             MeshProtos.FromRadio.PayloadVariantCase.REBOOTED -> {

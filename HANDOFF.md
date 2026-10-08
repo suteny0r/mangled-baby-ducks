@@ -16,6 +16,29 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Handshake sat at "Retrieving nodes N" for 35 s after the dump had finished (2026-10-07, installed and verified)
+
+- Symptom: the node counter reaches its final value, then Subscribed arrives 5 to 35 s later.
+  Measured with three debug log lines (now at `Log.d`): the DB-nonce CONFIG_COMPLETE was
+  emitted 20 ms after the last NodeInfo, and the handshake coroutine only looked at it 35 s
+  later. `setTime` itself took 200 ms. It was not main-thread starvation: the gap was the
+  same after moving `connect()` onto Dispatchers.Default, and the debug watchdog logged no
+  stall.
+- Cause: `awaitConfigComplete` runs `request()` to completion before awaiting the nonce,
+  and `request()` ended with `conn.startDrainPendingPackets()`, which is a loop that reads
+  FROMRADIO until a zero-length read. After a node dump the radio keeps streaming queued
+  packets, so the drain did not go quiet for half a minute and the already-emitted nonce
+  went unexamined. The FROMNUM doorbell path had always launched the drain; the handshake
+  path now does too (`scope.launch { conn.startDrainPendingPackets() }`).
+- After: nonce seen 1 ms after CONFIG_COMPLETE, Subscribed 262 ms later. The connect also
+  runs on Default now (every caller is a Main-thread ViewModel; iOS's pipeline is off the
+  main actor), and debug builds carry `MainThreadWatchdog`, which logs the main thread's
+  stack whenever a posted no-op does not run within 2 s. Android itself only reports a stall
+  when input is pending or a frame was due, so a quiet screen with a blocked main thread
+  logs nothing without it.
+- Reinstalling while connected leaves the radio holding the dead session: the next connect
+  gets three `GATT status 133`. Force-stop, wait a few seconds, relaunch.
+
 ## Backups are keyed on the address stored IN the database, like peripheralId (2026-10-07, installed and verified)
 
 - The previous fix (capture the saved address before `rememberRadio`) was not enough: the
