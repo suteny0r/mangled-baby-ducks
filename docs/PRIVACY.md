@@ -113,11 +113,11 @@ That data goes to the car head unit through Android; the developer does not rece
 
 ## Android backup
 
-The app does not opt out of Android's automatic app backup. If you have Google backup
-enabled on your phone, Android may back up the app's local database and preferences,
-including messages and channel keys, to your Google account along with your other app
-data. That backup is governed by Google's privacy policy and your device's backup
-settings, and you can exclude the app or disable backup in Android settings.
+The app opts out of Android's automatic app backup (`android:allowBackup="false"`). Your
+messages, node database, channel keys and preferences stay on the device and are not
+copied to your Google account by Android backup or device-to-device transfer. The only
+copies the app makes are the per-radio snapshots in Settings > Developers > Backup
+Management, stored in the app's own folder on the device and deleted with the app.
 
 ## Permissions
 

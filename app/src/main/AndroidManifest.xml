@@ -32,7 +32,8 @@
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.Meshtastic"
-        android:supportsRtl="true">
+        android:supportsRtl="true"
+        android:allowBackup="false">
 
         <!-- Android Auto: template UI (Car App Library) plus car-readable message notifications. -->
         <meta-data

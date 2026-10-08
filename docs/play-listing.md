@@ -101,5 +101,5 @@ Esri World Imagery.
 - Bluetooth (`BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`): the radio link.
 - Android Auto: the listing's car app category is "POI" (`androidx.car.app.MAP_TEMPLATES`);
   Play reviews Auto apps against the car app quality guidelines.
-- `allowBackup` is not set in the manifest (Android default applies), as `docs/PRIVACY.md`
-  discloses. Decide before the first production release.
+- `allowBackup="false"` is set, and `docs/PRIVACY.md` says so; the Data safety form can
+  state that no data leaves the device through Android backup.
