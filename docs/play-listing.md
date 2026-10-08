@@ -45,6 +45,9 @@ Radio configuration
 Android Auto
 • Nodes on the car's map, messages with quick replies, voice replies through notifications
 
+Backups
+• Per-radio database snapshots, so switching radios keeps each one's nodes and messages
+
 Open source
 Mangled Baby Ducks is licensed under the GNU General Public License v3.0. Source code:
 https://github.com/suteny0r/mangled-baby-ducks
