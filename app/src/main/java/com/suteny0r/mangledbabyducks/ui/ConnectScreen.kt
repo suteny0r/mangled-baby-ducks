@@ -187,10 +187,14 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
         val savedAddresses = knownRadios.map { it.address }.toSet()
         val available = buildList {
             knownRadios.filter { it.type == "ble" }.forEach { radio ->
+                // iOS lists live scan results, so a row always wears the name the radio
+                // advertises now. A saved row shows the saved name only while the radio
+                // is out of range.
+                val live = devices[radio.address]?.name?.takeIf { it.isNotBlank() }
                 add(
                     AvailableRadio(
                         key = radio.address,
-                        name = radio.label,
+                        name = live ?: radio.label,
                         tcp = false,
                         rssi = devices[radio.address]?.rssi,
                         saved = radio,

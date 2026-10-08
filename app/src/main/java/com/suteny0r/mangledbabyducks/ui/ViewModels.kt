@@ -234,9 +234,13 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
         Log.w("ConnectViewModel", "connect requested for unknown radio $key")
     }
 
-    fun connectKnown(target: RememberedRadio) {
+    fun connectKnown(saved: RememberedRadio) {
         scanJob?.cancel()
         _scanning.value = false
+        // A radio seen by the scan advertises its current name; the saved entry keeps the
+        // one from the first connect otherwise, which is how a renamed radio went stale.
+        val live = devices.value[saved.address]?.name?.takeIf { it.isNotBlank() }
+        val target = if (live != null && live != saved.name) saved.copy(name = live) else saved
         viewModelScope.launch {
             val factory = container.connectionFactory(target) ?: return@launch
             if (container.isSwitch(target.address)) {
