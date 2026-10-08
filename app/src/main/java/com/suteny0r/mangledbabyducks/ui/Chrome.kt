@@ -64,6 +64,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -263,13 +264,20 @@ fun AppHeader(
     trailing: @Composable RowScope.() -> Unit = {},
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            AppLogo()
-            if (!large) {
-                // Inline title: centred in whatever is left between the logo and the
-                // trailing cluster. (A weighted title next to a weighted spacer split
-                // that space in half and ellipsised "Nodes (nnn)".)
-                Box(Modifier.weight(1f).padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
+        if (large) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                AppLogo()
+                Spacer(Modifier.weight(1f))
+                trailing()
+                if (showStatus) ConnectedDevicePill()
+            }
+        } else {
+            // Inline title, centred on the header itself (not on the gap between the
+            // logo and the trailing cluster), with the title's width capped so it can
+            // never run under either side.
+            CenteredTitleBar(
+                leading = { AppLogo() },
+                title = {
                     Text(
                         title,
                         style = MaterialTheme.typography.titleMedium,
@@ -277,12 +285,14 @@ fun AppHeader(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                }
-            } else {
-                Spacer(Modifier.weight(1f))
-            }
-            trailing()
-            if (showStatus) ConnectedDevicePill()
+                },
+                trailing = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        trailing()
+                        if (showStatus) ConnectedDevicePill()
+                    }
+                },
+            )
         }
         if (large) {
             Text(
@@ -291,6 +301,41 @@ fun AppHeader(
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
             )
+        }
+    }
+}
+
+/**
+ * Leading at the start, trailing at the end, title centred on the full width. The title
+ * is measured against the width left over after the wider of the two side slots has
+ * been reserved on both sides (plus a gutter), so it ellipsises instead of overlapping.
+ */
+@Composable
+private fun CenteredTitleBar(
+    leading: @Composable () -> Unit,
+    title: @Composable () -> Unit,
+    trailing: @Composable () -> Unit,
+) {
+    val gutter = 8.dp
+    Layout(
+        contents = listOf(leading, title, trailing),
+        modifier = Modifier.fillMaxWidth(),
+    ) { (leadingM, titleM, trailingM), constraints ->
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val lead = leadingM.map { it.measure(loose) }
+        val trail = trailingM.map { it.measure(loose) }
+        val leadW = lead.sumOf { it.width }
+        val trailW = trail.sumOf { it.width }
+        val side = maxOf(leadW, trailW) + gutter.roundToPx()
+        val titleMax = (constraints.maxWidth - 2 * side).coerceAtLeast(0)
+        val ttl = titleM.map { it.measure(loose.copy(maxWidth = titleMax)) }
+        val height = (lead + trail + ttl).maxOfOrNull { it.height } ?: 0
+        layout(constraints.maxWidth, height) {
+            var x = 0
+            lead.forEach { it.placeRelative(x, (height - it.height) / 2); x += it.width }
+            x = constraints.maxWidth - trailW
+            trail.forEach { it.placeRelative(x, (height - it.height) / 2); x += it.width }
+            ttl.forEach { it.placeRelative((constraints.maxWidth - it.width) / 2, (height - it.height) / 2) }
         }
     }
 }
