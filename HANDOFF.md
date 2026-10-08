@@ -16,6 +16,11 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## 0.2.8 (versionCode 10) on the Play internal track: Android Auto verified in a car (2026-10-08)
+
+- Car service label and icon reverted to the app's own; the user reports everything works
+  on the head unit from the Play build. Upload set in `art/play/0.2.8/`.
+
 ## Android Auto with the Play build (2026-10-08 10:00, verified on the DHU)
 
 - The user saw no app icon on a real car with the internal-testing build. On the DHU the
