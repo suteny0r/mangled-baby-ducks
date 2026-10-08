@@ -43,6 +43,16 @@ invariants worth not breaking. Read it first; this file is the session log on to
   folder, and append `tap x y` / `screenshot path` lines to cmds.txt. The PowerShell
   Start-Process variant with a piped Get-Content never started the exe. The phone needs
   "Start head unit server" in Android Auto developer settings first (not persistent).
+- DHU window size (2026-10-08 11:40): resolution comes from `--config=config/default_1080p.ini`
+  (also default.ini 800x480, default_720p.ini; copy and edit `resolution`/`dpi` for other
+  sizes). There is no fullscreen flag; on this 4K desktop at 200 % scaling a 1920x1080 window
+  cannot fit the 1920x1080 logical desktop, so Windows maximizes it with the frame offscreen.
+  Fix: mark the exe high-DPI aware (`AppCompatFlags\Layers` value `~ HIGHDPIAWARE`), done
+  once in the registry and re-applied by `tools/dhu.ps1`. Then it is a bordered 1920x1080
+  physical-pixel window.
+- If the DHU logs `connected.` but never `Phone reported protocol version`, the phone's head
+  unit server is wedged on a stale socket (`netstat` on the phone shows 5277 CLOSE_WAIT with
+  unread bytes). Toggle "Start head unit server" off and on, then relaunch the DHU.
 
 ## Test rig change: the phone runs the Play internal-testing build (2026-10-08 02:10)
 
