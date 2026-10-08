@@ -280,7 +280,19 @@ data class MapNode(
     val time: Long,
     val shortName: String?,
     val longName: String?,
+    /** Position precision bits as sent; 32 (or 0) is a precise fix, 2..31 a reduced one. */
+    val precisionBits: Int = 32,
 ) {
     val latitude: Double get() = latitudeI / 1e7
     val longitude: Double get() = longitudeI / 1e7
+
+    /** PositionEntity.isReducedPrecision. */
+    val isReducedPrecision: Boolean get() = precisionBits in 2..31
+
+    /**
+     * PositionPrecision.precisionMeters: the table in Channels.swift is 5976446.98 m at
+     * 2 bits, halving per bit; 0 when the fix is precise.
+     */
+    val precisionMeters: Double
+        get() = if (isReducedPrecision) 5976446.981252 / (1 shl (precisionBits - 2)) else 0.0
 }

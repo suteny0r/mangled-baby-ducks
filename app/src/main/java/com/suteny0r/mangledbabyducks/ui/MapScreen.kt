@@ -96,6 +96,10 @@ import org.maplibre.android.style.layers.PropertyFactory.lineColor
 import org.maplibre.android.style.layers.PropertyFactory.lineDasharray
 import org.maplibre.android.style.layers.PropertyFactory.lineJoin
 import org.maplibre.android.style.layers.PropertyFactory.lineWidth
+import androidx.compose.ui.graphics.toArgb
+import org.maplibre.android.style.layers.FillLayer
+import org.maplibre.android.style.layers.PropertyFactory.fillColor
+import org.maplibre.geojson.Polygon
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
 import org.maplibre.geojson.LineString
@@ -139,6 +143,9 @@ private const val SATELLITE_ATTRIBUTION_URL = "https://www.esri.com"
 
 private const val SOURCE_ID = "mesh-nodes"
 private const val CIRCLE_LAYER_ID = "mesh-nodes-circles"
+private const val PRECISION_SOURCE_ID = "precision-circles"
+private const val PRECISION_FILL_LAYER_ID = "precision-circles-fill"
+private const val PRECISION_LINE_LAYER_ID = "precision-circles-line"
 private const val LABEL_LAYER_ID = "mesh-nodes-labels"
 private const val WP_SOURCE_ID = "waypoints"
 private const val WP_CIRCLE_LAYER_ID = "waypoints-circles"
@@ -270,7 +277,28 @@ fun MapScreen(vm: MapViewModel = viewModel(), focusNode: Long? = null) {
     val waypoints by vm.waypoints.collectAsState()
     val channels by vm.channels.collectAsState()
     val route by vm.route.collectAsState()
-    val currentNodes = rememberUpdatedState(nodes)
+    // What the map draws. When a route is active, only the nodes on that path (iOS
+    // selectedTraceRoute); with a focus node, that node alone (NodeMapSwiftUI); otherwise
+    // the mesh. A route that resolved to fewer than two positioned nodes draws nothing:
+    // the overlay explains why, and the mesh would be an unrelated regional view.
+    val displayNodes = when {
+        focusNode != null -> nodes.filter { it.nodeNum == focusNode }
+        activeRoute == null -> nodes
+        route.nodes.size < 2 -> emptyList()
+        else -> route.nodes.map { p ->
+            MapNode(
+                nodeNum = p.nodeNum,
+                latitudeI = (p.latitude * 1e7).toInt(),
+                longitudeI = (p.longitude * 1e7).toInt(),
+                time = 0L,
+                shortName = p.shortName,
+                longName = p.longName,
+            )
+        }
+    }
+    // The style callback below runs after this composition; it must draw the same set
+    // as `update`, or a focused node map comes up showing the whole mesh.
+    val currentNodes = rememberUpdatedState(displayNodes)
     val currentWaypoints = rememberUpdatedState(waypoints)
     val currentRoute = rememberUpdatedState(route)
     var satellite by rememberSaveable { mutableStateOf(true) }
@@ -372,32 +400,11 @@ fun MapScreen(vm: MapViewModel = viewModel(), focusNode: Long? = null) {
                 // Read the state HERE, synchronously: getMapAsync defers its callback
                 // while the map initializes, and reads inside a deferred callback are
                 // invisible to Compose's snapshot observer — update would never re-run.
-                val currentNodeList = nodes
+                val currentDisplayNodes = displayNodes
                 val currentWaypointList = waypoints
                 val currentRouteView = route
-                // When a route is active, show only the nodes on that path (matching iOS
-                // selectedTraceRoute behavior); otherwise show the full mesh. If the route
-                // resolved to fewer than two positioned nodes, draw nothing: the overlay
-                // explains why, and falling back to the mesh would just show an unrelated
-                // regional view.
-                val displayNodes = when {
-                    // NodeMapSwiftUI shows one node's positions, not the whole mesh.
-                    focusNode != null -> currentNodeList.filter { it.nodeNum == focusNode }
-                    activeRoute == null -> currentNodeList
-                    currentRouteView.nodes.size < 2 -> emptyList()
-                    else -> currentRouteView.nodes.map { p ->
-                        MapNode(
-                            nodeNum = p.nodeNum,
-                            latitudeI = (p.latitude * 1e7).toInt(),
-                            longitudeI = (p.longitude * 1e7).toInt(),
-                            time = 0L,
-                            shortName = p.shortName,
-                            longName = p.longName,
-                        )
-                    }
-                }
                 view.getMapAsync { map ->
-                    renderNodes(map, displayNodes, fitState)
+                    renderNodes(map, currentDisplayNodes, fitState)
                     renderWaypoints(map, currentWaypointList)
                     renderRoutePath(map, currentRouteView)
                 }
@@ -611,6 +618,20 @@ private fun renderWaypoints(map: MapLibreMap, waypoints: List<WaypointEntity>) {
 }
 
 private fun addNodeLayers(style: Style, satellite: Boolean) {
+    // Reduced-precision circles (MapCircle in NodeMapContent / MeshMapMK): the node's own
+    // colour at 25 %, white 2 px edge, drawn under the dots.
+    style.addSource(GeoJsonSource(PRECISION_SOURCE_ID))
+    style.addLayer(
+        FillLayer(PRECISION_FILL_LAYER_ID, PRECISION_SOURCE_ID).withProperties(
+            fillColor(get("color")),
+        )
+    )
+    style.addLayer(
+        LineLayer(PRECISION_LINE_LAYER_ID, PRECISION_SOURCE_ID).withProperties(
+            lineColor(android.graphics.Color.WHITE),
+            lineWidth(2f),
+        )
+    )
     style.addSource(GeoJsonSource(SOURCE_ID))
     style.addLayer(
         CircleLayer(CIRCLE_LAYER_ID, SOURCE_ID).withProperties(
@@ -730,6 +751,17 @@ class FitState {
     var fittedSize = -1
 }
 
+/** A 64-point polygon approximating a circle of [radiusMeters] around a coordinate. */
+private fun circlePolygon(lat: Double, lng: Double, radiusMeters: Double): Polygon {
+    val dLat = radiusMeters / 111_320.0
+    val dLng = radiusMeters / (111_320.0 * Math.cos(Math.toRadians(lat)).coerceAtLeast(0.01))
+    val ring = (0..64).map { i ->
+        val a = 2 * Math.PI * i / 64
+        Point.fromLngLat(lng + dLng * Math.cos(a), lat + dLat * Math.sin(a))
+    }
+    return Polygon.fromLngLats(listOf(ring))
+}
+
 private fun renderNodes(map: MapLibreMap, nodes: List<MapNode>, fit: FitState) {
     val style = map.style ?: run {
         android.util.Log.d("MapScreen", "renderNodes: style not ready (${nodes.size} nodes)")
@@ -747,14 +779,38 @@ private fun renderNodes(map: MapLibreMap, nodes: List<MapNode>, fit: FitState) {
         }
     }
     source.setGeoJson(FeatureCollection.fromFeatures(features))
+    style.getSourceAs<GeoJsonSource>(PRECISION_SOURCE_ID)?.setGeoJson(
+        FeatureCollection.fromFeatures(
+            nodes.filter { it.isReducedPrecision }.map { node ->
+                val argb = nodeColor(node.nodeNum).toArgb()
+                Feature.fromGeometry(circlePolygon(node.latitude, node.longitude, node.precisionMeters)).also {
+                    it.addStringProperty(
+                        "color",
+                        "rgba(${(argb shr 16) and 0xFF},${(argb shr 8) and 0xFF},${argb and 0xFF},0.25)",
+                    )
+                }
+            }
+        )
+    )
 
-    // One node (the node map) has no bounds to fit, so centre on it instead.
+    // One node (NodeMapSwiftUI): centre on it at the iOS camera distance, 10 km, or far
+    // enough back that a reduced-precision circle fits with room around it
+    // (cameraDistanceForPrecision: 10x the radius for 12..24 bits).
     if (nodes.size == 1 && fit.fittedSize != 1) {
         fit.fittedSize = 1
         val only = nodes.first()
+        val distance = if (only.precisionBits in 12..24) maxOf(10_000.0, only.precisionMeters * 10.0) else 10_000.0
+        // A MapKit camera at distance d with its 60-degree field of view sees about
+        // 1.15 d of ground top to bottom; fit that span.
+        val half = distance * 0.577
+        val dLat = half / 111_320.0
+        val dLng = half / (111_320.0 * Math.cos(Math.toRadians(only.latitude)).coerceAtLeast(0.01))
         runCatching {
             map.moveCamera(
-                CameraUpdateFactory.newLatLngZoom(LatLng(only.latitude, only.longitude), 13.0),
+                CameraUpdateFactory.newLatLngBounds(
+                    LatLngBounds.from(only.latitude + dLat, only.longitude + dLng, only.latitude - dLat, only.longitude - dLng),
+                    0,
+                ),
             )
         }
         return

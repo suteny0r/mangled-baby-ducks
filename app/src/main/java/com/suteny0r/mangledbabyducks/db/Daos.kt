@@ -287,7 +287,8 @@ interface PositionDao {
 
     @Query(
         "SELECT p.nodeNum AS nodeNum, p.latitudeI AS latitudeI, p.longitudeI AS longitudeI, " +
-            "p.time AS time, u.shortName AS shortName, u.longName AS longName " +
+            "p.time AS time, u.shortName AS shortName, u.longName AS longName, " +
+            "p.precisionBits AS precisionBits " +
             "FROM positions p JOIN nodes n ON n.num = p.nodeNum " +
             "LEFT JOIN users u ON u.num = p.nodeNum WHERE p.latest = 1"
     )
