@@ -10,7 +10,10 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import android.util.Log
+import com.suteny0r.mangledbabyducks.db.BackupResult
 import com.suteny0r.mangledbabyducks.db.MeshDatabase
+import com.suteny0r.mangledbabyducks.db.NodeBackupManager
 import com.suteny0r.mangledbabyducks.radio.BleScanner
 import com.suteny0r.mangledbabyducks.radio.HardwareCatalog
 import com.suteny0r.mangledbabyducks.radio.LanScanner
@@ -29,6 +32,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -49,6 +53,7 @@ object PrefKeys {
 
 /** How many radios to keep before the least recently used one is dropped. */
 private const val MAX_KNOWN_RADIOS = 12
+private const val TAG = "AppContainer"
 
 /** A radio the app has connected to, as stored in DataStore. */
 data class RememberedRadio(
@@ -122,7 +127,9 @@ private fun decodeRadios(json: String): List<RememberedRadio> {
 /** Manual singleton graph; the app is small enough not to need a DI framework yet. */
 class AppContainer(context: Context) {
     val database: MeshDatabase = MeshDatabase.build(context)
-    val ingest = PacketIngest(database)
+    /** One database snapshot per radio; see NodeBackupManager and [switchRadio]. */
+    val backups = NodeBackupManager(context, database)
+    val ingest = PacketIngest(database, backups)
     val radioManager = RadioManager(database, ingest)
     val bleScanner = BleScanner(context)
     val lanScanner = LanScanner(context)
@@ -193,12 +200,96 @@ class AppContainer(context: Context) {
         if (!radio.isConnected && !radio.isAttempting) RadioService.stop(context)
     }
 
+    // MARK: - Radio switching (Connect.swift switchToDevice / backupCurrentAndRestoreDatabase)
+
+    /** The radio whose data the store currently holds, by node number, or null when empty. */
+    suspend fun currentNodeNum(): Long? =
+        radioManager.myNodeNum.value.takeIf { it != 0L } ?: database.myInfoDao().myInfoOnce()?.myNodeNum
+
+    private suspend fun currentNodeName(num: Long): String? =
+        database.userDao().get(num)?.longName
+            ?: database.myInfoDao().myInfoOnce()?.bleName
+            ?: radioManager.deviceName.value
+
+    /**
+     * `backupCurrentDatabase`: snapshot the current radio unless the target IS the current
+     * radio, in which case there is nothing to protect.
+     */
+    private suspend fun backupCurrentDatabase(targetNodeNum: Long?) {
+        val current = currentNodeNum()
+        when {
+            current == null -> Log.w(TAG, "No current node num, skipping backup")
+            current == targetNodeNum -> Log.i(TAG, "Skipping backup because the target is the active node")
+            else -> {
+                val address = rememberedRadio()?.address
+                when (val result = backups.createBackup(current, currentNodeName(current), address)) {
+                    is BackupResult.Success -> Log.i(TAG, "Backup created: ${result.entry.fileSize} bytes for node $current")
+                    is BackupResult.Skipped -> Log.w(TAG, "Backup skipped: ${result.reason}")
+                    BackupResult.NoBackupFound -> Unit
+                }
+            }
+        }
+    }
+
+    /**
+     * `backupCurrentAndRestoreDatabase`: back the current radio up, optionally drop the
+     * link, clear the whole store (always, so one radio's nodes never land on another's),
+     * and import the target's snapshot when there is one. The caller connects afterwards.
+     */
+    suspend fun backupCurrentAndRestore(
+        context: Context,
+        targetNodeNum: Long?,
+        disconnectCurrentDevice: Boolean = false,
+    ): BackupResult {
+        backupCurrentDatabase(targetNodeNum)
+        if (disconnectCurrentDevice) {
+            // A restore from Settings is a deliberate disconnect: the auto-connect target
+            // goes too, or the next resume would reconnect the old radio and the foreign
+            // store guard would immediately back up and clear what was just restored.
+            Log.i(TAG, "Disconnecting current device before restore")
+            disconnectRadio(context)
+        }
+        router.resetNavigation()
+        withContext(Dispatchers.IO) { database.clearAllTables() }
+        return if (targetNodeNum != null) backups.restoreFromBackup(targetNodeNum) else BackupResult.NoBackupFound
+    }
+
+    /**
+     * `switchToDevice`: the user picked a radio other than the one the store belongs to.
+     * Records the choice as the auto-connect target at initiation (a failed switch must
+     * retry the radio the user asked for, not bounce back), disconnects, backs up, clears,
+     * restores, then hands control back to connect.
+     */
+    suspend fun switchRadio(context: Context, type: String, address: String, name: String?) {
+        val targetNodeNum = backups.resolveNodeNum(address)
+        Log.i(TAG, "Node switch: current ${currentNodeNum()}, target ${targetNodeNum ?: "unknown"} ($address)")
+        rememberRadio(type, address, name)
+        if (radioManager.isConnected) radioManager.disconnect()
+        when (val result = backupCurrentAndRestore(context, targetNodeNum)) {
+            is BackupResult.Success -> Log.i(TAG, "Backup restored for target node $targetNodeNum")
+            is BackupResult.Skipped -> Log.w(TAG, "Restore skipped: ${result.reason}")
+            BackupResult.NoBackupFound -> Log.i(TAG, "No backup for target node ${targetNodeNum ?: "unknown"}; radio will populate fresh data")
+        }
+    }
+
+    /**
+     * Whether connecting to [address] is a switch (a different radio than the store holds)
+     * or a plain reconnect. Same saved address, or a backup that says this address is the
+     * store's own node, means reconnect.
+     */
+    suspend fun isSwitch(address: String): Boolean {
+        val current = currentNodeNum() ?: return false
+        if (rememberedRadio()?.address == address) return false
+        return backups.resolveNodeNum(address) != current
+    }
+
     /**
      * Explicit reconnect to a saved radio (the car's Reconnect button and the phone's
      * failed-state retry): bypasses the one-attempt auto-connect budget.
      */
     suspend fun connectKnown(context: Context, target: RememberedRadio) {
         val factory = connectionFactory(target) ?: return
+        if (isSwitch(target.address)) switchRadio(context, target.type, target.address, target.name)
         runCatching { RadioService.start(context, target.label) }
         runCatching { radioManager.connect(target.label, presenceProbe(target), factory) }
         if (radioManager.isConnected) rememberRadio(target.type, target.address, target.name)

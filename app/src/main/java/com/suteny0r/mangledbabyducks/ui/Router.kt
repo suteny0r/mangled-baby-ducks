@@ -57,6 +57,18 @@ class Router {
         selectedTab.value = TAB_SETTINGS
     }
 
+    /**
+     * The switch flow's `router.popToRoot(tab:)` on every tab: nothing pending may survive
+     * a database clear, or a consumer would open a thread or node that no longer exists.
+     */
+    fun resetNavigation() {
+        pendingThread.value = null
+        pendingNode.value = null
+        activeRoute.value = null
+        pendingAbout.value = false
+        pendingMapNode.value = null
+    }
+
     companion object {
         /** Tab order matches the iOS app: Messages, Nodes, Map, Settings, Connect. */
         const val TAB_MESSAGES = 0

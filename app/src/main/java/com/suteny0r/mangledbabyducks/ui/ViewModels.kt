@@ -184,6 +184,11 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
         scanJob?.cancel()
         _scanning.value = false
         viewModelScope.launch {
+            // Connect.swift performRadioSwitch: a different radio than the store holds is
+            // backed up, cleared and restored before the link is made.
+            if (container.isSwitch(device.id)) {
+                container.switchRadio(getApplication(), "ble", device.id, device.name)
+            }
             RadioService.start(getApplication(), device.name)
             runCatching {
                 radio.connect(device.name) { container.bleScanner.connection(device.id) }
@@ -194,11 +199,15 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
 
     fun connectTcp(host: String, port: Int) {
         viewModelScope.launch {
+            val address = "$host:$port"
+            if (container.isSwitch(address)) {
+                container.switchRadio(getApplication(), "tcp", address, host)
+            }
             RadioService.start(getApplication(), host)
             runCatching {
                 radio.connect(host) { TcpConnection(host, port) }
             }
-            if (radio.isConnected) container.rememberRadio("tcp", "$host:$port", host)
+            if (radio.isConnected) container.rememberRadio("tcp", address, host)
         }
     }
 
@@ -230,6 +239,9 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
         _scanning.value = false
         viewModelScope.launch {
             val factory = container.connectionFactory(target) ?: return@launch
+            if (container.isSwitch(target.address)) {
+                container.switchRadio(getApplication(), target.type, target.address, target.name)
+            }
             RadioService.start(getApplication(), target.label)
             runCatching {
                 radio.connect(target.label, container.presenceProbe(target), factory)

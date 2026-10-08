@@ -64,8 +64,19 @@ abstract class MeshDatabase : RoomDatabase() {
             }
         }
 
-        fun build(context: Context): MeshDatabase =
-            Room.databaseBuilder(context, MeshDatabase::class.java, "mesh.db")
+        /** Every table, in dependency order; NodeBackupManager copies them in this order. */
+        val TABLES = listOf(
+            "nodes", "users", "my_info", "channels", "configs",
+            "positions", "telemetry", "messages", "waypoints", "traceroutes",
+        )
+
+        /**
+         * The live database by default. A backup restore passes an absolute path so Room
+         * opens (and migrates) a staged copy of a snapshot instead; `getDatabasePath` treats a
+         * leading separator as "use this path as given".
+         */
+        fun build(context: Context, name: String = "mesh.db"): MeshDatabase =
+            Room.databaseBuilder(context, MeshDatabase::class.java, name)
                 .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                 .fallbackToDestructiveMigration()
                 .build()

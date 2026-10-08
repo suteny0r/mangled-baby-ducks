@@ -6,11 +6,14 @@ import com.suteny0r.mangledbabyducks.db.ConfigEntity
 import com.suteny0r.mangledbabyducks.db.MeshDatabase
 import com.suteny0r.mangledbabyducks.db.MessageEntity
 import com.suteny0r.mangledbabyducks.db.MyInfoEntity
+import com.suteny0r.mangledbabyducks.db.NodeBackupManager
 import com.suteny0r.mangledbabyducks.db.NodeEntity
 import com.suteny0r.mangledbabyducks.db.PositionEntity
 import com.suteny0r.mangledbabyducks.db.TelemetryEntity
 import com.suteny0r.mangledbabyducks.db.UserEntity
 import com.suteny0r.mangledbabyducks.db.WaypointEntity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.meshtastic.proto.AdminProtos
 import org.meshtastic.proto.ChannelProtos
 import org.meshtastic.proto.ConfigProtos
@@ -26,24 +29,26 @@ import org.meshtastic.proto.TelemetryProtos
 /** An rx_time older than this is a replay, not clock skew. */
 private const val HISTORICAL_MS = 10 * 60 * 1000L
 
-class PacketIngest(private val db: MeshDatabase) {
+class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackupManager? = null) {
 
     /** Called when this radio's MyNodeInfo arrives; returns the local node num. */
     suspend fun myInfo(myInfo: MeshProtos.MyNodeInfo, bleName: String?): Long {
         val num = myInfo.myNodeNum.uint()
         var existing = db.myInfoDao().myInfoOnce()
         if (existing != null && existing.myNodeNum != num) {
-            // Different radio than the one this DB belongs to: defensive reset,
-            // mirroring handleMyInfo's cross-device store guard. The my_info row
-            // must go too, or the single-row LIMIT 1 queries keep serving the
-            // old radio's identity.
-            db.nodeDao().clear()
-            // Users go with their nodes, or the next connect inherits a foreign radio's
-            // contacts as node-less orphans. iOS clears the whole store here.
-            db.userDao().clear()
-            db.positionDao().clear()
-            db.telemetryDao().clear()
-            db.myInfoDao().clear()
+            // handleMyInfo's defensiveResetIfForeignDatabase: this connect landed on another
+            // radio's store without going through the switch flow (auto-reconnect to a
+            // never-seen radio, interrupted switch). Back the previous radio up exactly as
+            // the switch would have, then clear the whole store before anything for the
+            // new radio is ingested; nodes carry no owner column, so a merge is a bleed.
+            Log.w(TAG, "Connected to node $num but the store belongs to ${existing.myNodeNum}; backing up and resetting")
+            val previous = existing.myNodeNum
+            backups?.createBackup(
+                previous,
+                db.userDao().get(previous)?.longName ?: existing.bleName,
+                radioAddress = null,
+            )
+            withContext(Dispatchers.IO) { db.clearAllTables() }
             existing = null
         }
         db.channelDao().clear()

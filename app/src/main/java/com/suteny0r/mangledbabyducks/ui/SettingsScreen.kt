@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.MyLocation
 import androidx.compose.material.icons.outlined.QrCode2
 import androidx.compose.material.icons.outlined.SettingsInputAntenna
 import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Smartphone
 import androidx.compose.material.icons.outlined.Tag
 import androidx.compose.material3.AlertDialog
@@ -85,6 +86,7 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
     // composition when a section opens, so the list would come back scrolled to the top.
     val listScroll = rememberScrollState()
     var showChannels by rememberSaveable { mutableStateOf(false) }
+    var showBackups by rememberSaveable { mutableStateOf(false) }
     var showAbout by rememberSaveable { mutableStateOf(false) }
     val router = LocalContext.current.container.router
     val pendingAbout by router.pendingAbout.collectAsState()
@@ -106,6 +108,12 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
     if (showChannels) {
         BackHandler { showChannels = false }
         ChannelsScreen(vm, connected, onBack = { showChannels = false })
+        return
+    }
+
+    if (showBackups) {
+        BackHandler { showBackups = false }
+        BackupManagementScreen(onBack = { showBackups = false })
         return
     }
 
@@ -227,6 +235,12 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                     enabled = connected,
                     chevron = false,
                 ) { vm.broadcastNodeInfo() }
+            }
+
+            // Settings.swift developersSection: the per-radio database snapshots.
+            SectionHeader("Developers")
+            GroupCard {
+                NavRow("Backup Management", Icons.Outlined.Storage) { showBackups = true }
             }
 
             // The full trademark notice lives in About; this is the one-line minimum.

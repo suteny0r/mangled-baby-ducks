@@ -16,6 +16,49 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Per-radio database backups, ported from NodeBackupManager (2026-10-07, installed and verified)
+
+- The cross-radio reset used to clear nodes and keep messages because nothing saved the
+  previous radio first. That was my stand-in for the missing backup subsystem, not the
+  original's behaviour. The subsystem is now ported and the reset matches iOS.
+- `db/NodeBackupManager.kt` = `NodeBackupManager.swift` + `+Import.swift` + `BackupModels`:
+  one compacted `mesh.db` per radio under the app's external files dir
+  `Android/data/com.suteny0r.mangledbabyducks/files/NodeBackups/<nodeNum>/` (the Files-visible
+  Documents counterpart; internal fallback), `backup-index.json` alongside, SHA-256 checked,
+  50-backup cap, 50 MB free-space floor, retry once. A backup is a WAL checkpoint, file copy,
+  then checkpoint + `journal_mode=DELETE` + `VACUUM` on the copy. Restore stages the snapshot
+  into cache, opens it through Room so a pending migration runs on the copy, ATTACHes it to the
+  live database and copies every table by named columns (the per-entity import helpers). The
+  index also stores the radio's address, standing in for `MyInfoEntity.peripheralId`.
+- **Room does not notice the raw copy.** After `clearAllTables()` the unread badge went to 0
+  and stayed there with 1 unread in the table. `invalidationTracker.notifyObserversByTableNames`
+  is the fix (Room's hook for external writes), the counterpart of iOS bumping
+  `databaseResetID`. `refreshVersionsAsync()` alone was not enough.
+- `AppContainer`: `currentNodeNum`, `backupCurrentAndRestore(targetNodeNum, disconnect)` and
+  `switchRadio` are `Connect.swift`'s `backupCurrentDatabase` / `backupCurrentAndRestoreDatabase`
+  / `switchToDevice`. Every Connect-tab path (`connectBle`, `connectTcp`, `connectKnown`, the
+  container's `connectKnown`) asks `isSwitch(address)` first: different radio than the store
+  holds means back up, record the new auto-connect target, disconnect, clear, restore, then
+  connect. Same saved address, or a backup saying this address IS the store's node, means a
+  plain reconnect. `Router.resetNavigation()` is the `popToRoot` on every tab.
+- `PacketIngest.myInfo`'s foreign-store guard is now `defensiveResetIfForeignDatabase`:
+  back the previous radio up, then `clearAllTables()`. Messages go with everything else, as
+  on iOS; the backup is what makes that safe.
+- `ui/BackupManagementScreen.kt` = `BackupManagement.swift` + `BackupRowView.swift`, reached
+  from Settings > Developers > Backup Management: total storage, the list, Backup Now in the
+  header, tap a row for Restore / Delete (iOS swipe actions and context menu), the delete
+  confirmation text, the Restoring overlay, the Backup Failed / Restore Failed alerts. A
+  restore from here is `disconnectCurrentDevice: true` and also drops the auto-connect
+  target, or the next resume would reconnect the old radio and the guard would undo it.
+- Verified on the phone: Backup Now wrote a 340 kB snapshot with counts identical to the live
+  store (384 nodes, 845 messages); Restore of that snapshot cleared and re-imported in 180 ms
+  with every count identical and the unread badge intact; reconnecting afterwards was a plain
+  connect with no reset. **Not verified: a live switch to a different radio** (the backup /
+  clear / restore-or-empty / connect sequence against a second BLE radio); the code path is
+  the same `backupCurrentAndRestore`, but it has not been run against hardware.
+- Getting a readable copy of the live database: `adb exec-out run-as ... cat`, not
+  `adb shell ... cat` (the shell path mangles bytes and sqlite reports "malformed").
+
 ## Users without a node row rendered empty detail pages (2026-10-07, installed and verified)
 
 - The DB held 383 users but only 127 `nodes` rows: **256 orphans**. `NodeDetailViewModel.node()`
