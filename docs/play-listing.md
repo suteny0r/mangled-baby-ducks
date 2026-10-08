@@ -75,4 +75,31 @@ Esri World Imagery.
 1. Bump `versionCode` and `versionName` in `app/build.gradle.kts`.
 2. Tag the commit `v<versionName>` and push the tag. The in-app About screen points at
    this repository as the GPLv3 source offer, so the tag must match the shipped build.
-3. Build a signed release bundle and upload.
+3. Build a signed release bundle: `gradlew :app:bundleRelease` writes
+   `app/build/outputs/bundle/release/app-release.aab`, signed with the release keystore
+   from `local.properties`. On the first upload Play App Signing takes that certificate as
+   the upload key; let Google hold the app signing key.
+4. Push and release as GitHub user `suteny0r` (`gh auth switch --user suteny0r` first).
+
+## Console assets
+
+- Icon: `art/icon-crops/play-icon-512.png` (512 x 512 PNG).
+- Feature graphic: `art/icon-crops/feature-graphic-1024x500.png`.
+- Phone screenshots: 2 to 8, PNG or JPEG, each side 320 to 3840 px and the long side at
+  most twice the short side. A raw Note 20 Ultra capture is 1080 x 2316 and fails that
+  rule; crop to 1080 x 2160 (drops the system navigation bar).
+
+## Declarations the console will ask for
+
+- Foreground service types `connectedDevice` and `location`
+  (`FOREGROUND_SERVICE_CONNECTED_DEVICE`, `FOREGROUND_SERVICE_LOCATION`): the "Foreground
+  service permissions" form wants the use case and a short video of the feature. The
+  session keeps the radio link alive and, when the user turns on location sharing, sends
+  the phone's GPS to the radio.
+- Location (`ACCESS_FINE_LOCATION`, `ACCESS_COARSE_LOCATION`): required by Android for BLE
+  scanning below API 31 and used, optionally, for location sharing and the map.
+- Bluetooth (`BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`): the radio link.
+- Android Auto: the listing's car app category is "POI" (`androidx.car.app.MAP_TEMPLATES`);
+  Play reviews Auto apps against the car app quality guidelines.
+- `allowBackup` is not set in the manifest (Android default applies), as `docs/PRIVACY.md`
+  discloses. Decide before the first production release.
