@@ -29,7 +29,12 @@ import org.meshtastic.proto.TelemetryProtos
 /** An rx_time older than this is a replay, not clock skew. */
 private const val HISTORICAL_MS = 10 * 60 * 1000L
 
-class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackupManager? = null) {
+class PacketIngest(
+    private val db: MeshDatabase,
+    private val backups: NodeBackupManager? = null,
+    /** The saved radio's address at guard time, which is still the previous radio's. */
+    private val currentRadioAddress: suspend () -> String? = { null },
+) {
 
     /** Called when this radio's MyNodeInfo arrives; returns the local node num. */
     suspend fun myInfo(myInfo: MeshProtos.MyNodeInfo, bleName: String?): Long {
@@ -46,7 +51,7 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
             backups?.createBackup(
                 previous,
                 db.userDao().get(previous)?.longName ?: existing.bleName,
-                radioAddress = null,
+                radioAddress = currentRadioAddress(),
             )
             withContext(Dispatchers.IO) { db.clearAllTables() }
             existing = null

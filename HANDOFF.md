@@ -16,6 +16,37 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Switch filed each backup under the other radio's address (2026-10-07, installed and verified)
+
+- First live switch after the backup port: 9f4a -> 8e18 -> 9f4a came back with "target
+  unknown", no restore, and the user saw the previous radio's name in the connect panel
+  during the handshake, then read that as connecting to the wrong radio. GattService
+  showed every GATT connect went to the tapped MAC; it was the panel.
+- Cause: `switchRadio` called `rememberRadio(target)` BEFORE `backupCurrentDatabase` read
+  `rememberedRadio()?.address` for the backup's `radioAddress`, so 9f4a's snapshot was
+  indexed under 8e18's address and Spiney's under 9f4a's. `resolveNodeNum(target)` then
+  returned the CURRENT node, `isSwitch` said "same radio", a plain connect ran into a
+  foreign store, the guard fired mid-handshake, and the panel showed the old store's
+  identity while the handshake rewrote it.
+- Fix: capture the current radio's address before `rememberRadio`, pass it through
+  `backupCurrentAndRestore(currentAddress =)`; the guard path gets the address through a
+  `PacketIngest(currentRadioAddress = { rememberedRadio()?.address })` supplier, which at
+  guard time is still the previous radio's.
+- Each wrong-way switch also OVERWROTE the per-radio snapshot with the fresh dump
+  (`performBackup` deletes and recreates the node's directory), so the on-device 9f4a
+  backup shrank to 131 kB with 0 messages. The 21:30 Backup Now copy pulled to the PC
+  during verification (`F:/mesh-9f4a-full-2130.db`) was installed back as
+  `NodeBackups/255142777/mesh.db` with the index checksum/size rewritten (app force-stopped
+  first: the index is held in memory and saved over on every write), then a switch back to
+  9f4a restored it: 384 nodes, 845 messages, 29 traceroutes, unread badge back.
+- Verified after the fix: 9f4a -> 8e18 logged `Node switch: current 255142777, target
+  2600902403`, restored Spiney's snapshot, and the panel read "Spiney Norman /
+  Meshtastic_8e18" from Communicating through Subscribed; 8e18 -> 9f4a likewise.
+- The Connect list is hidden while connected (the device box owns the screen), so a
+  switch is swipe-to-Disconnect first, then tap. `disconnectRadio` clears the auto-connect
+  target, which is why `isSwitch` cannot rely on `rememberedRadio()` alone and consults the
+  backup index too.
+
 ## Per-radio database backups, ported from NodeBackupManager (2026-10-07, installed and verified)
 
 - The cross-radio reset used to clear nodes and keep messages because nothing saved the
