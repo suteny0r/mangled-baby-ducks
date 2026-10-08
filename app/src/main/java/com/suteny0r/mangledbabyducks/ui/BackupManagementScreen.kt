@@ -1,7 +1,10 @@
 package com.suteny0r.mangledbabyducks.ui
 
 import android.app.Application
+import android.net.Uri
 import android.text.format.DateFormat
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import android.text.format.Formatter
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -22,6 +25,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material.icons.outlined.FileDownload
+import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material3.AlertDialog
@@ -124,6 +129,44 @@ class BackupViewModel(app: Application) : AndroidViewModel(app) {
         container.backups.deleteBackup(entry.nodeNum)
         refresh()
     }
+
+    val transferring = MutableStateFlow(false)
+
+    /** Write every snapshot into the zip the user chose through the system file picker. */
+    fun exportTo(uri: Uri) {
+        viewModelScope.launch {
+            transferring.value = true
+            try {
+                val resolver = getApplication<Application>().contentResolver
+                val count = resolver.openOutputStream(uri, "wt")?.use { container.backups.exportArchive(it) }
+                    ?: throw IllegalStateException("Could not open the chosen file for writing")
+                error.value = "Export Complete" to "$count backup${if (count == 1) "" else "s"} written to the archive."
+            } catch (e: Exception) {
+                error.value = "Export Failed" to (e.message ?: "unknown error")
+            } finally {
+                transferring.value = false
+            }
+        }
+    }
+
+    /** Bring snapshots back from an archive made by [exportTo]; the live database is untouched. */
+    fun importFrom(uri: Uri) {
+        viewModelScope.launch {
+            transferring.value = true
+            try {
+                val resolver = getApplication<Application>().contentResolver
+                val summary = resolver.openInputStream(uri)?.use { container.backups.importArchive(it) }
+                    ?: throw IllegalStateException("Could not open the chosen file")
+                refresh()
+                error.value = "Import Complete" to
+                    "${summary.imported} imported, ${summary.skipped} skipped (already present and as new, or damaged)."
+            } catch (e: Exception) {
+                error.value = "Import Failed" to (e.message ?: "unknown error")
+            } finally {
+                transferring.value = false
+            }
+        }
+    }
 }
 
 /**
@@ -139,8 +182,17 @@ fun BackupManagementScreen(onBack: () -> Unit, vm: BackupViewModel = viewModel()
     val restoring by vm.restoring.collectAsState()
     val backingUp by vm.backingUp.collectAsState()
     val error by vm.error.collectAsState()
+    val transferring by vm.transferring.collectAsState()
     var pendingDelete by remember { mutableStateOf<BackupEntry?>(null) }
     LaunchedEffect(Unit) { vm.refresh() }
+    // System file picker both ways: no storage permission, and the user decides where the
+    // archive lives (Downloads, a drive, another device's folder).
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        uri?.let { vm.exportTo(it) }
+    }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let { vm.importFrom(it) }
+    }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -195,6 +247,32 @@ fun BackupManagementScreen(onBack: () -> Unit, vm: BackupViewModel = viewModel()
                         onDelete = { pendingDelete = entry },
                     )
                 }
+            }
+            // Not on iOS, where the backup folder is visible in Files. Android hides the
+            // app's data folder and an uninstall deletes it, so the snapshots need a way out
+            // and back in.
+            SectionHeader("Transfer", Modifier.padding(start = 16.dp, top = 16.dp))
+            GroupCard(Modifier.padding(horizontal = 16.dp)) {
+                NavRow(
+                    "Export Backups to File",
+                    Icons.Outlined.FileUpload,
+                    subtitle = "All snapshots as one zip, outside the app's data",
+                    enabled = backups.isNotEmpty() && !transferring && !restoring && !backingUp,
+                    chevron = false,
+                    onClick = {
+                        val stamp = DateFormat.format("yyyyMMdd-HHmm", Date())
+                        exportLauncher.launch("mangled-baby-ducks-backups-$stamp.zip")
+                    },
+                )
+                RowDivider()
+                NavRow(
+                    "Import Backups from File",
+                    Icons.Outlined.FileDownload,
+                    subtitle = "Restore the snapshot list from an exported zip",
+                    enabled = !transferring && !restoring && !backingUp,
+                    chevron = false,
+                    onClick = { importLauncher.launch(arrayOf("application/zip", "application/octet-stream")) },
+                )
             }
             Spacer(Modifier.padding(bottom = 24.dp))
         }

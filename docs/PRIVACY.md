@@ -56,16 +56,23 @@ nothing about it is sent to the developer.
 
 ### Your location
 
-The app asks for the precise location permission for two reasons:
+The app asks for the precise location permission for three reasons:
 
 1. Android requires it to scan for Bluetooth devices on some versions.
-2. Optionally, to share your phone's GPS position on the mesh as your node's position.
+2. To show the distance and direction from you to other nodes in the node lists, in the
+   app and on Android Auto.
+3. Optionally, to share your phone's GPS position on the mesh as your node's position.
 
-Location sharing is **off by default**. When you turn it on in Settings, the app reads
-your phone's GPS while it is connected to a radio and sends each fix to your radio, which
-broadcasts it on the mesh. Turning the switch off stops this. Separately, if you choose
-"send my position" to a specific node, the app sends your most recent GPS fix to that
-node once. Your location is never sent anywhere other than your own radio.
+While the permission is granted, the app keeps your phone's most recent location in
+memory for the distance display. That value stays on the phone; it is not stored in the
+database, not written to backups, and not sent anywhere unless you ask for one of the
+following.
+
+Location sharing is **off by default**. When you turn it on in Settings, the app sends
+each fix to your radio while it is connected, and the radio broadcasts it on the mesh.
+Turning the switch off stops this. Separately, if you choose "send my position" to a
+specific node, the app sends your most recent fix to that node once. Your location is
+never sent anywhere other than your own radio.
 
 The map tile requests described below reveal to the tile servers roughly which area of
 the map you are looking at. That is a property of fetching map tiles and is not your GPS

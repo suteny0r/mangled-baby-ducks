@@ -107,6 +107,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        container.locationSharer.ensureTracking()
         // A deliberate Disconnect forgets the radio, so this stays a no-op then.
         autoConnectIfRemembered()
     }

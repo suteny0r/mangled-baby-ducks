@@ -13,8 +13,13 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
 import java.security.MessageDigest
 import java.util.UUID
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 
 /** BackupModels.swift BackupEntry: one radio's database snapshot. */
 data class BackupEntry(
@@ -285,6 +290,107 @@ class NodeBackupManager(private val context: Context, private val database: Mesh
         // Belt and braces for anything the triggers did not cover: the counterpart of the
         // iOS `databaseResetID` remount that makes every @Query re-fetch after a restore.
         database.invalidationTracker.notifyObserversByTableNames(*MeshDatabase.TABLES.toTypedArray())
+    }
+
+    // MARK: - Export / import
+
+    /**
+     * Not in the Swift original: on iOS the backup folder is visible in the Files app, so
+     * the user can copy it out before deleting the app. Android hides `Android/data`, and
+     * an uninstall deletes it, so this is the way to carry snapshots across a reinstall. One
+     * zip: `backup-index.json` plus `<nodeNum>/mesh.db` per entry. Returns the entry count.
+     */
+    suspend fun exportArchive(out: OutputStream): Int = lock.withLock {
+        withContext(Dispatchers.IO) {
+            ZipOutputStream(out.buffered()).use { zip ->
+                zip.putNextEntry(ZipEntry(INDEX_FILE_NAME))
+                indexFile.inputStream().use { it.copyTo(zip) }
+                zip.closeEntry()
+                entries.values.forEach { entry ->
+                    val db = File(File(baseDir, entry.backupPath), DB_NAME)
+                    if (!db.exists()) return@forEach
+                    zip.putNextEntry(ZipEntry("${entry.backupPath}/$DB_NAME"))
+                    db.inputStream().use { it.copyTo(zip) }
+                    zip.closeEntry()
+                }
+            }
+            entries.size
+        }
+    }
+
+    data class ImportSummary(val imported: Int, val skipped: Int)
+
+    /**
+     * The reverse of [exportArchive]: unpack into a staged folder, verify each entry's
+     * checksum, then move the verified snapshots in. An entry for a node that already has
+     * a backup replaces it only when the archive's copy is newer. Nothing in the live
+     * database changes; restoring stays a separate, explicit step.
+     */
+    suspend fun importArchive(input: InputStream): ImportSummary = lock.withLock {
+        withContext(Dispatchers.IO) {
+            val stage = File(context.cacheDir, STAGE_PREFIX + UUID.randomUUID()).apply { mkdirs() }
+            try {
+                ZipInputStream(input.buffered()).use { zip ->
+                    while (true) {
+                        val entry = zip.nextEntry ?: break
+                        val name = entry.name.replace('\\', '/')
+                        // Only the two shapes we wrote; anything else (including path
+                        // escapes) is ignored rather than written.
+                        val ok = name == INDEX_FILE_NAME ||
+                            (name.endsWith("/$DB_NAME") && name.substringBefore('/').toLongOrNull() != null && name.count { it == '/' } == 1)
+                        if (ok && !entry.isDirectory) {
+                            val target = File(stage, name)
+                            target.parentFile?.mkdirs()
+                            target.outputStream().use { zip.copyTo(it) }
+                        }
+                        zip.closeEntry()
+                    }
+                }
+                val indexIn = File(stage, INDEX_FILE_NAME)
+                if (!indexIn.exists()) throw IllegalArgumentException("The file is not a backup archive (no $INDEX_FILE_NAME)")
+                val root = JSONObject(indexIn.readText())
+                val array = root.optJSONArray("entries") ?: JSONArray()
+                var imported = 0
+                var skipped = 0
+                for (i in 0 until array.length()) {
+                    val o = array.getJSONObject(i)
+                    val nodeNum = o.getLong("nodeNum")
+                    val backupPath = o.getString("backupPath")
+                    val createdAt = o.getLong("createdAt")
+                    val checksum = o.getString("checksum")
+                    val db = File(File(stage, backupPath), DB_NAME)
+                    if (!db.exists() || sha256(db) != checksum) {
+                        Log.w(TAG, "Import: snapshot for node $nodeNum missing or checksum mismatch, skipped")
+                        skipped++
+                        continue
+                    }
+                    val existing = entries[nodeNum]
+                    if (existing != null && existing.createdAt >= createdAt) {
+                        Log.i(TAG, "Import: existing backup for node $nodeNum is as new or newer, skipped")
+                        skipped++
+                        continue
+                    }
+                    val dir = File(baseDir, nodeNum.toString())
+                    dir.deleteRecursively()
+                    dir.mkdirs()
+                    db.copyTo(File(dir, DB_NAME), overwrite = true)
+                    entries[nodeNum] = BackupEntry(
+                        nodeNum = nodeNum,
+                        nodeName = o.optString("nodeName").ifEmpty { null },
+                        createdAt = createdAt,
+                        fileSize = db.length(),
+                        checksum = checksum,
+                        backupPath = nodeNum.toString(),
+                        radioAddress = o.optString("radioAddress").ifEmpty { null },
+                    )
+                    imported++
+                }
+                if (imported > 0) saveIndex()
+                ImportSummary(imported, skipped)
+            } finally {
+                stage.deleteRecursively()
+            }
+        }
     }
 
     // MARK: - Index

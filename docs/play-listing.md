@@ -83,6 +83,10 @@ Esri World Imagery.
    from `local.properties`. On the first upload Play App Signing takes that certificate as
    the upload key; let Google hold the app signing key.
 4. Push and release as GitHub user `suteny0r` (`gh auth switch --user suteny0r` first).
+5. Before replacing the install on the test phone (sideload to Play or back), open
+   Backup Management, tap Backup Now, then Export Backups to File. An uninstall deletes
+   `Android/data/<pkg>`, backups included, and the Play build cannot be read by adb. The
+   exported zip comes back in through Import Backups from File on the new install.
 
 ## Target API
 

@@ -16,6 +16,31 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Backup export/import, location tracking for distances, emulator (2026-10-08 15:00)
+
+- The reinstall from Play (over the sideloaded debug build) wiped `Android/data`, backups
+  included; the 02:08 set from the PC went back by adb. Positions do not come from the
+  radio: Spiney Norman's NodeDB over COM3 has 226 nodes and no latitudes, so a fresh
+  install starts with none and refills from position broadcasts (38 nodes in 6 min).
+- Backup Management gained a Transfer card: Export Backups to File (one zip, through the
+  system file picker: `backup-index.json` + `<nodeNum>/mesh.db`) and Import Backups from
+  File (unzips to cache, checks each checksum, replaces an existing entry only when the
+  archive's is newer, touches nothing in the live database). Not on iOS, where the backup
+  folder is visible in Files. Verified on the emulator: export, wipe the folder, import,
+  3 imported / 0 skipped, checksums identical. Release checklist step 5 in
+  `docs/play-listing.md` says to do this before any uninstall.
+- `LocationSharer` now tracks the phone's location whenever permission is granted
+  (seeded from `getLastKnownLocation`), and only *sends* while sharing is on and the radio
+  is live. `ensureTracking()` runs at construction, on each sharing/state change, and from
+  `MainActivity.onResume`. Before this the node lists had no reference point until sharing
+  was on or the radio had broadcast its own position: the user saw PA-I with a position on
+  the node map but no distance line. `docs/PRIVACY.md` updated to match. Not yet verified
+  on the phone (it runs the Play build); next upload.
+- Emulator: AVD `test33` (API 33 google_apis x86_64, Pixel 6 geometry) hand-written in
+  `~/.android/avd/` because cmdline-tools are not installed. Boots with
+  `emulator -avd test33 -no-snapshot -no-boot-anim -no-audio` in about 90 s; `run-as`
+  and `pm grant` work there. No radio, so it covers UI only.
+
 ## Car node detail, traceroute views, distance rows, per-tab state (2026-10-08 14:20, verified on the DHU and the phone)
 
 Shipped as 0.2.9 (versionCode 11): commits 5b6cf04 + 7289ba7, tag v0.2.9, GitHub release

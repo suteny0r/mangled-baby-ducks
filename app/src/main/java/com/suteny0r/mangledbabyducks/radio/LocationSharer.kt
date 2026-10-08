@@ -23,8 +23,16 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
- * Feeds the phone's GPS to the mesh as this node's position while enabled and
- * connected — the Android take on iOS's provideLocation/LocationsHandler.
+ * The Android take on iOS's LocationsHandler + provideLocation. Two jobs, gated
+ * separately:
+ *
+ * - Track the phone's location whenever permission is granted, so [lastFix] is there for
+ *   anything that needs "where am I": distance and bearing on the node lists, "Exchange
+ *   Positions", the car map's anchor. iOS's LocationsHandler runs as soon as permission
+ *   exists; without this the lists had no reference point until sharing was turned on or
+ *   the radio broadcast its own position.
+ * - Send each fix to the mesh as this node's position only while sharing is enabled and
+ *   the radio is connected.
  */
 class LocationSharer(
     private val context: Context,
@@ -35,33 +43,51 @@ class LocationSharer(
     private val locationManager =
         context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
     private var listening = false
+    /** Sharing enabled and the radio live: fixes go to the mesh. */
+    private var sharing = false
 
-    /** Last GPS fix seen; lets "send my position to a node" work even when sharing is off. */
+    /** Last fix seen, from the tracker above; null until permission is granted and a fix lands. */
     data class GpsFix(val latitudeI: Int, val longitudeI: Int, val altitude: Int)
     val lastFix = MutableStateFlow<GpsFix?>(null)
 
     private val listener = LocationListener { location -> onFix(location) }
 
     init {
+        ensureTracking()
         scope.launch {
             combine(
                 prefs.data.map { it[PrefKeys.SHARE_LOCATION] ?: false },
                 radioManager.state,
             ) { enabled, state -> enabled && state is RadioState.Subscribed }
                 .distinctUntilChanged()
-                .collect { active -> if (active) start() else stop() }
+                .collect { active ->
+                    sharing = active
+                    // Permission may have been granted since start-up; every state change
+                    // is a cheap moment to pick it up.
+                    ensureTracking()
+                    Log.i(TAG, if (active) "Location sharing on" else "Location sharing off")
+                }
         }
     }
 
+    /**
+     * Start listening if permission allows and we are not already. Safe to call often;
+     * MainActivity's resume calls it so a permission granted in Settings takes effect.
+     */
     @SuppressLint("MissingPermission")
-    private fun start() {
+    fun ensureTracking() {
         if (listening) return
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) !=
             PackageManager.PERMISSION_GRANTED
         ) {
-            Log.w(TAG, "Location sharing enabled but permission missing")
             return
         }
+        // Seed from the last known fix so the lists have a reference point before the
+        // first update arrives.
+        listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+            .mapNotNull { runCatching { locationManager.getLastKnownLocation(it) }.getOrNull() }
+            .maxByOrNull { it.time }
+            ?.let { lastFix.value = it.toFix() }
         val provider = when {
             locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) ->
                 LocationManager.GPS_PROVIDER
@@ -80,23 +106,19 @@ class LocationSharer(
             Looper.getMainLooper(),
         )
         listening = true
-        Log.i(TAG, "Location sharing started ($provider)")
+        Log.i(TAG, "Location tracking started ($provider)")
     }
 
-    private fun stop() {
-        if (!listening) return
-        locationManager.removeUpdates(listener)
-        listening = false
-        Log.i(TAG, "Location sharing stopped")
-    }
+    private fun Location.toFix() = GpsFix(
+        latitudeI = (latitude * 1e7).toInt(),
+        longitudeI = (longitude * 1e7).toInt(),
+        altitude = altitude.toInt(),
+    )
 
     private fun onFix(location: Location) {
-        val fix = GpsFix(
-            latitudeI = (location.latitude * 1e7).toInt(),
-            longitudeI = (location.longitude * 1e7).toInt(),
-            altitude = location.altitude.toInt(),
-        )
+        val fix = location.toFix()
         lastFix.value = fix
+        if (!sharing) return
         scope.launch(Dispatchers.IO) {
             radioManager.sendPhonePosition(fix.latitudeI, fix.longitudeI, fix.altitude)
         }
