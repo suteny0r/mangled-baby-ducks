@@ -16,6 +16,26 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Node Map and map node taps stay where the Swift app puts them (2026-10-07, installed and verified)
+
+- **"Node Map" used to jump to the Map tab** (`Router.openMapNode`), so back landed on the
+  node list. `NodeMapSwiftUI` is pushed INSIDE the node detail stack, so it is now a
+  sub-screen of node detail with its own `DetailHeader` back arrow, and back returns to the
+  detail at its scroll position. `MapScreen(focusNode = ...)` is the same map scoped to one
+  node: no waypoint long-press, no node taps, no toolbar (the detail header replaces it).
+- iOS shows only that node's positions there, so there are no other nodes on the node map
+  to tap. That is the original's behaviour, not an omission.
+- **Tapping a node on the Map tab used to switch tabs** (`router.openNode`), so back landed
+  on the node list. `MeshMapMK.swift` presents `NodeDetail(showMapLink: false)` as a sheet
+  over the map, so it is now an overlay inside the Map tab, drawn after the map rather than
+  as an early return so the `MapView` stays composed and the camera survives. Node detail
+  gained `showMapLink` to hide its own Node Map row there.
+- `renderNodes` now centres at zoom 13 when exactly one node is visible; `newLatLngBounds`
+  needs two points, so the node map opened zoomed all the way out.
+- Verified on the phone: node detail -> Node Map centres on the node, back returns to the
+  detail; Map tab -> tap EYG2 opens Emir G2 over the map, back returns to the identical
+  map view.
+
 ## Node detail keeps its scroll when a log closes (2026-10-07, installed and verified)
 
 - `NodeDetailScreen` created its `rememberScrollState()` below the `log?.let { ... return }`

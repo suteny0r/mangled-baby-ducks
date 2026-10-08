@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SmallFloatingActionButton
+import androidx.activity.compose.BackHandler
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -168,6 +169,27 @@ class MapViewModel(app: Application) : AndroidViewModel(app) {
         .catch { android.util.Log.e("MapScreen", "mapNodes flow failed", it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /** Node detail presented over the map needs the same actions NodesScreen passes it. */
+    val myNodeNum: StateFlow<Long> = container.database.myInfoDao().myInfo()
+        .map { it?.myNodeNum ?: 0L }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
+
+    fun toggleFavorite(num: Long) {
+        viewModelScope.launch {
+            val next = !(container.database.nodeDao().get(num)?.favorite ?: false)
+            container.radioManager.setFavorite(num, next)
+            container.database.nodeDao().setFavorite(num, next)
+        }
+    }
+
+    fun toggleIgnored(num: Long) {
+        viewModelScope.launch {
+            val next = !(container.database.nodeDao().get(num)?.ignored ?: false)
+            container.radioManager.setIgnored(num, next)
+            container.database.nodeDao().setIgnored(num, next)
+        }
+    }
+
     val waypoints: StateFlow<List<WaypointEntity>> =
         container.database.waypointDao().active(System.currentTimeMillis() / 1000)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -233,8 +255,13 @@ class MapViewModel(app: Application) : AndroidViewModel(app) {
     }
 }
 
+/**
+ * The Map tab, and (with [focusNode] set) NodeMapSwiftUI: node detail's "Node Map" row
+ * pushes this same map scoped to one node, inside the detail screen rather than jumping
+ * to the Map tab, so back returns to the node.
+ */
 @Composable
-fun MapScreen(vm: MapViewModel = viewModel()) {
+fun MapScreen(vm: MapViewModel = viewModel(), focusNode: Long? = null) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val router = context.container.router
@@ -248,6 +275,11 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
     val currentRoute = rememberUpdatedState(route)
     var satellite by rememberSaveable { mutableStateOf(true) }
     var newWaypointAt by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    // MeshMapMK.swift presents NodeDetail as a sheet OVER the map (showMapLink: false),
+    // so dismissing it returns to the map with its camera intact. Drawn as an overlay
+    // rather than an early return for the same reason: the MapView must stay composed.
+    var detailNode by rememberSaveable { mutableStateOf<Long?>(null) }
+    val myNum by vm.myNodeNum.collectAsState()
 
     val mapView = remember {
         MapLibre.getInstance(context)
@@ -276,26 +308,29 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
                 renderNodes(map, currentNodes.value, fitState)
                 renderWaypoints(map, currentWaypoints.value)
             }
-            map.addOnMapLongClickListener { latLng ->
-                newWaypointAt = latLng.latitude to latLng.longitude
-                true
-            }
-            map.addOnMapClickListener { latLng ->
-                // Only a tap on a node circle or its label opens the detail
-                // screen; a tap on empty space returns false (not our gesture).
-                val point = map.projection.toScreenLocation(latLng)
-                val hit = map.queryRenderedFeatures(point, CIRCLE_LAYER_ID, LABEL_LAYER_ID)
-                    .firstOrNull { it.hasProperty("nodeNum") }
-                    ?: return@addOnMapClickListener false
-                val num = hit.getNumberProperty("nodeNum")?.toLong()
-                    ?: return@addOnMapClickListener false
-                router.openNode(num)
-                true
+            // The node map is one node with no waypoint editing, so neither gesture applies.
+            if (focusNode == null) {
+                map.addOnMapLongClickListener { latLng ->
+                    newWaypointAt = latLng.latitude to latLng.longitude
+                    true
+                }
+                map.addOnMapClickListener { latLng ->
+                    // Only a tap on a node circle or its label opens the detail
+                    // screen; a tap on empty space returns false (not our gesture).
+                    val point = map.projection.toScreenLocation(latLng)
+                    val hit = map.queryRenderedFeatures(point, CIRCLE_LAYER_ID, LABEL_LAYER_ID)
+                        .firstOrNull { it.hasProperty("nodeNum") }
+                        ?: return@addOnMapClickListener false
+                    val num = hit.getNumberProperty("nodeNum")?.toLong()
+                        ?: return@addOnMapClickListener false
+                    detailNode = num
+                    true
+                }
             }
         }
     }
 
-    // "Node Map" from node detail: fly to that node once its marker is known.
+    // Deep links still ask the Map tab to centre on a node (notification, Android Auto).
     val pendingMapNode by router.pendingMapNode.collectAsState()
     LaunchedEffect(pendingMapNode, nodes) {
         val num = pendingMapNode ?: return@LaunchedEffect
@@ -346,6 +381,8 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
                 // explains why, and falling back to the mesh would just show an unrelated
                 // regional view.
                 val displayNodes = when {
+                    // NodeMapSwiftUI shows one node's positions, not the whole mesh.
+                    focusNode != null -> currentNodeList.filter { it.nodeNum == focusNode }
                     activeRoute == null -> currentNodeList
                     currentRouteView.nodes.size < 2 -> emptyList()
                     else -> currentRouteView.nodes.map { p ->
@@ -366,8 +403,9 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
                 }
             },
         )
-        // iOS map toolbar: logo at the leading edge, ConnectedDevice pill trailing.
-        Row(
+        // iOS map toolbar: logo at the leading edge, ConnectedDevice pill trailing. The
+        // node map is inside node detail, which supplies its own back/title bar.
+        if (focusNode == null) Row(
             Modifier
                 .fillMaxWidth()
                 .align(Alignment.TopStart)
@@ -384,7 +422,7 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
             contentColor = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(top = 72.dp, end = 12.dp),
+                .padding(top = if (focusNode == null) 72.dp else 12.dp, end = 12.dp),
         ) {
             Icon(Icons.Default.Layers, contentDescription = "Toggle satellite/streets")
         }
@@ -465,6 +503,26 @@ fun MapScreen(vm: MapViewModel = viewModel()) {
                         .align(Alignment.Center)
                         .padding(16.dp),
                 )
+        }
+    }
+
+    detailNode?.let { num ->
+        BackHandler { detailNode = null }
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            NodeDetailScreen(
+                nodeNum = num,
+                onBack = { detailNode = null },
+                onToggleFavorite = { vm.toggleFavorite(num) },
+                onToggleIgnore = { vm.toggleIgnored(num) },
+                isSelf = num == myNum,
+                onMessage = {
+                    val hit = nodes.firstOrNull { it.nodeNum == num }
+                    router.openThread(
+                        ThreadTarget.Direct(num, hit?.longName ?: "Node $num"),
+                    )
+                },
+                showMapLink = false,
+            )
         }
     }
 
@@ -690,6 +748,17 @@ private fun renderNodes(map: MapLibreMap, nodes: List<MapNode>, fit: FitState) {
     }
     source.setGeoJson(FeatureCollection.fromFeatures(features))
 
+    // One node (the node map) has no bounds to fit, so centre on it instead.
+    if (nodes.size == 1 && fit.fittedSize != 1) {
+        fit.fittedSize = 1
+        val only = nodes.first()
+        runCatching {
+            map.moveCamera(
+                CameraUpdateFactory.newLatLngZoom(LatLng(only.latitude, only.longitude), 13.0),
+            )
+        }
+        return
+    }
     // Re-fit whenever the visible node set size changes (mesh -> route collapse, close).
     if (nodes.size >= 2 && fit.fittedSize != nodes.size) {
         fit.fittedSize = nodes.size

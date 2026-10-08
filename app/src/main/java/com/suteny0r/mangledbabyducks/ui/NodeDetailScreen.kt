@@ -161,10 +161,6 @@ class NodeDetailViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** "Node Map" log row: the Map tab, centered on this node. */
-    fun openOnMap(num: Long) {
-        container.router.openMapNode(num)
-    }
-
     suspend fun nameFor(num: Long): String =
         db.userDao().get(num)?.let { it.longName ?: "!%08x".format(num) } ?: "!%08x".format(num)
 
@@ -264,6 +260,8 @@ fun NodeDetailScreen(
     onToggleFavorite: () -> Unit,
     onToggleIgnore: () -> Unit,
     isSelf: Boolean,
+    /** NodeDetail(showMapLink:) — false when presented from the map itself. */
+    showMapLink: Boolean = true,
     vm: NodeDetailViewModel = viewModel(),
 ) {
     val context = LocalContext.current
@@ -287,12 +285,23 @@ fun NodeDetailScreen(
     val userId = user?.userId ?: nodeNumString(nodeNum)
 
     var log by rememberSaveable { mutableStateOf<DetailLog?>(null) }
+    var showMap by rememberSaveable { mutableStateOf(false) }
     // Remembered above the log sub-screen's early return: state created below it leaves
     // the composition when a log opens, so back would come back scrolled to the top.
     val detailScroll = rememberScrollState()
     log?.let { open ->
         BackHandler { log = null }
         LogPage(open, nodeNum, metrics, envMetrics, traceroutes, vm, onBack = { log = null })
+        return
+    }
+    // NodeMapSwiftUI is pushed inside the node detail stack on iOS, so back comes back
+    // here rather than landing on the Map tab.
+    if (showMap) {
+        BackHandler { showMap = false }
+        Column(Modifier.fillMaxSize()) {
+            DetailHeader(title, onBack = { showMap = false })
+            MapScreen(focusNode = nodeNum)
+        }
         return
     }
 
@@ -418,8 +427,10 @@ fun NodeDetailScreen(
             GroupCard {
                 NavRow("Device Metrics Log", Icons.Outlined.Smartphone, enabled = metrics.isNotEmpty()) { log = DetailLog.DEVICE }
                 RowDivider()
-                NavRow("Node Map", Icons.Outlined.Map, enabled = position != null) { vm.openOnMap(nodeNum) }
-                RowDivider()
+                if (showMapLink) {
+                    NavRow("Node Map", Icons.Outlined.Map, enabled = position != null) { showMap = true }
+                    RowDivider()
+                }
                 NavRow("Position Log", Icons.Outlined.Place, iconTint = IosRed, enabled = position != null) { log = DetailLog.POSITION }
                 RowDivider()
                 NavRow("Environment Metrics Log", Icons.Outlined.Cloud, enabled = envMetrics.isNotEmpty()) { log = DetailLog.ENVIRONMENT }
