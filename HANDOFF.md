@@ -18,8 +18,10 @@ invariants worth not breaking. Read it first; this file is the session log on to
 
 ## Car node detail, traceroute views, distance rows, per-tab state (2026-10-08 14:20, verified on the DHU and the phone)
 
-Uncommitted at the time of writing; the phone runs this as a sideloaded debug build again
-(Play build uninstalled, the 02:08 backup set pushed back and restored).
+Shipped as 0.2.9 (versionCode 11): commits 5b6cf04 + 7289ba7, tag v0.2.9, GitHub release
+with both APKs, upload set in `art/play/0.2.9/` (bundle + `release-notes.txt`) for the Play
+internal testing track. The phone runs the sideloaded 0.2.9 debug build (Play build
+uninstalled, the 02:08 backup set pushed back and restored).
 
 - Car node detail is a sectioned `ListTemplate` (Details, then Actions) instead of a
   `PaneTemplate`, which caps at two buttons. Actions: Message, Trace Route, Traceroute Log,
