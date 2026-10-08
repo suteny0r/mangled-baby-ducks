@@ -15,7 +15,7 @@ Mangled Baby Ducks
 
 ## Short description (80 chars max)
 
-Free, open-source client for LoRa mesh radios. Messages, nodes, map, Android Auto.
+Open-source client for LoRa mesh radios. Messages, nodes, map, Android Auto.
 
 ## Full description (4000 chars max)
 
