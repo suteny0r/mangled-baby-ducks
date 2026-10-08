@@ -29,15 +29,10 @@ import org.meshtastic.proto.TelemetryProtos
 /** An rx_time older than this is a replay, not clock skew. */
 private const val HISTORICAL_MS = 10 * 60 * 1000L
 
-class PacketIngest(
-    private val db: MeshDatabase,
-    private val backups: NodeBackupManager? = null,
-    /** The saved radio's address at guard time, which is still the previous radio's. */
-    private val currentRadioAddress: suspend () -> String? = { null },
-) {
+class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackupManager? = null) {
 
     /** Called when this radio's MyNodeInfo arrives; returns the local node num. */
-    suspend fun myInfo(myInfo: MeshProtos.MyNodeInfo, bleName: String?): Long {
+    suspend fun myInfo(myInfo: MeshProtos.MyNodeInfo, bleName: String?, radioAddress: String?): Long {
         val num = myInfo.myNodeNum.uint()
         var existing = db.myInfoDao().myInfoOnce()
         if (existing != null && existing.myNodeNum != num) {
@@ -48,11 +43,7 @@ class PacketIngest(
             // new radio is ingested; nodes carry no owner column, so a merge is a bleed.
             Log.w(TAG, "Connected to node $num but the store belongs to ${existing.myNodeNum}; backing up and resetting")
             val previous = existing.myNodeNum
-            backups?.createBackup(
-                previous,
-                db.userDao().get(previous)?.longName ?: existing.bleName,
-                radioAddress = currentRadioAddress(),
-            )
+            backups?.createBackup(previous, db.userDao().get(previous)?.longName ?: existing.bleName)
             withContext(Dispatchers.IO) { db.clearAllTables() }
             existing = null
         }
@@ -64,6 +55,7 @@ class PacketIngest(
                 minAppVersion = myInfo.minAppVersion,
                 firmwareVersion = existing?.firmwareVersion,
                 bleName = bleName,
+                radioAddress = radioAddress ?: existing?.radioAddress,
             )
         )
         return num

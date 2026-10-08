@@ -16,6 +16,37 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Backups are keyed on the address stored IN the database, like peripheralId (2026-10-07, installed and verified)
+
+- The previous fix (capture the saved address before `rememberRadio`) was not enough: the
+  foreign-store guard fired one second after a switch and re-filed the backup under the
+  radio the switch had just saved, because the guard read `rememberedRadio()` for the
+  address too. Once one index entry is wrong the wrong `resolveNodeNum` makes the next switch
+  a plain connect into a foreign store, the guard fires again, and the corruption
+  self-perpetuates. That is what the user saw as "connects to the previous radio": GattService
+  showed every connect at the tapped MAC, but the panel wore the foreign store's identity
+  through the handshake and the user's history got overwritten by a fresh dump twice.
+- The port now does what iOS does: the address lives in the store. `my_info.radioAddress`
+  (`MyInfoEntity.peripheralId`, migration 7 -> 8) is written at MY_INFO from the address the
+  connect was asked for (`RadioManager.connect(name, presence, address, factory)`;
+  `lastAddress` -> `ingest.myInfo`). `NodeBackupManager.createBackup(nodeNum, nodeName)` reads
+  the address out of the store it is snapshotting, so a guard-time backup is keyed on the
+  radio whose data it holds, whatever prefs say. `isSwitch` checks the store's own address
+  first.
+- Verified: 9f4a -> 8e18 logged `current 255142777 (ED:A6...), target 2600902403 (3C:DC...)`,
+  8e18 -> 9f4a the reverse; the index addresses stayed put through both; the panel read the
+  target radio from the first Communicating frame; 9f4a came back with 384 nodes, 845
+  messages, 29 traceroutes and the unread badge.
+- The full 9f4a snapshot had to be reinstalled from the PC copy a second time
+  (`F:/mesh-9f4a-full-2130.db`), with the app force-stopped so the in-memory index did not
+  save over the edit, then restored from Backup Management before the switch test so the
+  thin dump would not be backed up over it again.
+- Driving the phone: it rotates to landscape on its own; a tap aimed from a portrait frame
+  lands on nothing, and a tap aimed at the launcher opened WhatsApp once. Check
+  `dumpsys window | grep mCurrentFocus` and take a fresh frame before every tap.
+- `uiautomator dump` can return nothing at all, not just stale XML. Screencap is the
+  reliable way to find a row.
+
 ## Switch filed each backup under the other radio's address (2026-10-07, installed and verified)
 
 - First live switch after the backup port: 9f4a -> 8e18 -> 9f4a came back with "target

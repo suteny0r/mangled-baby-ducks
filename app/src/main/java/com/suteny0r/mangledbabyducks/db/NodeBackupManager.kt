@@ -25,9 +25,9 @@ data class BackupEntry(
     /** Directory name under the backup folder, which is the node number. */
     val backupPath: String,
     /**
-     * The radio's transport address at backup time. iOS resolves a never-populated
-     * `Device.num` by reading `MyInfoEntity.peripheralId` out of each backup; our
-     * `my_info` row carries no address, so the index remembers it instead.
+     * `my_info.radioAddress` of the snapshot, copied into the index so
+     * `resolveNodeNum(forPeripheralId:)` does not have to open every backup the way iOS
+     * reads `MyInfoEntity.peripheralId` out of each one.
      */
     val radioAddress: String?,
 )
@@ -77,9 +77,17 @@ class NodeBackupManager(private val context: Context, private val database: Mesh
 
     // MARK: - Create
 
-    /** Retries once, like the Swift original (FR-004). */
-    suspend fun createBackup(nodeNum: Long, nodeName: String?, radioAddress: String?): BackupResult =
+    /**
+     * Retries once, like the Swift original (FR-004). The address the backup is keyed on is
+     * read from the store itself: a backup made by the foreign-store guard mid-switch, when
+     * the saved radio is already the new one, must still be filed under the radio whose
+     * data it holds.
+     */
+    suspend fun createBackup(nodeNum: Long, nodeName: String?): BackupResult =
         lock.withLock {
+            val radioAddress = database.myInfoDao().myInfoOnce()
+                ?.takeIf { it.myNodeNum == nodeNum }
+                ?.radioAddress
             if (!hasSufficientDiskSpace()) {
                 Log.w(TAG, "Insufficient disk space for backup of node $nodeNum")
                 return@withLock BackupResult.Skipped("Not enough storage for backup")

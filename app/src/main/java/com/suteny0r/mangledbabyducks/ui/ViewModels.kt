@@ -191,7 +191,7 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
             }
             RadioService.start(getApplication(), device.name)
             runCatching {
-                radio.connect(device.name) { container.bleScanner.connection(device.id) }
+                radio.connect(device.name, address = device.id) { container.bleScanner.connection(device.id) }
             }
             if (radio.isConnected) container.rememberRadio("ble", device.id, device.name)
         }
@@ -205,7 +205,7 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
             }
             RadioService.start(getApplication(), host)
             runCatching {
-                radio.connect(host) { TcpConnection(host, port) }
+                radio.connect(host, address = address) { TcpConnection(host, port) }
             }
             if (radio.isConnected) container.rememberRadio("tcp", address, host)
         }
@@ -244,7 +244,7 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
             }
             RadioService.start(getApplication(), target.label)
             runCatching {
-                radio.connect(target.label, container.presenceProbe(target), factory)
+                radio.connect(target.label, container.presenceProbe(target), target.address, factory)
             }
             if (radio.isConnected) {
                 container.rememberRadio(target.type, target.address, target.name)

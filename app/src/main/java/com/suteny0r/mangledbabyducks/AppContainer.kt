@@ -129,7 +129,7 @@ class AppContainer(context: Context) {
     val database: MeshDatabase = MeshDatabase.build(context)
     /** One database snapshot per radio; see NodeBackupManager and [switchRadio]. */
     val backups = NodeBackupManager(context, database)
-    val ingest = PacketIngest(database, backups) { rememberedRadio()?.address }
+    val ingest = PacketIngest(database, backups)
     val radioManager = RadioManager(database, ingest)
     val bleScanner = BleScanner(context)
     val lanScanner = LanScanner(context)
@@ -191,7 +191,7 @@ class AppContainer(context: Context) {
         // A car session is bound by the Android Auto host rather than started from an
         // Activity; if the OS refuses the foreground service the link still gets tried.
         runCatching { RadioService.start(context, target.label) }
-        radio.autoConnect(target.label, presenceProbe(target), factory)
+        radio.autoConnect(target.label, presenceProbe(target), target.address, factory)
         if (radio.isConnected) {
             // Keeps "last used" ordering in the saved list honest.
             rememberRadio(target.type, target.address, target.name)
@@ -215,13 +215,13 @@ class AppContainer(context: Context) {
      * `backupCurrentDatabase`: snapshot the current radio unless the target IS the current
      * radio, in which case there is nothing to protect.
      */
-    private suspend fun backupCurrentDatabase(targetNodeNum: Long?, currentAddress: String?) {
+    private suspend fun backupCurrentDatabase(targetNodeNum: Long?) {
         val current = currentNodeNum()
         when {
             current == null -> Log.w(TAG, "No current node num, skipping backup")
             current == targetNodeNum -> Log.i(TAG, "Skipping backup because the target is the active node")
             else -> {
-                when (val result = backups.createBackup(current, currentNodeName(current), currentAddress)) {
+                when (val result = backups.createBackup(current, currentNodeName(current))) {
                     is BackupResult.Success -> Log.i(TAG, "Backup created: ${result.entry.fileSize} bytes for node $current")
                     is BackupResult.Skipped -> Log.w(TAG, "Backup skipped: ${result.reason}")
                     BackupResult.NoBackupFound -> Unit
@@ -239,9 +239,8 @@ class AppContainer(context: Context) {
         context: Context,
         targetNodeNum: Long?,
         disconnectCurrentDevice: Boolean = false,
-        currentAddress: String? = null,
     ): BackupResult {
-        backupCurrentDatabase(targetNodeNum, currentAddress ?: rememberedRadio()?.address)
+        backupCurrentDatabase(targetNodeNum)
         if (disconnectCurrentDevice) {
             // A restore from Settings is a deliberate disconnect: the auto-connect target
             // goes too, or the next resume would reconnect the old radio and the foreign
@@ -262,15 +261,10 @@ class AppContainer(context: Context) {
      */
     suspend fun switchRadio(context: Context, type: String, address: String, name: String?) {
         val targetNodeNum = backups.resolveNodeNum(address)
-        // Read the CURRENT radio's address before the target is recorded over it: the
-        // backup about to be made is keyed on it, and it is how a later switch back finds
-        // the snapshot. Reading it after rememberRadio filed the first two backups under
-        // each other's radio.
-        val currentAddress = rememberedRadio()?.address
-        Log.i(TAG, "Node switch: current ${currentNodeNum()} ($currentAddress), target ${targetNodeNum ?: "unknown"} ($address)")
+        Log.i(TAG, "Node switch: current ${currentNodeNum()} (${currentRadioAddress()}), target ${targetNodeNum ?: "unknown"} ($address)")
         rememberRadio(type, address, name)
         if (radioManager.isConnected) radioManager.disconnect()
-        when (val result = backupCurrentAndRestore(context, targetNodeNum, currentAddress = currentAddress)) {
+        when (val result = backupCurrentAndRestore(context, targetNodeNum)) {
             is BackupResult.Success -> Log.i(TAG, "Backup restored for target node $targetNodeNum")
             is BackupResult.Skipped -> Log.w(TAG, "Restore skipped: ${result.reason}")
             BackupResult.NoBackupFound -> Log.i(TAG, "No backup for target node ${targetNodeNum ?: "unknown"}; radio will populate fresh data")
@@ -284,9 +278,14 @@ class AppContainer(context: Context) {
      */
     suspend fun isSwitch(address: String): Boolean {
         val current = currentNodeNum() ?: return false
+        if (currentRadioAddress() == address) return false
         if (rememberedRadio()?.address == address) return false
         return backups.resolveNodeNum(address) != current
     }
+
+    /** The address recorded in the store for the radio it holds data for. */
+    private suspend fun currentRadioAddress(): String? =
+        database.myInfoDao().myInfoOnce()?.radioAddress
 
     /**
      * Explicit reconnect to a saved radio (the car's Reconnect button and the phone's
@@ -296,7 +295,7 @@ class AppContainer(context: Context) {
         val factory = connectionFactory(target) ?: return
         if (isSwitch(target.address)) switchRadio(context, target.type, target.address, target.name)
         runCatching { RadioService.start(context, target.label) }
-        runCatching { radioManager.connect(target.label, presenceProbe(target), factory) }
+        runCatching { radioManager.connect(target.label, presenceProbe(target), target.address, factory) }
         if (radioManager.isConnected) rememberRadio(target.type, target.address, target.name)
     }
 

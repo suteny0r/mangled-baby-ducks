@@ -112,6 +112,12 @@ data class MyInfoEntity(
     val minAppVersion: Int = 0,
     val firmwareVersion: String? = null,
     val bleName: String? = null,
+    /**
+     * MyInfoEntity.peripheralId: the transport address this radio was reached at. Lives in
+     * the store, not in prefs, so a backup of this store is keyed on the radio it actually
+     * holds data for, whatever the saved radio is at that moment.
+     */
+    val radioAddress: String? = null,
 )
 
 @Entity(

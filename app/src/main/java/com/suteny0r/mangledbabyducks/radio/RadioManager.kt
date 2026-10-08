@@ -139,6 +139,7 @@ class RadioManager(
 
     // Kept so a dropped link can be re-established with a fresh connection object.
     private var connectionFactory: (() -> RadioConnection)? = null
+    private var lastAddress: String? = null
     private var lastName: String? = null
 
     val isConnected: Boolean
@@ -158,24 +159,28 @@ class RadioManager(
     suspend fun autoConnect(
         name: String?,
         presence: PresenceProbe? = null,
+        address: String? = null,
         factory: () -> RadioConnection,
     ): Boolean {
         if (isConnected || isAttempting) return false
         if (!autoConnectSpent.compareAndSet(false, true)) return false
-        connect(name, presence, factory)
+        connect(name, presence, address, factory)
         return true
     }
 
     // `factory` is deliberately last: every call site passes it as a trailing lambda.
+    /** [address] is what the store records as the radio's identity (my_info.radioAddress). */
     suspend fun connect(
         name: String?,
         presence: PresenceProbe? = null,
+        address: String? = null,
         factory: () -> RadioConnection,
     ) {
         val gen = beginRequest()
         _identityReady.value = false
         connectionFactory = factory
         lastName = name
+        lastAddress = address
         lastPresence = presence
         // Name the target before the first attempt: the UI has to be able to say
         // which radio it is reaching for, not just "Connecting…".
@@ -406,7 +411,7 @@ class RadioManager(
     private suspend fun processFromRadio(fromRadio: MeshProtos.FromRadio) {
         when (fromRadio.payloadVariantCase) {
             MeshProtos.FromRadio.PayloadVariantCase.MY_INFO -> {
-                _myNodeNum.value = ingest.myInfo(fromRadio.myInfo, _deviceName.value)
+                _myNodeNum.value = ingest.myInfo(fromRadio.myInfo, _deviceName.value, lastAddress)
                 _identityReady.value = true
             }
             MeshProtos.FromRadio.PayloadVariantCase.NODE_INFO -> {

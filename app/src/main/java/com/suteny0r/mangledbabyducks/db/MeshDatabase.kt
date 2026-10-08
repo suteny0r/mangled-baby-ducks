@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TracerouteEntity::class,
         WaypointEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 abstract class MeshDatabase : RoomDatabase() {
@@ -64,6 +64,13 @@ abstract class MeshDatabase : RoomDatabase() {
             }
         }
 
+        /** my_info.radioAddress, the counterpart of MyInfoEntity.peripheralId. */
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE my_info ADD COLUMN radioAddress TEXT")
+            }
+        }
+
         /** Every table, in dependency order; NodeBackupManager copies them in this order. */
         val TABLES = listOf(
             "nodes", "users", "my_info", "channels", "configs",
@@ -77,7 +84,7 @@ abstract class MeshDatabase : RoomDatabase() {
          */
         fun build(context: Context, name: String = "mesh.db"): MeshDatabase =
             Room.databaseBuilder(context, MeshDatabase::class.java, name)
-                .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                 .fallbackToDestructiveMigration()
                 .build()
     }

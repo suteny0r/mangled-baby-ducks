@@ -89,7 +89,7 @@ class BackupViewModel(app: Application) : AndroidViewModel(app) {
             val name = container.database.userDao().get(nodeNum)?.longName
             backingUp.value = true
             try {
-                when (val result = container.backups.createBackup(nodeNum, name, container.rememberedRadio()?.address)) {
+                when (val result = container.backups.createBackup(nodeNum, name)) {
                     is BackupResult.Success -> refresh()
                     is BackupResult.Skipped -> error.value = "Backup Failed" to result.reason
                     BackupResult.NoBackupFound -> error.value = "Backup Failed" to "Backup could not be created."
