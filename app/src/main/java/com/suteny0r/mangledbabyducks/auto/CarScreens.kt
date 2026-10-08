@@ -19,14 +19,13 @@ import androidx.car.app.model.DistanceSpan
 import androidx.car.app.model.ItemList
 import androidx.car.app.model.ListTemplate
 import androidx.car.app.model.Metadata
-import androidx.car.app.model.Pane
-import androidx.car.app.model.PaneTemplate
 import androidx.car.app.model.Place
 import androidx.car.app.model.PlaceListMapTemplate
 import androidx.car.app.model.PlaceMarker
 import androidx.car.app.model.Row
 import androidx.car.app.model.SectionedItemList
 import androidx.car.app.model.Template
+import androidx.car.app.model.Toggle
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.IconCompat
 import androidx.lifecycle.Lifecycle
@@ -41,12 +40,15 @@ import com.suteny0r.mangledbabyducks.db.MapNode
 import com.suteny0r.mangledbabyducks.db.MessageEntity
 import com.suteny0r.mangledbabyducks.db.NodeWithUser
 import com.suteny0r.mangledbabyducks.db.PositionEntity
+import com.suteny0r.mangledbabyducks.db.RoutePoint
 import com.suteny0r.mangledbabyducks.db.TelemetryEntity
+import com.suteny0r.mangledbabyducks.db.TracerouteEntity
 import com.suteny0r.mangledbabyducks.db.UserEntity
 import com.suteny0r.mangledbabyducks.db.nodeNumString
 import com.suteny0r.mangledbabyducks.knownRadios
 import com.suteny0r.mangledbabyducks.radio.RadioState
 import com.suteny0r.mangledbabyducks.ui.ThreadTarget
+import com.suteny0r.mangledbabyducks.ui.absoluteTime
 import com.suteny0r.mangledbabyducks.ui.relativeTime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -59,10 +61,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
-import kotlin.math.atan2
-import kotlin.math.cos
-import kotlin.math.sin
-import kotlin.math.sqrt
+import com.suteny0r.mangledbabyducks.ui.bearingDegrees
+import com.suteny0r.mangledbabyducks.ui.haversineMeters
 
 /*
  * Head-unit screens for Android Auto. These are template descriptions, not views: the
@@ -83,7 +83,6 @@ private val carWorkScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 /** Row caps that keep a template well under the binder transaction ceiling (see contentLimit). */
 private const val MAP_ROW_CAP = 24
 private const val LIST_ROW_CAP = 50
-private const val PANE_ROW_CAP = 6
 
 private val QUICK_REPLIES = listOf(
     "OK",
@@ -155,24 +154,25 @@ private fun displayName(node: MapNode): String =
         ?: node.shortName?.takeIf { it.isNotBlank() }
         ?: nodeNumString(node.nodeNum)
 
+private fun displayName(point: RoutePoint): String =
+    point.longName?.takeIf { it.isNotBlank() }
+        ?: point.shortName?.takeIf { it.isNotBlank() }
+        ?: nodeNumString(point.nodeNum)
+
 /** Channel label with the phone UI's fallback for unnamed channels. */
 private fun channelName(channel: ChannelEntity?, index: Int): String =
     channel?.name?.takeIf { it.isNotBlank() }
         ?: if (index == 0) "Primary Channel" else "Channel $index"
 
-/** Marker labels are capped at three characters by the host; emoji do not render there. */
-private fun markerLabel(shortName: String?): String {
+/**
+ * Marker labels are capped at three characters by the host; emoji do not render there.
+ * An emoji-only short name falls back to the long name's initials.
+ */
+private fun markerLabel(shortName: String?, longName: String? = null): String {
     val letters = shortName.orEmpty().filter { it.isLetterOrDigit() }.take(3)
-    return letters.ifEmpty { "?" }
-}
-
-private fun haversineMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
-    val r = 6_371_000.0
-    val dLat = Math.toRadians(lat2 - lat1)
-    val dLon = Math.toRadians(lon2 - lon1)
-    val a = sin(dLat / 2) * sin(dLat / 2) +
-        cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLon / 2) * sin(dLon / 2)
-    return 2 * r * atan2(sqrt(a), sqrt(1 - a))
+    if (letters.isNotEmpty()) return letters
+    val initials = longName.orEmpty().split(' ').mapNotNull { w -> w.firstOrNull { it.isLetterOrDigit() } }.take(3)
+    return initials.joinToString("").ifEmpty { "?" }
 }
 
 private val imperial: Boolean
@@ -314,7 +314,7 @@ class CarMapScreen(carContext: CarContext) : MeshCarScreen(carContext) {
             val place = Place.Builder(CarLocation.create(node.latitude, node.longitude))
                 .setMarker(
                     PlaceMarker.Builder()
-                        .setLabel(markerLabel(node.shortName))
+                        .setLabel(markerLabel(node.shortName, node.longName))
                         .setColor(CarColor.BLUE)
                         .build()
                 )
@@ -475,15 +475,18 @@ class CarRadioScreen(carContext: CarContext) : MeshCarScreen(carContext) {
 class CarNodesScreen(carContext: CarContext) : MeshCarScreen(carContext) {
 
     private var nodes: List<NodeWithUser> = emptyList()
+    private var positions: Map<Long, MapNode> = emptyMap()
     private var myNum = 0L
 
     init {
         observe(container.database.nodeDao().nodesWithUsers()) { nodes = it }
+        observe(container.database.positionDao().mapNodes()) { list -> positions = list.associateBy { it.nodeNum } }
         observe(container.radioManager.myNodeNum) { myNum = it }
     }
 
     override fun onGetTemplate(): Template {
         val limit = contentLimit(ConstraintManager.CONTENT_LIMIT_TYPE_LIST, LIST_ROW_CAP)
+        val here = carLocation(myNum, positions.values.toList())
         val list = ItemList.Builder().setNoItemsMessage("No nodes yet")
         nodes.asSequence()
             .filter { !it.node.ignored }
@@ -495,15 +498,24 @@ class CarNodesScreen(carContext: CarContext) : MeshCarScreen(carContext) {
             .take(limit)
             .forEach { entry ->
                 val num = entry.node.num
-                val detail = buildList {
-                    entry.user?.shortName?.takeIf { it.isNotBlank() }?.let { add(it) }
-                    if (num == myNum) add("connected") else entry.node.lastHeard?.let { add(relativeTime(it)) }
-                    if (entry.node.hopsAway > 0) add("${entry.node.hopsAway} hops")
-                }.joinToString(" · ")
+                val detail = SpannableStringBuilder(
+                    buildList {
+                        entry.user?.shortName?.takeIf { it.isNotBlank() }?.let { add(it) }
+                        if (num == myNum) add("connected") else entry.node.lastHeard?.let { add(relativeTime(it)) }
+                        if (entry.node.hopsAway > 0) add("${entry.node.hopsAway} hops")
+                    }.joinToString(" · ").ifEmpty { nodeNumString(num) }
+                )
+                // NodeListItem's distance and bearing, in the car's units via the host span.
+                val there = positions[num]
+                if (here != null && there != null && num != myNum) {
+                    detail.append(" · ")
+                    detail.append(distanceSpan(haversineMeters(here.first, here.second, there.latitude, there.longitude)))
+                    detail.append(" · ${bearingDegrees(here.first, here.second, there.latitude, there.longitude).toInt()}°")
+                }
                 list.addItem(
                     Row.Builder()
                         .setTitle(displayName(entry.user, num))
-                        .addText(detail.ifEmpty { nodeNumString(num) })
+                        .addText(detail)
                         .setBrowsable(true)
                         .setOnClickListener { screenManager.push(CarNodeDetailScreen(carContext, num)) }
                         .build()
@@ -535,17 +547,24 @@ class CarNodeDetailScreen(carContext: CarContext, private val num: Long) : MeshC
         observe(container.radioManager.myNodeNum) { myNum = it }
     }
 
+    /**
+     * Details on top, then the phone's node-detail actions (NodeDetail.swift's list) as rows.
+     * A pane allows two buttons, which is why this is a sectioned list instead. Favorite,
+     * mute and ignore are toggle rows: their titles never change, so flipping one is a
+     * refresh rather than a template step against the host's quota.
+     */
+    @Suppress("DEPRECATION") // setTitle/setHeaderAction predate Header (API 7).
     override fun onGetTemplate(): Template {
-        val limit = contentLimit(ConstraintManager.CONTENT_LIMIT_TYPE_PANE, PANE_ROW_CAP)
+        val limit = contentLimit(ConstraintManager.CONTENT_LIMIT_TYPE_LIST, LIST_ROW_CAP)
         val node = entry?.node
         val user = entry?.user
-        val rows = mutableListOf<Row>()
-        rows += Row.Builder()
+        val details = mutableListOf<Row>()
+        details += Row.Builder()
             .setTitle("Node")
             .addText(listOfNotNull(user?.shortName, nodeNumString(num)).joinToString(" · "))
             .build()
         node?.lastHeard?.let {
-            rows += Row.Builder().setTitle("Last heard").addText(relativeTime(it)).build()
+            details += Row.Builder().setTitle("Last heard").addText(relativeTime(it)).build()
         }
         if (node != null && (node.snr != 0f || node.rssi != 0 || node.hopsAway >= 0)) {
             val signal = buildList {
@@ -553,11 +572,11 @@ class CarNodeDetailScreen(carContext: CarContext, private val num: Long) : MeshC
                 if (node.snr != 0f) add("SNR %.1f dB".format(node.snr))
                 if (node.rssi != 0) add("RSSI ${node.rssi}")
             }.joinToString(" · ")
-            if (signal.isNotEmpty()) rows += Row.Builder().setTitle("Signal").addText(signal).build()
+            if (signal.isNotEmpty()) details += Row.Builder().setTitle("Signal").addText(signal).build()
         }
         metrics?.batteryLevel?.let { level ->
             // Firmware reports >100 for a node running on external power.
-            rows += Row.Builder().setTitle("Battery").addText(if (level > 100) "Plugged in" else "$level%").build()
+            details += Row.Builder().setTitle("Battery").addText(if (level > 100) "Plugged in" else "$level%").build()
         }
         position?.let { pos ->
             val text = SpannableStringBuilder("%.5f, %.5f".format(pos.latitude, pos.longitude))
@@ -565,42 +584,243 @@ class CarNodeDetailScreen(carContext: CarContext, private val num: Long) : MeshC
                 text.append(" · ")
                 text.append(distanceSpan(haversineMeters(lat, lon, pos.latitude, pos.longitude)))
             }
-            rows += Row.Builder().setTitle("Position").addText(text).build()
+            details += Row.Builder().setTitle("Position").addText(text).build()
         }
 
-        val pane = Pane.Builder()
-        rows.take(limit).forEach { pane.addRow(it) }
-        if (num != myNum) {
-            val name = displayName(user, num)
-            pane.addAction(
-                Action.Builder()
-                    .setTitle("Message")
-                    .setIcon(icon(R.drawable.ic_car_message))
-                    .setOnClickListener {
-                        screenManager.push(CarQuickReplyScreen(carContext, ThreadTarget.Direct(num, name)))
-                    }
-                    .build()
-            )
-            pane.addAction(
-                Action.Builder()
-                    .setTitle("Traceroute")
-                    .setOnClickListener { traceroute() }
-                    .build()
-            )
+        val isSelf = num == myNum
+        val name = displayName(user, num)
+        val actions = mutableListOf<Row>()
+        if (!isSelf && user?.unmessagable != true) {
+            actions += Row.Builder()
+                .setTitle("Message")
+                .setImage(icon(R.drawable.ic_car_message), Row.IMAGE_TYPE_ICON)
+                .setOnClickListener {
+                    screenManager.push(CarQuickReplyScreen(carContext, ThreadTarget.Direct(num, name)))
+                }
+                .build()
         }
-        @Suppress("DEPRECATION")
-        return PaneTemplate.Builder(pane.build())
-            .setTitle(displayName(user, num))
+        if (!isSelf) {
+            actions += actionRow("Trace Route") { container.radioManager.sendTraceroute(num) }
+            // TraceRouteLog: the only place a traceroute result is readable, so it sits next
+            // to the send. Browsable: it opens a screen rather than firing a request.
+            actions += Row.Builder()
+                .setTitle("Traceroute Log")
+                .setBrowsable(true)
+                .setOnClickListener { screenManager.push(CarTraceroutesScreen(carContext, num, name)) }
+                .build()
+            actions += actionRow("Exchange Positions") {
+                val fix = container.locationSharer.lastFix.value ?: return@actionRow false
+                container.radioManager.sendDestPosition(
+                    toNum = num,
+                    latitudeI = fix.latitudeI,
+                    longitudeI = fix.longitudeI,
+                    altitude = fix.altitude,
+                    channel = 0,
+                )
+            }
+            actions += actionRow("Exchange User Info") { container.radioManager.exchangeUserInfo(num) }
+            actions += actionRow("Request Local Stats") {
+                container.radioManager.sendLocalStatsRequest(num, user?.publicKey)
+            }
+        }
+        actions += toggleRow("Favorite", node?.favorite == true) { on ->
+            carWorkScope.launch {
+                container.radioManager.setFavorite(num, on)
+                container.database.nodeDao().setFavorite(num, on)
+            }
+        }
+        actions += toggleRow("Mute notifications", user?.mute == true) { on ->
+            carWorkScope.launch { container.database.userDao().setMute(num, on) }
+        }
+        if (!isSelf) {
+            actions += toggleRow("Ignore node", node?.ignored == true) { on ->
+                carWorkScope.launch {
+                    container.radioManager.setIgnored(num, on)
+                    container.database.nodeDao().setIgnored(num, on)
+                }
+            }
+        }
+
+        val detailList = ItemList.Builder()
+        details.take(limit).forEach { detailList.addItem(it) }
+        val actionList = ItemList.Builder()
+        actions.take((limit - details.size).coerceAtLeast(0)).forEach { actionList.addItem(it) }
+
+        val template = ListTemplate.Builder()
+            .setTitle(name)
             .setHeaderAction(Action.BACK)
-            .build()
+            .addSectionedList(SectionedItemList.create(detailList.build(), "Details"))
+        if (actions.isNotEmpty()) {
+            template.addSectionedList(SectionedItemList.create(actionList.build(), "Actions"))
+        }
+        return template.build()
     }
 
-    private fun traceroute() {
-        toast("Traceroute sent")
-        carWorkScope.launch {
-            val ok = container.radioManager.sendTraceroute(num)
-            if (!ok) withContext(Dispatchers.Main) { toast("Traceroute failed: radio not connected") }
+    /** A one-shot mesh request: confirm the tap at once, report a failed send afterwards. */
+    private fun actionRow(title: String, action: suspend () -> Boolean): Row =
+        Row.Builder()
+            .setTitle(title)
+            .setOnClickListener {
+                toast("$title sent")
+                carWorkScope.launch {
+                    val ok = runCatching { action() }.getOrDefault(false)
+                    if (!ok) withContext(Dispatchers.Main) { toast("$title failed: radio not connected") }
+                }
+            }
+            .build()
+
+    private fun toggleRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit): Row =
+        Row.Builder()
+            .setTitle(title)
+            .setToggle(Toggle.Builder { on -> onChange(on) }.setChecked(checked).build())
+            .build()
+}
+
+/**
+ * TraceRouteLog.swift for the car: one row per traceroute sent to this node, newest first,
+ * with the resolved path ("A (x dB) → B") as the phone shows it. Rows with a reply open the
+ * route on the host map; pending or dead ones are plain text. Titles are the absolute time
+ * so they stay stable across refreshes.
+ */
+class CarTraceroutesScreen(
+    carContext: CarContext,
+    private val num: Long,
+    private val name: String,
+) : MeshCarScreen(carContext) {
+
+    private var routes: List<Pair<TracerouteEntity, String>> = emptyList()
+
+    init {
+        observe(
+            container.database.tracerouteDao().forNode(num).map { list ->
+                list.map { route -> route to describe(route) }
+            }
+        ) { routes = it }
+    }
+
+    private suspend fun describe(route: TracerouteEntity): String {
+        if (!route.response) {
+            // No schema for timeouts; anything unanswered after 2 minutes is dead.
+            return if (System.currentTimeMillis() - route.time > 120_000) "no reply" else "pending"
         }
+        return buildString {
+            append("→ ")
+            append(routeText(route.routeTowards, route.snrTowards))
+            if (route.routeBack.isNotEmpty() || route.snrBack.isNotEmpty()) {
+                append("\n← ")
+                append(routeText(route.routeBack, route.snrBack))
+            }
+        }
+    }
+
+    /** NodeDetailScreen.routeText: "num,num" + "snr,snr" (scaled by 4) into names and dB. */
+    private suspend fun routeText(routeCsv: String, snrCsv: String): String {
+        val hops = routeCsv.split(",").filter { it.isNotBlank() }.map { it.toLong() }
+        val snrs = snrCsv.split(",").filter { it.isNotBlank() }.map { it.toInt() / 4f }
+        if (hops.isEmpty()) {
+            return if (snrs.isNotEmpty()) "direct (%.1f dB)".format(snrs.last()) else "direct"
+        }
+        val names = hops.map { n -> displayName(container.database.userDao().get(n), n) }
+        return buildString {
+            names.forEachIndexed { i, hop ->
+                append(hop)
+                snrs.getOrNull(i)?.let { append(" (%.1f dB)".format(it)) }
+                if (i < names.lastIndex) append(" → ")
+            }
+            if (snrs.size > names.size) append(" → dest (%.1f dB)".format(snrs.last()))
+        }
+    }
+
+    @Suppress("DEPRECATION") // setTitle/setHeaderAction predate Header (API 7).
+    override fun onGetTemplate(): Template {
+        val limit = contentLimit(ConstraintManager.CONTENT_LIMIT_TYPE_LIST, LIST_ROW_CAP)
+        val list = ItemList.Builder().setNoItemsMessage("No traceroutes yet")
+        routes.take(limit).forEach { (route, text) ->
+            val row = Row.Builder()
+                .setTitle(absoluteTime(route.time))
+                .addText(text)
+            if (route.response) {
+                row.setBrowsable(true)
+                row.setOnClickListener { screenManager.push(CarRouteMapScreen(carContext, route)) }
+            }
+            list.addItem(row.build())
+        }
+        return ListTemplate.Builder()
+            .setTitle("Traceroutes to $name")
+            .setHeaderAction(Action.BACK)
+            .setSingleList(list.build())
+            .build()
+    }
+}
+
+/**
+ * One traceroute on the host map (the phone's Map tab with a selected route). The host
+ * draws markers only, no lines, so the forward path is listed in hop order with numbered
+ * rows: our radio, each hop, the destination. Hops without a stored position are dropped,
+ * as MapViewModel.route does. Markers: green origin, red destination, blue hops.
+ */
+class CarRouteMapScreen(carContext: CarContext, private val route: TracerouteEntity) : MeshCarScreen(carContext) {
+
+    private var path: List<RoutePoint> = emptyList()
+    private var myNum = 0L
+
+    init {
+        val forwardCsv = route.routeTowards.split(",").mapNotNull { it.trim().toLongOrNull() }
+        observe(
+            container.database.myInfoDao().myInfo().flatMapLatest { myInfo ->
+                val mine = myInfo?.myNodeNum ?: 0L
+                myNum = mine
+                val nums = (listOfNotNull(mine.takeIf { it != 0L }) + forwardCsv + route.toNum).distinct()
+                container.database.positionDao().latestByNums(nums).map { points ->
+                    val byNum = points.associateBy { it.nodeNum }
+                    buildList {
+                        if (mine != 0L) byNum[mine]?.let { add(it) }
+                        forwardCsv.forEach { n -> byNum[n]?.let { add(it) } }
+                        byNum[route.toNum]?.let { add(it) }
+                    }.distinctBy { it.nodeNum }
+                }
+            }
+        ) { path = it }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onGetTemplate(): Template {
+        val limit = contentLimit(ConstraintManager.CONTENT_LIMIT_TYPE_PLACE_LIST, MAP_ROW_CAP)
+        val list = ItemList.Builder().setNoItemsMessage("No hop on this route has a known position")
+        path.take(limit).forEachIndexed { i, point ->
+            val color = when (point.nodeNum) {
+                myNum -> CarColor.GREEN
+                route.toNum -> CarColor.RED
+                else -> CarColor.BLUE
+            }
+            val place = Place.Builder(CarLocation.create(point.latitude, point.longitude))
+                // Numbered like the rows beside the map, so hop order is readable without names.
+                .setMarker(PlaceMarker.Builder().setLabel("${i + 1}").setColor(color).build())
+                .build()
+            val role = when (point.nodeNum) {
+                myNum -> "origin"
+                route.toNum -> "destination"
+                else -> "hop"
+            }
+            list.addItem(
+                Row.Builder()
+                    .setTitle("${i + 1}. ${displayName(point)}")
+                    .addText(role)
+                    .setMetadata(Metadata.Builder().setPlace(place).build())
+                    .setBrowsable(true)
+                    .setOnClickListener { screenManager.push(CarNodeDetailScreen(carContext, point.nodeNum)) }
+                    .build()
+            )
+        }
+        val builder = PlaceListMapTemplate.Builder()
+            .setTitle("Traceroute " + absoluteTime(route.time))
+            .setHeaderAction(Action.BACK)
+            .setItemList(list.build())
+            .setCurrentLocationEnabled(hasLocationPermission())
+        path.firstOrNull()?.let { first ->
+            builder.setAnchor(Place.Builder(CarLocation.create(first.latitude, first.longitude)).build())
+        }
+        return builder.build()
     }
 }
 

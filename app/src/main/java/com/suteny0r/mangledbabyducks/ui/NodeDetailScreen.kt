@@ -155,11 +155,6 @@ class NodeDetailViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { container.radioManager.sendTraceroute(num) }
     }
 
-    /** Tap a completed traceroute card: show its path on the map. */
-    fun openRoute(route: TracerouteEntity) {
-        container.router.openRoute(route)
-    }
-
     /** "Node Map" log row: the Map tab, centered on this node. */
     suspend fun nameFor(num: Long): String =
         db.userDao().get(num)?.let { it.longName ?: "!%08x".format(num) } ?: "!%08x".format(num)
@@ -286,12 +281,32 @@ fun NodeDetailScreen(
 
     var log by rememberSaveable { mutableStateOf<DetailLog?>(null) }
     var showMap by rememberSaveable { mutableStateOf(false) }
+    // A traceroute opened from the log, shown on the map as a further sub-screen of this
+    // detail (not on the Map tab): back returns to the log it came from.
+    var shownRouteId by rememberSaveable { mutableStateOf<Long?>(null) }
     // Remembered above the log sub-screen's early return: state created below it leaves
     // the composition when a log opens, so back would come back scrolled to the top.
     val detailScroll = rememberScrollState()
+    shownRouteId?.let { id ->
+        val shown = traceroutes.firstOrNull { it.id == id }
+        if (shown == null) {
+            shownRouteId = null
+        } else {
+            BackHandler { shownRouteId = null }
+            Column(Modifier.fillMaxSize()) {
+                DetailHeader("Trace Route", onBack = { shownRouteId = null })
+                MapScreen(traceroute = shown)
+            }
+            return
+        }
+    }
     log?.let { open ->
         BackHandler { log = null }
-        LogPage(open, nodeNum, metrics, envMetrics, traceroutes, vm, onBack = { log = null })
+        LogPage(
+            open, nodeNum, metrics, envMetrics, traceroutes, vm,
+            onBack = { log = null },
+            onOpenRoute = { shownRouteId = it.id },
+        )
         return
     }
     // NodeMapSwiftUI is pushed inside the node detail stack on iOS, so back comes back
@@ -846,6 +861,7 @@ private fun LogPage(
     traceroutes: List<TracerouteEntity>,
     vm: NodeDetailViewModel,
     onBack: () -> Unit,
+    onOpenRoute: (TracerouteEntity) -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
         DetailHeader(log.title, onBack)
@@ -916,7 +932,7 @@ private fun LogPage(
                     if (traceroutes.isEmpty()) {
                         Text("No traceroutes yet", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    traceroutes.forEach { route -> TracerouteCard(route, vm) }
+                    traceroutes.forEach { route -> TracerouteCard(route, vm, onOpen = { onOpenRoute(route) }) }
                 }
             }
         }
@@ -961,7 +977,7 @@ private fun ChartCard(title: String, points: List<Pair<Long, Float>>, unit: Stri
 }
 
 @Composable
-private fun TracerouteCard(route: TracerouteEntity, vm: NodeDetailViewModel) {
+private fun TracerouteCard(route: TracerouteEntity, vm: NodeDetailViewModel, onOpen: () -> Unit) {
     val text by androidx.compose.runtime.produceState(initialValue = "…", route) {
         value = if (!route.response) {
             // No schema for timeouts; anything unanswered after 2 minutes is dead.
@@ -977,7 +993,7 @@ private fun TracerouteCard(route: TracerouteEntity, vm: NodeDetailViewModel) {
             }
         }
     }
-    GroupCard(Modifier.let { if (route.response) it.clickable { vm.openRoute(route) } else it }) {
+    GroupCard(Modifier.let { if (route.response) it.clickable(onClick = onOpen) else it }) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(relativeTime(route.time), style = MaterialTheme.typography.labelSmall)
             Text(text, style = MaterialTheme.typography.bodySmall)

@@ -32,6 +32,7 @@ import com.suteny0r.mangledbabyducks.ui.SettingsScreen
 import com.suteny0r.mangledbabyducks.ui.ThreadTarget
 import com.suteny0r.mangledbabyducks.ui.theme.MeshtasticTheme
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 
 class MainActivity : ComponentActivity() {
 
@@ -77,13 +78,21 @@ class MainActivity : ComponentActivity() {
                     BackHandler(enabled = selected != com.suteny0r.mangledbabyducks.ui.Router.TAB_NODES) {
                         router.selectedTab.value = com.suteny0r.mangledbabyducks.ui.Router.TAB_NODES
                     }
+                    // Each iOS tab owns a NavigationStack that survives switching tabs:
+                    // "Show on Map" from a traceroute log jumps to the Map tab, and coming
+                    // back to Nodes lands on the same node detail and log. Keying the
+                    // saveable state by tab gives rememberSaveable in each screen that
+                    // lifetime instead of resetting on every switch.
+                    val tabStates = rememberSaveableStateHolder()
                     androidx.compose.foundation.layout.Box(Modifier.padding(padding)) {
-                        when (selected) {
-                            0 -> MessagesScreen()
-                            1 -> NodesScreen()
-                            2 -> MapScreen()
-                            3 -> SettingsScreen()
-                            else -> ConnectScreen()
+                        tabStates.SaveableStateProvider(selected) {
+                            when (selected) {
+                                0 -> MessagesScreen()
+                                1 -> NodesScreen()
+                                2 -> MapScreen()
+                                3 -> SettingsScreen()
+                                else -> ConnectScreen()
+                            }
                         }
                     }
                 }

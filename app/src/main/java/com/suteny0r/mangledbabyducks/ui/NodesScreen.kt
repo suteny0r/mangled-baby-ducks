@@ -77,6 +77,9 @@ import com.suteny0r.mangledbabyducks.db.NodeWithUser
 import com.suteny0r.mangledbabyducks.ui.theme.IosGreen
 import com.suteny0r.mangledbabyducks.ui.theme.IosOrange
 import com.suteny0r.mangledbabyducks.ui.theme.IosRed
+import androidx.compose.material.icons.filled.Straighten
+import androidx.compose.material.icons.filled.Navigation
+import androidx.compose.ui.draw.rotate
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -126,6 +129,8 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
     val favoritesOnly by vm.favoritesOnly.collectAsState()
     val search by vm.searchText.collectAsState()
     val batteryByNode by vm.batteryByNode.collectAsState()
+    val positionByNode by vm.positionByNode.collectAsState()
+    val myLocation by vm.myLocation.collectAsState()
 
     Column(Modifier.fillMaxSize()) {
         // iOS sidebar title is "Nodes (<live count>)" (NodeList.swift), inline next to
@@ -163,10 +168,18 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
         } else {
             LazyColumn(Modifier.weight(1f), state = listState) {
                 items(nodes, key = { it.node.num }) { entry ->
+                    val here = myLocation
+                    val there = positionByNode[entry.node.num]
                     NodeRow(
                         entry = entry,
                         battery = batteryByNode[entry.node.num],
                         isSelf = entry.node.num == myNum,
+                        // NodeListItem: distance and bearing only for other nodes with a
+                        // position, and only once we know where we are.
+                        range = if (here != null && there != null && entry.node.num != myNum) {
+                            haversineMeters(here.first, here.second, there.latitude, there.longitude) to
+                                bearingDegrees(here.first, here.second, there.latitude, there.longitude)
+                        } else null,
                         onOpen = { detailNode = entry.node.num },
                         onToggleFavorite = { vm.toggleFavorite(entry.node.num, !entry.node.favorite) },
                         onToggleIgnore = { vm.toggleIgnored(entry.node.num, !entry.node.ignored) },
@@ -204,6 +217,8 @@ private fun NodeRow(
     entry: NodeWithUser,
     battery: Int?,
     isSelf: Boolean,
+    /** Metres and true bearing from here to the node, when both positions are known. */
+    range: Pair<Double, Double>?,
     onOpen: () -> Unit,
     onToggleFavorite: () -> Unit,
     onToggleIgnore: () -> Unit,
@@ -270,6 +285,25 @@ private fun NodeRow(
                 )
                 if (user?.unmessagable == true) {
                     IconAndText(Icons.Filled.PhonelinkErase, "Unmonitored")
+                }
+                // NodeListItem: ruler + "x mi away", then a north arrow turned to the
+                // bearing and the degrees.
+                range?.let { (meters, bearing) ->
+                    IconAndText(Icons.Filled.Straighten, "${formatDistance(meters)} away") {
+                        Spacer(Modifier.width(10.dp))
+                        Icon(
+                            Icons.Filled.Navigation,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp).rotate(bearing.toFloat()),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "${bearing.toInt()}°",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 if (node.viaMqtt && !isSelf) {
                     IconAndText(Icons.Filled.CloudUpload, "MQTT")

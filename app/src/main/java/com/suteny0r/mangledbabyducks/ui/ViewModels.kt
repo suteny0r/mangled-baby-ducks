@@ -45,6 +45,7 @@ import com.google.protobuf.ByteString
 import org.meshtastic.proto.AppOnlyProtos
 import org.meshtastic.proto.ChannelProtos
 import org.meshtastic.proto.ConfigProtos
+import com.suteny0r.mangledbabyducks.db.MapNode
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ConnectViewModel(app: Application) : AndroidViewModel(app) {
@@ -316,6 +317,24 @@ class NodesViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     val myNodeNum: StateFlow<Long> = container.radioManager.myNodeNum
+
+    /** Latest position per node (NodeListItem's latestNodeCoordinate). */
+    val positionByNode: StateFlow<Map<Long, MapNode>> = container.database.positionDao().mapNodes()
+        .map { list -> list.associateBy { it.nodeNum } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+    /**
+     * Where we are, for distance and bearing: the phone's GPS fix while location sharing
+     * runs (LocationsHandler on iOS), else the connected radio's own last position.
+     */
+    val myLocation: StateFlow<Pair<Double, Double>?> = combine(
+        container.locationSharer.lastFix,
+        positionByNode,
+        myNodeNum,
+    ) { fix, positions, me ->
+        fix?.let { it.latitudeI / 1e7 to it.longitudeI / 1e7 }
+            ?: positions[me]?.let { it.latitude to it.longitude }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     /** Latest battery % per node for the list rows (empty for nodes without telemetry). */
     val batteryByNode: StateFlow<Map<Long, Int>> = nodes

@@ -1,6 +1,5 @@
 package com.suteny0r.mangledbabyducks.ui
 
-import com.suteny0r.mangledbabyducks.db.TracerouteEntity
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /** A conversation the UI should open. */
@@ -18,11 +17,6 @@ class Router {
     val pendingThread = MutableStateFlow<ThreadTarget?>(null)
     /** One-shot node detail request; consumed by whichever tab should show it. */
     val pendingNode = MutableStateFlow<Long?>(null)
-    /**
-     * Active traceroute to render on the Map tab: only the nodes on the route are
-     * shown, connected by the forward (solid) and return (dashed) path.
-     */
-    val activeRoute = MutableStateFlow<TracerouteEntity?>(null)
     /** One-shot: the top-left logo opens Settings > About (iOS deep link settings/about). */
     val pendingAbout = MutableStateFlow(false)
     /** One-shot: node detail's "Node Map" row; the Map tab centers on this node. */
@@ -36,15 +30,6 @@ class Router {
     fun openNode(num: Long) {
         pendingNode.value = num
         selectedTab.value = TAB_NODES
-    }
-
-    fun openRoute(route: TracerouteEntity) {
-        activeRoute.value = route
-        selectedTab.value = TAB_MAP
-    }
-
-    fun clearRoute() {
-        activeRoute.value = null
     }
 
     fun openMapNode(num: Long) {
@@ -64,7 +49,6 @@ class Router {
     fun resetNavigation() {
         pendingThread.value = null
         pendingNode.value = null
-        activeRoute.value = null
         pendingAbout.value = false
         pendingMapNode.value = null
     }

@@ -16,6 +16,42 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Car node detail, traceroute views, distance rows, per-tab state (2026-10-08 14:20, verified on the DHU and the phone)
+
+Uncommitted at the time of writing; the phone runs this as a sideloaded debug build again
+(Play build uninstalled, the 02:08 backup set pushed back and restored).
+
+- Car node detail is a sectioned `ListTemplate` (Details, then Actions) instead of a
+  `PaneTemplate`, which caps at two buttons. Actions: Message, Trace Route, Traceroute Log,
+  Exchange Positions, Exchange User Info, Request Local Stats as rows; Favorite, Mute
+  notifications, Ignore node as `Toggle` rows (titles never change, so a flip is a refresh,
+  not a template step). Deliberately absent on the head unit: Share QR, S&F history/config,
+  metadata refresh, Delete, Power Off, Reboot, Accept new key (no result view, or destructive
+  with no confirmation dialog in a POI app).
+- `CarTraceroutesScreen` (per-node log, phone text format) and `CarRouteMapScreen`
+  (`PlaceListMapTemplate` with one numbered marker per positioned hop: green origin, blue
+  hops, red destination). The host draws markers only, no lines, and its map is not
+  user-zoomable; it fits the markers itself (took a few seconds once). Map behind the car
+  list is the host's Google Maps, so no satellite style exists for the Place list template;
+  a POI app may draw its own map with `MapWithContentTemplate` (library 1.7, permission
+  already declared) but that is MapLibre into a car Surface, a separate job.
+- `markerLabel(short, long)`: emoji-only short names fall back to long-name initials
+  instead of "?".
+- Distance and bearing (NodeListItem's ruler + "x mi away" + rotated north arrow + degrees)
+  on the phone Nodes row after Unmonitored, and in the car Nodes row's second line through
+  the host `DistanceSpan`. Geodesy in `ui/Geo.kt` (shared with `CarScreens`). Reference
+  point: `LocationSharer.lastFix` while sharing, else the connected radio's position; iOS
+  always has a phone fix because its LocationsHandler runs whenever permitted.
+- `MainActivity` wraps the tab `when` in `rememberSaveableStateHolder().SaveableStateProvider(selected)`:
+  each tab keeps its `rememberSaveable` state across tab switches, the iOS per-tab
+  NavigationStack behaviour. Before this, Nodes came back at the list after any tab switch.
+- Trace route from the node detail log is a sub-screen of the detail (`MapScreen(traceroute =
+  entity)` under a `DetailHeader` back arrow), the same shape as the Node Map row. User
+  direction: the tap-card-to-map link is this port's addition (iOS has a "Show on Map"
+  button that switches to the Map tab), so it follows the sub-screen convention and back
+  returns to the log. `Router.activeRoute`/`openRoute`/`clearRoute` and the map's X button
+  are gone; `MapViewModel.routeView(route)` returns a Flow resolved per call.
+
 ## 0.2.8 (versionCode 10) on the Play internal track: Android Auto verified in a car (2026-10-08)
 
 - Car service label and icon reverted to the app's own; the user reports everything works

@@ -2,7 +2,9 @@ package com.suteny0r.mangledbabyducks.ui
 
 import android.app.Application
 import com.suteny0r.mangledbabyducks.db.RoutePoint
+import com.suteny0r.mangledbabyducks.db.TracerouteEntity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
@@ -206,50 +208,41 @@ class MapViewModel(app: Application) : AndroidViewModel(app) {
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /**
-     * Active trace route for rendering (empty = no route). Resolved from the router state +
-     * the positions DB so that hops without a position snapshot are silently dropped (matching
-     * iOS, which compactMaps on missing positions). The originator is our own radio (myInfo).
+     * A trace route for rendering, resolved against the positions DB so that hops without
+     * a position snapshot are silently dropped (matching iOS, which compactMaps on missing
+     * positions). The originator is our own radio (myInfo).
      * Forward = originator -> hops -> target; Return = target -> back hops -> originator.
      */
     @OptIn(ExperimentalCoroutinesApi::class)
-    val route: StateFlow<RouteView> =
-        router.activeRoute
-            .flatMapLatest { route ->
-                if (route == null) {
-                    flowOf(RouteView())
-                } else {
-                    val forwardCsv = route.routeTowards.split(",").mapNotNull { it.trim().toLongOrNull() }
-                    val backCsv = route.routeBack.split(",").mapNotNull { it.trim().toLongOrNull() }
-                    container.database.myInfoDao().myInfoOnce().let { myInfo ->
-                        val myNum = myInfo?.myNodeNum ?: 0L
-                        val baseNums = (listOf(route.toNum) + forwardCsv + backCsv).distinct()
-                        val numSet = if (myNum != 0L) (baseNums + myNum).distinct() else baseNums
-                        container.database.positionDao().latestByNums(numSet).map { points ->
-                            val byNum = points.associateBy { it.nodeNum }
-                            val forward: List<RoutePoint> = buildList {
-                                if (myNum != 0L) byNum[myNum]?.let { add(it) }
-                                forwardCsv.forEach { n -> byNum[n]?.let { add(it) } }
-                                byNum[route.toNum]?.let { add(it) }
-                            }
-                            val back: List<RoutePoint> = buildList {
-                                byNum[route.toNum]?.let { add(it) }
-                                backCsv.forEach { n -> byNum[n]?.let { add(it) } }
-                                if (myNum != 0L) byNum[myNum]?.let { add(it) }
-                            }
-                            val uniq = (forward + back).distinctBy { it.nodeNum }
-                            RouteView(
-                                nodes = uniq,
-                                forwardPath = forward,
-                                returnPath = back,
-                                sourceNum = myNum,
-                                targetNum = route.toNum,
-                            )
-                        }
-                    }
+    fun routeView(route: TracerouteEntity): Flow<RouteView> =
+        container.database.myInfoDao().myInfo().flatMapLatest { myInfo ->
+            val forwardCsv = route.routeTowards.split(",").mapNotNull { it.trim().toLongOrNull() }
+            val backCsv = route.routeBack.split(",").mapNotNull { it.trim().toLongOrNull() }
+            val myNum = myInfo?.myNodeNum ?: 0L
+            val baseNums = (listOf(route.toNum) + forwardCsv + backCsv).distinct()
+            val numSet = if (myNum != 0L) (baseNums + myNum).distinct() else baseNums
+            container.database.positionDao().latestByNums(numSet).map { points ->
+                val byNum = points.associateBy { it.nodeNum }
+                val forward: List<RoutePoint> = buildList {
+                    if (myNum != 0L) byNum[myNum]?.let { add(it) }
+                    forwardCsv.forEach { n -> byNum[n]?.let { add(it) } }
+                    byNum[route.toNum]?.let { add(it) }
                 }
+                val back: List<RoutePoint> = buildList {
+                    byNum[route.toNum]?.let { add(it) }
+                    backCsv.forEach { n -> byNum[n]?.let { add(it) } }
+                    if (myNum != 0L) byNum[myNum]?.let { add(it) }
+                }
+                val uniq = (forward + back).distinctBy { it.nodeNum }
+                RouteView(
+                    nodes = uniq,
+                    forwardPath = forward,
+                    returnPath = back,
+                    sourceNum = myNum,
+                    targetNum = route.toNum,
+                )
             }
-            .flowOn(Dispatchers.IO)
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), RouteView())
+        }.flowOn(Dispatchers.IO)
 
     fun sendWaypoint(name: String, description: String, lat: Double, lon: Double, channel: Int) {
         viewModelScope.launch {
@@ -265,18 +258,21 @@ class MapViewModel(app: Application) : AndroidViewModel(app) {
 /**
  * The Map tab, and (with [focusNode] set) NodeMapSwiftUI: node detail's "Node Map" row
  * pushes this same map scoped to one node, inside the detail screen rather than jumping
- * to the Map tab, so back returns to the node.
+ * to the Map tab, so back returns to the node. With [traceroute] set it is the node
+ * detail's traceroute view, pushed the same way: only that route's nodes, joined by the
+ * forward (solid) and return (dashed) path.
  */
 @Composable
-fun MapScreen(vm: MapViewModel = viewModel(), focusNode: Long? = null) {
+fun MapScreen(vm: MapViewModel = viewModel(), focusNode: Long? = null, traceroute: TracerouteEntity? = null) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val router = context.container.router
-    val activeRoute by router.activeRoute.collectAsState()
+    val activeRoute = traceroute
     val nodes by vm.nodes.collectAsState()
     val waypoints by vm.waypoints.collectAsState()
     val channels by vm.channels.collectAsState()
-    val route by vm.route.collectAsState()
+    val routeFlow = remember(traceroute) { traceroute?.let { vm.routeView(it) } ?: flowOf(RouteView()) }
+    val route by routeFlow.collectAsState(RouteView())
     // What the map draws. When a route is active, only the nodes on that path (iOS
     // selectedTraceRoute); with a focus node, that node alone (NodeMapSwiftUI); otherwise
     // the mesh. A route that resolved to fewer than two positioned nodes draws nothing:
@@ -481,18 +477,6 @@ fun MapScreen(vm: MapViewModel = viewModel(), focusNode: Long? = null) {
                         modifier = Modifier.padding(start = 4.dp, end = 2.dp),
                     )
                 }
-            }
-        }
-        if (route.nodes.isNotEmpty()) {
-            SmallFloatingActionButton(
-                onClick = { router.clearRoute() },
-                containerColor = MaterialTheme.colorScheme.surface,
-                contentColor = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(top = 72.dp, start = 12.dp),
-            ) {
-                Icon(Icons.Default.Close, contentDescription = "Close traceroute")
             }
         }
         when {
