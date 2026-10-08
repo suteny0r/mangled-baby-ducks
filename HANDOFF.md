@@ -18,6 +18,11 @@ invariants worth not breaking. Read it first; this file is the session log on to
 
 ## Backup export/import, location tracking for distances, emulator (2026-10-08 15:00)
 
+Shipped as 0.2.10 (versionCode 12): commits c96c048 + a09f056 + 7e0c3cd, tag v0.2.10, GitHub
+release with both APKs, upload set in `art/play/0.2.10/` (bundle + `release-notes.txt`) for
+the Play internal testing track. Reference position order: the connected radio's own fix
+when present, else the phone's (user: radios can wait a long time for a GPS lock).
+
 - The reinstall from Play (over the sideloaded debug build) wiped `Android/data`, backups
   included; the 02:08 set from the PC went back by adb. Positions do not come from the
   radio: Spiney Norman's NodeDB over COM3 has 226 nodes and no latitudes, so a fresh
