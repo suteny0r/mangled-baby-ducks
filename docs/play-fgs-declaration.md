@@ -4,7 +4,7 @@ The app declares one foreground service, `RadioService`, with
 `android:foregroundServiceType="connectedDevice|location"`. The console asks for a
 use-case description and a demonstration video per type. Text below is ready to paste.
 
-Demo video (68 s, screen recording on a Galaxy Note 20 Ultra):
+Demo video (71 s, screen recording on a Galaxy Note 20 Ultra):
 https://github.com/suteny0r/mangled-baby-ducks/releases/download/v0.2.6/fgs-demo.mp4
 Local copy: `art/play/0.2.6/fgs-demo.mp4`.
 
