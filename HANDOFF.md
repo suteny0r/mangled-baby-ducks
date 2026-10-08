@@ -16,6 +16,16 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Node detail keeps its scroll when a log closes (2026-10-07, installed and verified)
+
+- `NodeDetailScreen` created its `rememberScrollState()` below the `log?.let { ... return }`
+  early return, so opening a log sub-screen dropped it from composition and back landed at
+  the top. Hoisted to `detailScroll` above the return. Fourth instance of this trap after
+  the Nodes list, the Messages thread/section and the Settings list; the Nodes list's own
+  `listState` was already hoisted and is fine.
+- Verified by screenshot: the page is pixel-identical before opening Trace Route Log and
+  after pressing back.
+
 ## Trace Route rate limit, ported from iOS (2026-10-06, installed and verified)
 
 - `ui/RateLimit.kt` is `RateLimitedButton.swift` + `RateLimitStorage`: in-memory, never

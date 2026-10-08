@@ -287,6 +287,9 @@ fun NodeDetailScreen(
     val userId = user?.userId ?: nodeNumString(nodeNum)
 
     var log by rememberSaveable { mutableStateOf<DetailLog?>(null) }
+    // Remembered above the log sub-screen's early return: state created below it leaves
+    // the composition when a log opens, so back would come back scrolled to the top.
+    val detailScroll = rememberScrollState()
     log?.let { open ->
         BackHandler { log = null }
         LogPage(open, nodeNum, metrics, envMetrics, traceroutes, vm, onBack = { log = null })
@@ -300,7 +303,7 @@ fun NodeDetailScreen(
         Column(
             Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(detailScroll)
                 .padding(horizontal = 16.dp)
                 .padding(bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
