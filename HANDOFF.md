@@ -16,6 +16,29 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Android Auto with the Play build (2026-10-08 10:00, verified on the DHU)
+
+- The user saw no app icon on a real car with the internal-testing build. On the DHU the
+  same build is in the launcher as **"Ducks Mesh"** (the car service label, blue map icon,
+  sorted under D), opens to the home menu (Map 114 nodes, Messages, Nodes 391), and the
+  log shows no `CAR.VALIDATOR: Package DENIED` for our package while it denies plenty of
+  others. The release `hosts_allowlist_sample` validator accepts the real gearhead host.
+  Most likely the user looked for "Mangled Baby Ducks" in the car's grid.
+- Facts from developer.android.com/training/cars/testing: Android Auto's "Unknown sources"
+  toggle covers media, messaging and parked apps and does NOT apply to Car App Library
+  apps; a templated app on a real car must come from a trusted source, and the Play
+  internal test track counts without review. So the sideloaded debug build never had its
+  templated entry on a real car; what the user saw on the grid then was the messaging
+  personality (green triangle), which has no tabs by design.
+- Play Services' validator logs its verdict as `CAR.VALIDATOR: Package DENIED; ...` on the
+  phone when a head unit connects; the phone's log buffer only holds about 15 minutes, so
+  capture right after the car session or use the DHU.
+- DHU recipe that works from Git Bash: `adb forward tcp:5277 tcp:5277`, then
+  `(tail -f cmds.txt | ./desktop-head-unit.exe --adb=5277 > out.txt 2>&1 &)` from the DHU
+  folder, and append `tap x y` / `screenshot path` lines to cmds.txt. The PowerShell
+  Start-Process variant with a piped Get-Content never started the exe. The phone needs
+  "Start head unit server" in Android Auto developer settings first (not persistent).
+
 ## Test rig change: the phone runs the Play internal-testing build (2026-10-08 02:10)
 
 - Mangled Baby Ducks 0.2.7 (versionCode 9) is installed from Google Play (internal
