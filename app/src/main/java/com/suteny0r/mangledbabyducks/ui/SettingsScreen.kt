@@ -143,7 +143,7 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
             .fillMaxSize()
             .verticalScroll(listScroll),
     ) {
-        AppHeader("Settings")
+        AppHeader("Settings", large = false)
         Column(
             Modifier.padding(horizontal = 16.dp).padding(bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
