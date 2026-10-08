@@ -16,6 +16,44 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Restore killed every Room observer, and a backup overwrote 845 messages (2026-10-07, installed and verified)
+
+- Symptom 1: after a radio switch, a sent channel message only appeared once the thread
+  was reopened; the unread badge and node counts stopped moving too. logcat had
+  `E ROOM: Cannot run invalidation tracker. Is the db closed?` with
+  `no such table: room_table_modification_log`, and `databases/` had no `-wal`/`-shm`.
+- Cause: `importAllTables` used `ATTACH DATABASE` on Room's connection. Android's
+  `SQLiteDatabase.executeSql` answers an ATTACH with `disableWriteAheadLogging()`, the
+  pool treats the WAL flag change as "close and reopen every connection", and Room's
+  tracker is TEMP objects on that connection (the log table and one trigger per table),
+  so they vanished. The import now reads the staged copy with a read-only
+  `SQLiteDatabase` and inserts row by row through Room's `SupportSQLiteDatabase.insert`
+  (CONFLICT_IGNORE) inside `runInTransaction`. ContentValues keys must carry their own
+  backticks: `channels.index` is a reserved word and the first run failed on it.
+- Symptom 2: the user's 9f4a history (384 nodes, 845 messages) was replaced by a 100 kB
+  snapshot of an empty store. `currentNodeNum()` preferred `radioManager.myNodeNum`, which
+  outlived the clear when a switch to a never-seen radio (243c, not in range) was followed
+  by another switch six seconds later: the empty store was filed under 9f4a. Now
+  `currentNodeNum()` is the my_info row only, and `createBackup` refuses when the store's
+  my_info is missing or belongs to another node.
+- The on-device backups were lost once more during the repair (both directories deleted
+  with an empty index saved at 23:31:56, cause not captured: logcat had been cleared).
+  Reinstalled the PC copy `F:/mesh-9f4a-full-2130.db` as the 9f4a snapshot with the app
+  force-stopped, index written from a script with the real sha256 and size, and the app
+  relaunched by me in the same command so nothing else could start it first. Then restored
+  it through Backup Management and reconnected: 384 / 845 / 29, WAL present, no ROOM errors.
+  Messages from 21:30 to 23:00 on 9f4a are gone.
+- The thread screen now runs with `windowSoftInputMode="adjustResize"`: without it the
+  system picked pan for the Compose window and the header, search field and messages all
+  slid off the top when the keyboard opened.
+- Gotchas: `adb install` from Git Bash needs a Windows path (`F:/...`), the `/f/...` form
+  fails with "failed to stat" and a `| tail -1` hid that twice. Pull a WAL-mode store as
+  three files (`mesh.db`, `-wal`, `-shm`) or the counts are stale. Check that the install
+  actually happened (`dumpsys package | grep lastUpdateTime`) before trusting a test.
+- The Connect list's saved BLE rows now show the name the radio advertises right now when
+  it is in range (iOS lists live scan results), and a connect through a saved row records
+  that name.
+
 ## Handshake sat at "Retrieving nodes N" for 35 s after the dump had finished (2026-10-07, installed and verified)
 
 - Symptom: the node counter reaches its final value, then Subscribed arrives 5 to 35 s later.

@@ -1,6 +1,8 @@
 package com.suteny0r.mangledbabyducks.db
 
+import android.content.ContentValues
 import android.content.Context
+import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.os.StatFs
 import android.util.Log
@@ -85,9 +87,16 @@ class NodeBackupManager(private val context: Context, private val database: Mesh
      */
     suspend fun createBackup(nodeNum: Long, nodeName: String?): BackupResult =
         lock.withLock {
-            val radioAddress = database.myInfoDao().myInfoOnce()
-                ?.takeIf { it.myNodeNum == nodeNum }
-                ?.radioAddress
+            // The snapshot is filed under [nodeNum], so the store must actually be that
+            // radio's. A cleared store (switch to a radio with no backup, before its dump
+            // landed) was once backed up under the previous radio's number, because the
+            // caller still held that number: a 100 kB empty snapshot replaced 845 messages.
+            val owner = database.myInfoDao().myInfoOnce()
+            if (owner == null || owner.myNodeNum != nodeNum) {
+                Log.w(TAG, "Refusing to back up node $nodeNum: the store belongs to ${owner?.myNodeNum ?: "nobody"}")
+                return@withLock BackupResult.Skipped("The database does not belong to node $nodeNum")
+            }
+            val radioAddress = owner.radioAddress
             if (!hasSufficientDiskSpace()) {
                 Log.w(TAG, "Insufficient disk space for backup of node $nodeNum")
                 return@withLock BackupResult.Skipped("Not enough storage for backup")
@@ -219,36 +228,62 @@ class NodeBackupManager(private val context: Context, private val database: Mesh
         }
     }
 
+    /**
+     * Copy every table of the staged snapshot into the live store, row by row, through
+     * Room's own connection.
+     *
+     * Not `ATTACH DATABASE`: Android's SQLiteDatabase answers an ATTACH by calling
+     * `disableWriteAheadLogging()`, and leaving WAL makes the connection pool close and
+     * reopen its connections. Room's invalidation tracker lives in TEMP objects on that
+     * connection (`room_table_modification_log` and one trigger per table), so the first
+     * restore silently killed every observer in the process: "Cannot run invalidation
+     * tracker" on each refresh, and a sent message only appeared after the thread was
+     * reopened. Inserts through Room's connection fire the triggers like any other write.
+     */
     private fun importAllTables(staged: File) {
         val live = database.openHelper.writableDatabase
-        live.execSQL("ATTACH DATABASE ? AS backup", arrayOf(staged.absolutePath))
-        try {
-            for (table in MeshDatabase.TABLES) {
-                // Name the columns: a live database that reached this version through ALTER
-                // TABLE migrations and a copy that did the same have matching order, but a
-                // fresh install does not have to, and SELECT * would misalign them.
-                val columns = mutableListOf<String>()
-                live.query("PRAGMA table_info(`$table`)").use { cursor ->
-                    val nameIndex = cursor.getColumnIndexOrThrow("name")
-                    while (cursor.moveToNext()) columns.add("`${cursor.getString(nameIndex)}`")
+        SQLiteDatabase.openDatabase(staged.path, null, SQLiteDatabase.OPEN_READONLY).use { backup ->
+            database.runInTransaction {
+                for (table in MeshDatabase.TABLES) {
+                    // Name the columns: a fresh install and a store that reached this version
+                    // through ALTER TABLE migrations need not order them the same way.
+                    val liveColumns = mutableSetOf<String>()
+                    live.query("PRAGMA table_info(`$table`)").use { cursor ->
+                        val nameIndex = cursor.getColumnIndexOrThrow("name")
+                        while (cursor.moveToNext()) liveColumns.add(cursor.getString(nameIndex))
+                    }
+                    val backupColumns = mutableListOf<String>()
+                    backup.rawQuery("PRAGMA table_info(`$table`)", null).use { cursor ->
+                        val nameIndex = cursor.getColumnIndexOrThrow("name")
+                        while (cursor.moveToNext()) backupColumns.add(cursor.getString(nameIndex))
+                    }
+                    val shared = backupColumns.filter { it in liveColumns }
+                    if (shared.isEmpty()) continue
+                    val select = shared.joinToString(", ") { "`$it`" }
+                    // ContentValues keys go into the INSERT verbatim, so they carry their
+                    // own quotes: `channels.index` is a reserved word.
+                    val keys = shared.map { "`$it`" }
+                    backup.rawQuery("SELECT $select FROM `$table`", null).use { cursor ->
+                        while (cursor.moveToNext()) {
+                            val values = ContentValues(shared.size)
+                            for (i in shared.indices) {
+                                when (cursor.getType(i)) {
+                                    Cursor.FIELD_TYPE_NULL -> values.putNull(keys[i])
+                                    Cursor.FIELD_TYPE_INTEGER -> values.put(keys[i], cursor.getLong(i))
+                                    Cursor.FIELD_TYPE_FLOAT -> values.put(keys[i], cursor.getDouble(i))
+                                    Cursor.FIELD_TYPE_BLOB -> values.put(keys[i], cursor.getBlob(i))
+                                    else -> values.put(keys[i], cursor.getString(i))
+                                }
+                            }
+                            // INSERT OR IGNORE, as the iOS import does per entity.
+                            live.insert("`$table`", SQLiteDatabase.CONFLICT_IGNORE, values)
+                        }
+                    }
                 }
-                val backupColumns = mutableSetOf<String>()
-                live.query("PRAGMA backup.table_info(`$table`)").use { cursor ->
-                    val nameIndex = cursor.getColumnIndexOrThrow("name")
-                    while (cursor.moveToNext()) backupColumns.add("`${cursor.getString(nameIndex)}`")
-                }
-                val shared = columns.filter { it in backupColumns }
-                if (shared.isEmpty()) continue
-                val list = shared.joinToString(", ")
-                live.execSQL("INSERT OR IGNORE INTO `$table` ($list) SELECT $list FROM backup.`$table`")
             }
-        } finally {
-            live.execSQL("DETACH DATABASE backup")
         }
-        // The copy went around Room, so its observers never heard about it: the unread
-        // badge stayed at the post-clear zero while the table held one. This is Room's
-        // own hook for writes made outside it, and the counterpart of the iOS
-        // `databaseResetID` remount that makes every @Query re-fetch after a restore.
+        // Belt and braces for anything the triggers did not cover: the counterpart of the
+        // iOS `databaseResetID` remount that makes every @Query re-fetch after a restore.
         database.invalidationTracker.notifyObserversByTableNames(*MeshDatabase.TABLES.toTypedArray())
     }
 

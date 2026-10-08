@@ -203,8 +203,12 @@ class AppContainer(context: Context) {
     // MARK: - Radio switching (Connect.swift switchToDevice / backupCurrentAndRestoreDatabase)
 
     /** The radio whose data the store currently holds, by node number, or null when empty. */
-    suspend fun currentNodeNum(): Long? =
-        radioManager.myNodeNum.value.takeIf { it != 0L } ?: database.myInfoDao().myInfoOnce()?.myNodeNum
+    /**
+     * The node the store's data belongs to: the my_info row, nothing else. RadioManager's
+     * number outlives a clear and a failed connect, and a backup keyed on it filed an
+     * empty store under the previous radio.
+     */
+    suspend fun currentNodeNum(): Long? = database.myInfoDao().myInfoOnce()?.myNodeNum
 
     private suspend fun currentNodeName(num: Long): String? =
         database.userDao().get(num)?.longName
