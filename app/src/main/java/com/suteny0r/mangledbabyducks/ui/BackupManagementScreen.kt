@@ -1,7 +1,10 @@
 package com.suteny0r.mangledbabyducks.ui
 
 import android.app.Application
+import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import android.provider.DocumentsContract
 import android.text.format.DateFormat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -186,11 +189,15 @@ fun BackupManagementScreen(onBack: () -> Unit, vm: BackupViewModel = viewModel()
     var pendingDelete by remember { mutableStateOf<BackupEntry?>(null) }
     LaunchedEffect(Unit) { vm.refresh() }
     // System file picker both ways: no storage permission, and the user decides where the
-    // archive lives (Downloads, a drive, another device's folder).
-    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+    // archive lives. The picker opens on the Documents folder, not Downloads: a file saved
+    // through the picker's "Downloads" root is registered with the downloads provider
+    // under this app, and on the Galaxy Note 20 Ultra that registration took the zip with
+    // it when the app was uninstalled, which defeats the purpose. The Documents folder is
+    // plain storage and survives.
+    val exportLauncher = rememberLauncherForActivityResult(CreateDocumentInDocuments) { uri ->
         uri?.let { vm.exportTo(it) }
     }
-    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+    val importLauncher = rememberLauncherForActivityResult(OpenDocumentInDocuments) { uri ->
         uri?.let { vm.importFrom(it) }
     }
 
@@ -256,7 +263,7 @@ fun BackupManagementScreen(onBack: () -> Unit, vm: BackupViewModel = viewModel()
                 NavRow(
                     "Export Backups to File",
                     Icons.Outlined.FileUpload,
-                    subtitle = "All snapshots as one zip, outside the app's data",
+                    subtitle = "All snapshots as one zip in Documents (not Downloads: Android removes an app's downloads with the app)",
                     enabled = backups.isNotEmpty() && !transferring && !restoring && !backingUp,
                     chevron = false,
                     onClick = {
@@ -323,6 +330,20 @@ fun BackupManagementScreen(onBack: () -> Unit, vm: BackupViewModel = viewModel()
             confirmButton = { TextButton(onClick = { vm.error.value = null }) { Text("OK") } },
         )
     }
+}
+
+/** The primary storage's Documents folder as the picker's starting point. */
+private val documentsFolderUri: Uri =
+    DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Documents")
+
+private object CreateDocumentInDocuments : ActivityResultContracts.CreateDocument("application/zip") {
+    override fun createIntent(context: Context, input: String): Intent =
+        super.createIntent(context, input).putExtra(DocumentsContract.EXTRA_INITIAL_URI, documentsFolderUri)
+}
+
+private object OpenDocumentInDocuments : ActivityResultContracts.OpenDocument() {
+    override fun createIntent(context: Context, input: Array<String>): Intent =
+        super.createIntent(context, input).putExtra(DocumentsContract.EXTRA_INITIAL_URI, documentsFolderUri)
 }
 
 /** `!%08x` when the backup carried no name, as BackupRowView falls back to `nodeNum.toHex()`. */

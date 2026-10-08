@@ -84,9 +84,12 @@ Esri World Imagery.
    the upload key; let Google hold the app signing key.
 4. Push and release as GitHub user `suteny0r` (`gh auth switch --user suteny0r` first).
 5. Before replacing the install on the test phone (sideload to Play or back), open
-   Backup Management, tap Backup Now, then Export Backups to File. An uninstall deletes
-   `Android/data/<pkg>`, backups included, and the Play build cannot be read by adb. The
-   exported zip comes back in through Import Backups from File on the new install.
+   Backup Management, tap Backup Now, then Export Backups to File and save the zip in
+   **Documents, not Downloads**: on the Note 20 Ultra a zip saved through the picker's
+   Downloads root was deleted along with the app at uninstall (2026-10-08), while files in
+   Documents are plain storage. An uninstall also deletes `Android/data/<pkg>`, backups
+   included, and the Play build cannot be read by adb. The zip comes back in through
+   Import Backups from File on the new install.
 
 ## Target API
 

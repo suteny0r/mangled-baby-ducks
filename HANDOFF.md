@@ -41,6 +41,14 @@ when present, else the phone's (user: radios can wait a long time for a GPS lock
   was on or the radio had broadcast its own position: the user saw PA-I with a position on
   the node map but no distance line. `docs/PRIVACY.md` updated to match. Not yet verified
   on the phone (it runs the Play build); next upload.
+- Exported zip vanished with the app (2026-10-08 15:20): the user saved through the
+  picker's Downloads root on the Note 20 Ultra (Android 13), uninstalled, reinstalled, and
+  the zip was gone from `/sdcard/Download` and the media index. On the AOSP emulator the
+  same file (MediaStore owner `com.android.providers.downloads`) survived an uninstall, so
+  it is the Samsung downloads provider purging the app's entries. Fix: both pickers open on
+  the Documents folder via `EXTRA_INITIAL_URI` (`primary:Documents`, owner
+  `com.android.externalstorage`), and the row subtitle says not to use Downloads. The
+  02:08 backup set was pushed back to the phone by adb a second time.
 - Emulator: AVD `test33` (API 33 google_apis x86_64, Pixel 6 geometry) hand-written in
   `~/.android/avd/` because cmdline-tools are not installed. Boots with
   `emulator -avd test33 -no-snapshot -no-boot-anim -no-audio` in about 90 s; `run-as`
