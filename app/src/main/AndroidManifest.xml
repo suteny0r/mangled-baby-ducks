@@ -61,13 +61,13 @@
 
         <!-- Car App Library entry point. POI is the only category allowed to draw places
              on the host map, which is how the node map reaches the dashboard. -->
-        <!-- Own label and icon: the host also lists this package as a notification-messaging app
-             under the application name, so the templated app must be distinguishable in the car
-             launcher, or the dock's "recent" slot resolves to the messaging entry. -->
+        <!-- Label and icon are the app's own. A separate car label ("Ducks Mesh", map icon)
+             was tried so the dock could tell the templated app from the host's messaging
+             entry; it only made the app unfindable in the car launcher. -->
         <service
             android:name=".auto.MeshCarAppService"
-            android:label="@string/car_app_name"
-            android:icon="@drawable/ic_car_launcher"
+            android:label="@string/app_name"
+            android:icon="@mipmap/ic_launcher"
             android:exported="true">
             <intent-filter>
                 <action android:name="androidx.car.app.CarAppService" />

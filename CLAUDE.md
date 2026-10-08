@@ -169,9 +169,9 @@ up to 1000, but a template is one binder transaction (~1 MB), and 197 place rows
 replies; free-form voice replies come through the `MessagingStyle` notification that
 `MessageNotifier` posts per conversation and `MessageActionReceiver` handles. A sideloaded
 build only shows up with "Unknown sources" enabled in Android Auto's developer settings. The
-package has two launcher personalities (templated service, notification-messaging app); the car
-service carries its own label and icon so the dock's blue map icon is the templated app and the
-green triangle is Android Auto's message view.
+package has two launcher personalities (templated service, notification-messaging app), both
+under the app name and icon. A separate car label and icon were tried to tell them apart in
+the dock and were reverted: the templated app has to be found under its own name.
 `AppContainer.autoConnectIfRemembered` is shared by `MainActivity` and the car session.
 
 **Foreground service**: `RadioService` exists only to keep the process alive during a session

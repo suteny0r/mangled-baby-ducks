@@ -263,7 +263,7 @@ class CarHomeScreen(carContext: CarContext) : MeshCarScreen(carContext) {
             )
         @Suppress("DEPRECATION")
         return ListTemplate.Builder()
-            .setTitle("Mesh")
+            .setTitle(carContext.getString(R.string.app_name))
             .setHeaderAction(Action.APP_ICON)
             .setSingleList(list.build())
             .build()
