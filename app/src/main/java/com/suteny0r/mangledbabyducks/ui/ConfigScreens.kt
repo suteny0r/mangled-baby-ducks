@@ -116,6 +116,7 @@ private fun LoRaSection(vm: SettingsViewModel, connected: Boolean) {
     val myInfo by vm.myInfo.collectAsState()
     val myUser by vm.myUser.collectAsState()
     val regionPresets by vm.regionPresets.collectAsState()
+    val primaryChannelName by vm.primaryChannelName.collectAsState()
     val supports2_8 = firmwareAtLeast(myInfo?.firmwareVersion, "2.8.0")
     val supportsCrOverride = firmwareAtLeast(myInfo?.firmwareVersion, CodingRates.OVERRIDE_FIRMWARE)
     ConfigForm(
@@ -155,6 +156,12 @@ private fun LoRaSection(vm: SettingsViewModel, connected: Boolean) {
         val bandwidthIssue = !usePreset && Bandwidths.unsupported(draft.bandwidth, region, null)
         val dutyCycle = regionDutyCycle(region)
         val hasPaFan = (myUser?.hwModelId ?: 0) in PA_FAN_HARDWARE
+        // ChannelFrequencySummary: the radio tunes itself from region + preset + the primary
+        // channel name, so a stored slot of 0 is "derive it", not "no frequency". Computed
+        // against the draft, so a new region or preset shows its frequency before the write.
+        val calculator = LoRaChannelCalculator(draft)
+        val slot = calculator.effectiveSlot(LoRaChannelCalculator.hashName(primaryChannelName, draft))
+        val frequency = calculator.frequencyMHz(slot)
 
         SectionHeader("Options", Modifier.padding(start = 4.dp))
         GroupCard(Modifier.fillMaxWidth()) {
@@ -223,6 +230,16 @@ private fun LoRaSection(vm: SettingsViewModel, connected: Boolean) {
                         update(draft.toBuilder().setModemPreset(newPreset).setCodingRate(cr).build())
                     }
                 }
+                ConfigReadOnlyRow(
+                    "Frequency",
+                    if (frequency > 0) "%.3f MHz".format(frequency) else "Unknown",
+                    buildString {
+                        append(calculator.regionName)
+                        append("  •  slot ")
+                        append(if (slot > 0) slot.toString() else "unknown")
+                        if (draft.channelNum == 0) append(" (derived from the primary channel name)")
+                    },
+                )
             }
         }
 
@@ -318,6 +335,7 @@ private fun LoRaSection(vm: SettingsViewModel, connected: Boolean) {
                     draft.channelNum,
                     hint = "0 derives the slot from the primary channel name",
                     allowZero = true,
+                    derived = if (draft.channelNum == 0 && slot > 0) "(now $slot)" else null,
                     enabled = draft.overrideFrequency <= 0f,
                     description = "Your node\u2019s operating frequency is calculated based on the region, modem preset, and this field. When 0, the slot is automatically calculated based on the primary channel name.",
                 ) { update(draft.toBuilder().setChannelNum(it).build()) }

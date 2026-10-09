@@ -49,8 +49,10 @@ invariants worth not breaking. Read it first; this file is the session log on to
   disabled, Save also disabled on an unsupported custom bandwidth, Transmit Power shown
   as "N dBm" at zero too. Pull the clone before any port from now on (memory
   `refresh-apple-clone`).
-- Dropped from this port's form: the derived-frequency summary row and the duty-cycle
-  override switch, which the original does not show here. `ConfigForm` gained `header`
+- The derived Frequency row (region, slot, MHz from `LoRaChannelCalculator` against the
+  draft) stays at the foot of the Options card at the user's request, and the Frequency
+  Slot row shows "(now N)" beside a stored 0; neither is in the original. The duty-cycle
+  override switch follows the upstream rule below. `ConfigForm` gained `header`
   and `grouped = false`; `ConfigPickerRow` (title, accent value, description, warning) and
   `ConfigSwitchRow(icon)` are the new primitives; `ConfigSection.pageTitle` gives the
   page "LoRa Config".
