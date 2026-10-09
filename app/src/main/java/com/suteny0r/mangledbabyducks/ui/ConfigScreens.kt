@@ -67,6 +67,40 @@ import com.suteny0r.mangledbabyducks.ui.theme.IosGreen
 import com.suteny0r.mangledbabyducks.ui.theme.IosOrange
 import androidx.compose.material.icons.outlined.Air
 import androidx.compose.material.icons.outlined.Autorenew
+import androidx.compose.material.icons.filled.FormatBold
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.outlined.Bluetooth
+import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.BugReport
+import androidx.compose.material.icons.outlined.CallSplit
+import androidx.compose.material.icons.outlined.Flip
+import androidx.compose.material.icons.outlined.GridOn
+import androidx.compose.material.icons.outlined.Hub
+import androidx.compose.material.icons.outlined.Key
+import androidx.compose.material.icons.outlined.LocationOn
+import androidx.compose.material.icons.outlined.LockReset
+import androidx.compose.material.icons.outlined.ManageAccounts
+import androidx.compose.material.icons.outlined.Password
+import androidx.compose.material.icons.outlined.Place
+import androidx.compose.material.icons.outlined.PowerSettingsNew
+import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.SettingsInputAntenna
+import androidx.compose.material.icons.outlined.Tag
+import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material.icons.outlined.TouchApp
+import androidx.compose.material.icons.outlined.Vibration
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material.icons.outlined.Wifi
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.ui.text.style.TextAlign
 
 /**
  * The radio config sections this app can read and write, one screen each, mirroring the
@@ -75,13 +109,13 @@ import androidx.compose.material.icons.outlined.Autorenew
  */
 enum class ConfigSection(val title: String, val summary: String, val pageTitle: String = title) {
     LORA("LoRa", "Region, modem preset, hop limit, transmit", pageTitle = "LoRa Config"),
-    DEVICE("Device", "Role, rebroadcast, node info interval"),
-    POSITION("Position", "GPS mode, broadcast interval, position flags"),
-    BLUETOOTH("Bluetooth", "Pairing mode and PIN"),
-    DISPLAY("Display", "Screen timeout, units, orientation"),
-    NETWORK("Network", "WiFi, Ethernet, NTP, syslog"),
-    POWER("Power", "Sleep intervals, shutdown, battery"),
-    SECURITY("Security", "Keys, managed mode, serial console"),
+    DEVICE("Device", "Role, rebroadcast, node info interval", pageTitle = "Device Config"),
+    POSITION("Position", "GPS mode, broadcast interval, position flags", pageTitle = "Position Config"),
+    BLUETOOTH("Bluetooth", "Pairing mode and PIN", pageTitle = "Bluetooth Config"),
+    DISPLAY("Display", "Screen timeout, units, orientation", pageTitle = "Display Config"),
+    NETWORK("Network", "WiFi, Ethernet, NTP, syslog", pageTitle = "Network Config"),
+    POWER("Power", "Sleep intervals, shutdown, battery", pageTitle = "Power Config"),
+    SECURITY("Security", "Keys, managed mode, serial console", pageTitle = "Security Config"),
 }
 
 /** One config section's form. The caller supplies the header and back affordance. */
@@ -430,351 +464,795 @@ private fun Stepper(onMinus: () -> Unit, onPlus: () -> Unit, minusEnabled: Boole
     }
 }
 
+/** "Configuration for: <name>" while a radio is connected, as ConfigHeader shows it. */
+@Composable
+private fun configHeader(vm: SettingsViewModel, connected: Boolean): String? {
+    val myInfo by vm.myInfo.collectAsState()
+    val myUser by vm.myUser.collectAsState()
+    return if (connected && myInfo != null) "Configuration for: ${myUser?.longName ?: "Unknown"}" else null
+}
+
+/** The admin-result toast line the forms with admin actions share. */
+@Composable
+private fun AdminResultLine(vm: SettingsViewModel) {
+    val result by vm.adminResult.collectAsState()
+    result?.let {
+        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/**
+ * DeviceConfig.swift: Options (role with the router warning, rebroadcast mode, node info
+ * interval), Hardware (double tap, triple click, LED heartbeat), Debug (time zone), GPIO
+ * (button, buzzer), then Reset NodeDB and Factory Reset for the connected radio.
+ */
 @Composable
 private fun DeviceSection(vm: SettingsViewModel, connected: Boolean) {
     val current by vm.deviceConfig.collectAsState()
-    ConfigForm(current, connected, vm, vm::writeDeviceConfig) { draft, update ->
-        ConfigEnumRow(
-            "Role",
-            draft.role,
-            protoEntries(ConfigProtos.Config.DeviceConfig.Role.entries),
-        ) { update(draft.toBuilder().setRole(it).build()) }
-        ConfigEnumRow(
-            "Rebroadcast mode",
-            draft.rebroadcastMode,
-            protoEntries(ConfigProtos.Config.DeviceConfig.RebroadcastMode.entries),
-        ) { update(draft.toBuilder().setRebroadcastMode(it).build()) }
-        ConfigNumberRow(
-            "Node info broadcast",
-            draft.nodeInfoBroadcastSecs,
-            suffix = "s",
-            hint = "How often this node re-announces its name; 3600 is typical",
-        ) { update(draft.toBuilder().setNodeInfoBroadcastSecs(it).build()) }
-        ConfigTextRow(
-            "Time zone",
-            draft.tzdef,
-            hint = "POSIX TZ string, for example EST5EDT,M3.2.0,M11.1.0",
-            maxLen = 64,
-        ) { update(draft.toBuilder().setTzdef(it).build()) }
-        ConfigEnumRow(
-            "Buzzer mode",
-            draft.buzzerMode,
-            protoEntries(ConfigProtos.Config.DeviceConfig.BuzzerMode.entries),
-        ) { update(draft.toBuilder().setBuzzerMode(it).build()) }
-        ConfigSwitchRow("LED heartbeat disabled", null, draft.ledHeartbeatDisabled) {
-            update(draft.toBuilder().setLedHeartbeatDisabled(it).build())
+    var pendingRole by remember { mutableStateOf<ConfigProtos.Config.DeviceConfig.Role?>(null) }
+    var confirmNodeDb by remember { mutableStateOf(false) }
+    var confirmFactory by remember { mutableStateOf(false) }
+    ConfigForm(
+        current, connected, vm, { draft ->
+            // DeviceConfig.normalize: Router Client was retired; the node-info floor is the firmware's.
+            var c = draft
+            if (c.role == ConfigProtos.Config.DeviceConfig.Role.ROUTER_CLIENT) c = c.toBuilder().setRole(ConfigProtos.Config.DeviceConfig.Role.CLIENT_MUTE).build()
+            if (c.nodeInfoBroadcastSecs.toUInt() < 10800u) c = c.toBuilder().setNodeInfoBroadcastSecs(10800).build()
+            vm.writeDeviceConfig(c)
+        },
+        header = configHeader(vm, connected),
+        grouped = false,
+    ) { draft, update ->
+        val role = draft.role
+        SectionHeader("Options", Modifier.padding(start = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column {
+                val roleOptions = DEVICE_ROLE_ORDER.filter { it == role || !roleIsDeprecated(it) }.let { if (role in it) it else it + role }
+                ConfigPickerRow(
+                    "Device Role", roleLabel(role), roleOptions,
+                    description = roleDescription(role),
+                    warning = if (roleIsDeprecated(role)) "This role is deprecated. Select a Router-based role to keep this node on a supported configuration." else null,
+                    label = ::roleLabel,
+                ) { newRole ->
+                    // DeviceRolePicker: the router-class roles confirm before they are chosen.
+                    if (roleWarning(newRole) != null) pendingRole = newRole
+                    else update(draft.toBuilder().setRole(newRole).build())
+                }
+                ConfigPickerRow(
+                    "Rebroadcast Mode", rebroadcastLabel(draft.rebroadcastMode),
+                    protoEntries(ConfigProtos.Config.DeviceConfig.RebroadcastMode.entries),
+                    description = rebroadcastDescription(draft.rebroadcastMode),
+                    label = ::rebroadcastLabel,
+                ) { update(draft.toBuilder().setRebroadcastMode(it).build()) }
+                IntervalPickerRow(
+                    "Node Info Broadcast Interval", draft.nodeInfoBroadcastSecs, Intervals.broadcastLong,
+                    description = "How often node information is sent. Defaults to 900 seconds.",
+                ) { update(draft.toBuilder().setNodeInfoBroadcastSecs(it).build()) }
+            }
         }
-        ConfigSwitchRow("Double tap as button press", null, draft.doubleTapAsButtonPress) {
-            update(draft.toBuilder().setDoubleTapAsButtonPress(it).build())
+        SectionHeader("Hardware", Modifier.padding(start = 4.dp, top = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column {
+                ConfigSwitchRow(
+                    "Double Tap as Button", "Treat double tap on supported accelerometers as a user button press.",
+                    draft.doubleTapAsButtonPress, icon = Icons.Outlined.TouchApp,
+                ) { update(draft.toBuilder().setDoubleTapAsButtonPress(it).build()) }
+                ConfigSwitchRow(
+                    "Disable Triple Click", "Disables the user button triple-press shortcut.",
+                    draft.disableTripleClick, icon = Icons.Outlined.Place,
+                ) { update(draft.toBuilder().setDisableTripleClick(it).build()) }
+                // Labelled "LED Heartbeat" upstream, so the toggle shows the positive sense.
+                ConfigSwitchRow(
+                    "LED Heartbeat",
+                    "Controls the blinking LED on the device.  For most devices this will control one of the up to 4 LEDS, the charger and GPS LEDs are not controllable.",
+                    !draft.ledHeartbeatDisabled, icon = Icons.Outlined.MonitorHeart,
+                ) { update(draft.toBuilder().setLedHeartbeatDisabled(!it).build()) }
+            }
         }
-        ConfigSwitchRow("Disable triple click", "Triple click normally toggles GPS", draft.disableTripleClick) {
-            update(draft.toBuilder().setDisableTripleClick(it).build())
+        SectionHeader("Debug", Modifier.padding(start = 4.dp, top = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column {
+                ConfigTextRow(
+                    "Time Zone", draft.tzdef,
+                    hint = "POSIX TZ string, for example EST5EDT,M3.2.0,M11.1.0",
+                    maxLen = 63, icon = Icons.Outlined.Schedule,
+                    description = "POSIX timezone definition string",
+                ) { update(draft.toBuilder().setTzdef(it).build()) }
+            }
         }
+        SectionHeader("GPIO", Modifier.padding(start = 4.dp, top = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column {
+                GpioPickerRow("Button GPIO", draft.buttonGpio, "GPIO pin for the user button, can be remapped on boards with multiple buttons") {
+                    update(draft.toBuilder().setButtonGpio(it).build())
+                }
+                GpioPickerRow("Buzzer GPIO", draft.buzzerGpio, "GPIO pin for the PWM buzzer") {
+                    update(draft.toBuilder().setBuzzerGpio(it).build())
+                }
+            }
+        }
+        pendingRole?.let { newRole ->
+            AlertDialog(
+                onDismissRequest = { pendingRole = null },
+                title = { Text("Are you sure?") },
+                text = { Text(roleWarning(newRole) ?: "") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        update(draft.toBuilder().setRole(newRole).build())
+                        pendingRole = null
+                    }) { Text("Confirm") }
+                },
+                dismissButton = { TextButton(onClick = { pendingRole = null }) { Text("Cancel") } },
+            )
+        }
+        // DeviceResetSection: admin commands, not configuration, so below the form.
+        if (connected) {
+            SectionHeader("Reset", Modifier.padding(start = 4.dp, top = 4.dp))
+            GroupCard(Modifier.fillMaxWidth()) {
+                Column {
+                    DestructiveRow("Reset NodeDB") { confirmNodeDb = true }
+                    DestructiveRow("Factory Reset") { confirmFactory = true }
+                }
+            }
+            AdminResultLine(vm)
+        }
+    }
+    if (confirmNodeDb) {
+        AlertDialog(
+            onDismissRequest = { confirmNodeDb = false },
+            title = { Text("Are you sure?") },
+            text = { Text("Reset the radio's node database? The radio forgets every node it has heard; this app's copy refills from the mesh.") },
+            confirmButton = {
+                TextButton(onClick = { vm.resetNodeDb(); confirmNodeDb = false }) {
+                    Text("Reset node database", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmNodeDb = false }) { Text("Cancel") } },
+        )
+    }
+    if (confirmFactory) {
+        AlertDialog(
+            onDismissRequest = { confirmFactory = false },
+            title = { Text("Factory reset will delete device and app data.") },
+            text = {
+                Column {
+                    TextButton(onClick = { vm.factoryReset(resetDevice = false); confirmFactory = false }) {
+                        Text("Delete all config?", color = MaterialTheme.colorScheme.error)
+                    }
+                    TextButton(onClick = { vm.factoryReset(resetDevice = true); confirmFactory = false }) {
+                        Text("Delete all config, keys and BLE bonds?", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { confirmFactory = false }) { Text("Cancel") } },
+        )
     }
 }
 
+/**
+ * PositionConfig.swift: Position Packet (interval, smart broadcast and its two limits),
+ * Device GPS (mode, update interval, fixed position with its confirmation), Position
+ * Flags (one toggle per bit, the dependent bits under their parents), Advanced Device
+ * GPS (the three GPIOs, GPS on only).
+ */
 @Composable
 private fun PositionSection(vm: SettingsViewModel, connected: Boolean) {
     val current by vm.positionConfig.collectAsState()
-    ConfigForm(current, connected, vm, vm::writePositionConfig) { draft, update ->
-        ConfigEnumRow(
-            "GPS mode",
-            draft.gpsMode,
-            protoEntries(ConfigProtos.Config.PositionConfig.GpsMode.entries),
-        ) { update(draft.toBuilder().setGpsMode(it).build()) }
-        ConfigNumberRow("Position broadcast", draft.positionBroadcastSecs, suffix = "s") {
-            update(draft.toBuilder().setPositionBroadcastSecs(it).build())
+    var confirmFixed by remember { mutableStateOf<Boolean?>(null) }
+    ConfigForm(current, connected, vm, vm::writePositionConfig, header = configHeader(vm, connected), grouped = false) { draft, update ->
+        val smart = draft.positionBroadcastSmartEnabled
+        val gpsOn = draft.gpsMode == ConfigProtos.Config.PositionConfig.GpsMode.ENABLED
+        SectionHeader("Position Packet", Modifier.padding(start = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column {
+                IntervalPickerRow(
+                    "Broadcast Interval", draft.positionBroadcastSecs, Intervals.broadcastMedium,
+                    description = "The longest a node will go without broadcasting a position.",
+                ) { update(draft.toBuilder().setPositionBroadcastSecs(it).build()) }
+                ConfigSwitchRow("Smart Position", null, smart, icon = Icons.Outlined.Psychology) {
+                    update(draft.toBuilder().setPositionBroadcastSmartEnabled(it).build())
+                }
+                if (smart) {
+                    IntervalPickerRow(
+                        "Minimum Interval", draft.broadcastSmartMinimumIntervalSecs, Intervals.smartBroadcastMinimum,
+                        description = "The shortest interval between position updates once the minimum distance has been met.",
+                    ) { update(draft.toBuilder().setBroadcastSmartMinimumIntervalSecs(it).build()) }
+                    ConfigPickerRow(
+                        "Minimum Distance", "${draft.broadcastSmartMinimumDistance} m", (10..150 step 5).toList(),
+                        description = "The minimum change in distance before a smart position broadcast is considered.",
+                        label = { "$it" },
+                    ) { update(draft.toBuilder().setBroadcastSmartMinimumDistance(it).build()) }
+                }
+            }
         }
-        ConfigSwitchRow(
-            "Smart position broadcast",
-            "Broadcast on movement instead of on a fixed interval",
-            draft.positionBroadcastSmartEnabled,
-        ) { update(draft.toBuilder().setPositionBroadcastSmartEnabled(it).build()) }
-        ConfigNumberRow(
-            "Smart minimum distance",
-            draft.broadcastSmartMinimumDistance,
-            suffix = "m",
-        ) { update(draft.toBuilder().setBroadcastSmartMinimumDistance(it).build()) }
-        ConfigNumberRow(
-            "Smart minimum interval",
-            draft.broadcastSmartMinimumIntervalSecs,
-            suffix = "s",
-        ) { update(draft.toBuilder().setBroadcastSmartMinimumIntervalSecs(it).build()) }
-        ConfigNumberRow("GPS update interval", draft.gpsUpdateInterval, suffix = "s") {
-            update(draft.toBuilder().setGpsUpdateInterval(it).build())
+        SectionHeader("Device GPS", Modifier.padding(start = 4.dp, top = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column {
+                ConfigPickerRow(
+                    "GPS Mode", gpsModeLabel(draft.gpsMode),
+                    listOf(ConfigProtos.Config.PositionConfig.GpsMode.ENABLED, ConfigProtos.Config.PositionConfig.GpsMode.DISABLED, ConfigProtos.Config.PositionConfig.GpsMode.NOT_PRESENT),
+                    label = ::gpsModeLabel,
+                ) { update(draft.toBuilder().setGpsMode(it).build()) }
+                if (gpsOn) {
+                    ConfigPickerRow(
+                        "Update Interval", GPS_UPDATE_INTERVALS.firstOrNull { it.first == draft.gpsUpdateInterval }?.second ?: intervalLabel(draft.gpsUpdateInterval),
+                        GPS_UPDATE_INTERVALS.map { it.first },
+                        description = "How often to try to get a GPS position.",
+                        label = { v -> GPS_UPDATE_INTERVALS.firstOrNull { it.first == v }?.second ?: intervalLabel(v) },
+                    ) { update(draft.toBuilder().setGpsUpdateInterval(it).build()) }
+                }
+                if (!gpsOn || draft.fixedPosition) {
+                    // FixedPositionRow: both directions confirm; the switch moves at once and
+                    // comes back if the confirmation is declined or the send fails.
+                    ConfigSwitchRow(
+                        "Fixed Position",
+                        "The last known latitude, longitude and altitude are broadcast over the mesh on the position interval, rather than a live GPS fix.",
+                        draft.fixedPosition, icon = Icons.Outlined.LocationOn,
+                    ) { on ->
+                        update(draft.toBuilder().setFixedPosition(on).build())
+                        confirmFixed = on
+                    }
+                }
+            }
         }
-        ConfigSwitchRow(
-            "Fixed position",
-            "Keep broadcasting the last known position and stop using the GPS",
-            draft.fixedPosition,
-        ) { update(draft.toBuilder().setFixedPosition(it).build()) }
-        PositionFlagsRow(draft.positionFlags) {
-            update(draft.toBuilder().setPositionFlags(it).build())
+        SectionHeader("Position Flags", Modifier.padding(start = 4.dp, top = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column {
+                Text(
+                    "Optional fields to include when assembling position messages",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp),
+                )
+                POSITION_FLAGS.forEach { spec ->
+                    if (spec.requires == 0 || draft.positionFlags and spec.requires != 0) {
+                        ConfigSwitchRow(spec.label, spec.description, draft.positionFlags and spec.bit != 0) { on ->
+                            val next = if (on) draft.positionFlags or spec.bit else draft.positionFlags and spec.bit.inv()
+                            update(draft.toBuilder().setPositionFlags(next).build())
+                        }
+                    }
+                }
+            }
         }
-        ConfigNumberRow("GPS RX GPIO", draft.rxGpio, allowZero = true) {
-            update(draft.toBuilder().setRxGpio(it).build())
+        if (gpsOn) {
+            SectionHeader("Advanced Device GPS", Modifier.padding(start = 4.dp, top = 4.dp))
+            GroupCard(Modifier.fillMaxWidth()) {
+                Column {
+                    GpioPickerRow("GPS Receive GPIO", draft.rxGpio, "GPIO pin for GPS RX") { update(draft.toBuilder().setRxGpio(it).build()) }
+                    GpioPickerRow("GPS Transmit GPIO", draft.txGpio, "GPIO pin for GPS TX") { update(draft.toBuilder().setTxGpio(it).build()) }
+                    GpioPickerRow("GPS EN GPIO", draft.gpsEnGpio, "GPIO pin for GPS enable") { update(draft.toBuilder().setGpsEnGpio(it).build()) }
+                }
+            }
         }
-        ConfigNumberRow("GPS TX GPIO", draft.txGpio, allowZero = true) {
-            update(draft.toBuilder().setTxGpio(it).build())
-        }
-        ConfigNumberRow("GPS enable GPIO", draft.gpsEnGpio, allowZero = true) {
-            update(draft.toBuilder().setGpsEnGpio(it).build())
+        AdminResultLine(vm)
+        confirmFixed?.let { turningOn ->
+            AlertDialog(
+                onDismissRequest = {
+                    update(draft.toBuilder().setFixedPosition(!turningOn).build())
+                    confirmFixed = null
+                },
+                title = { Text(if (turningOn) "Set Fixed Position" else "Remove Fixed Position") },
+                text = {
+                    Text(
+                        if (turningOn) "This will send a current position from your phone and enable fixed position."
+                        else "This will disable fixed position and remove the currently set position."
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        vm.setFixedPosition(turningOn) { update(draft.toBuilder().setFixedPosition(!turningOn).build()) }
+                        confirmFixed = null
+                    }) { Text(if (turningOn) "Set" else "Remove", color = if (turningOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error) }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        update(draft.toBuilder().setFixedPosition(!turningOn).build())
+                        confirmFixed = null
+                    }) { Text("Cancel") }
+                },
+            )
         }
     }
 }
 
+/** BluetoothConfig.swift: enabled, pairing mode, and the six-digit PIN while fixed-pin pairing is on. */
 @Composable
 private fun BluetoothSection(vm: SettingsViewModel, connected: Boolean) {
     val current by vm.bluetoothConfig.collectAsState()
     ConfigForm(
-        current,
-        connected,
-        vm,
-        vm::writeBluetoothConfig,
+        current, connected, vm, vm::writeBluetoothConfig,
         note = "Turning Bluetooth off, or changing the pairing mode, ends this app's " +
             "connection to the radio and may need re-pairing in Android settings.",
+        header = configHeader(vm, connected),
+        grouped = false,
+        canSave = { d -> d.mode != ConfigProtos.Config.BluetoothConfig.PairingMode.FIXED_PIN || d.fixedPin in 100000..999999 },
     ) { draft, update ->
-        ConfigSwitchRow("Bluetooth enabled", null, draft.enabled) {
-            update(draft.toBuilder().setEnabled(it).build())
+        SectionHeader("Options", Modifier.padding(start = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column {
+                ConfigSwitchRow("Bluetooth Enabled", "Enable Bluetooth on the device", draft.enabled, icon = Icons.Outlined.SettingsInputAntenna) {
+                    update(draft.toBuilder().setEnabled(it).build())
+                }
+                ConfigPickerRow(
+                    "Pairing Mode", pairingModeLabel(draft.mode),
+                    protoEntries(ConfigProtos.Config.BluetoothConfig.PairingMode.entries),
+                    description = "Bluetooth pairing strategy",
+                    label = ::pairingModeLabel,
+                ) { update(draft.toBuilder().setMode(it).build()) }
+                if (draft.mode == ConfigProtos.Config.BluetoothConfig.PairingMode.FIXED_PIN) {
+                    val complete = draft.fixedPin in 100000..999999
+                    ConfigNumberRow(
+                        "Fixed Pin", draft.fixedPin,
+                        hint = "Six digits, no leading zero",
+                        allowZero = true,
+                        description = "Fixed PIN for Bluetooth pairing. Used when pairing mode is set to fixed PIN",
+                    ) { update(draft.toBuilder().setFixedPin(it.coerceIn(0, 999999)).build()) }
+                    if (!complete) {
+                        Text(
+                            "BLE Pin must be 6 digits long.",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        )
+                    }
+                }
+            }
         }
-        ConfigEnumRow(
-            "Pairing mode",
-            draft.mode,
-            protoEntries(ConfigProtos.Config.BluetoothConfig.PairingMode.entries),
-        ) { update(draft.toBuilder().setMode(it).build()) }
-        ConfigNumberRow(
-            "Fixed PIN",
-            draft.fixedPin,
-            hint = "Six digits, used when the pairing mode is FIXED_PIN",
-            enabled = draft.mode == ConfigProtos.Config.BluetoothConfig.PairingMode.FIXED_PIN,
-        ) { update(draft.toBuilder().setFixedPin(it).build()) }
     }
 }
 
+/** DisplayConfig.swift: Device Screen (orientation, clock, bold heading, units) and Timing and Overrides. */
 @Composable
 private fun DisplaySection(vm: SettingsViewModel, connected: Boolean) {
     val current by vm.displayConfig.collectAsState()
-    ConfigForm(current, connected, vm, vm::writeDisplayConfig) { draft, update ->
-        ConfigNumberRow(
-            "Screen on time",
-            draft.screenOnSecs,
-            suffix = "s",
-            hint = "0 keeps the screen on forever",
-            allowZero = true,
-        ) { update(draft.toBuilder().setScreenOnSecs(it).build()) }
-        ConfigNumberRow(
-            "Screen carousel",
-            draft.autoScreenCarouselSecs,
-            suffix = "s",
-            hint = "0 disables automatic page cycling",
-            allowZero = true,
-        ) { update(draft.toBuilder().setAutoScreenCarouselSecs(it).build()) }
-        ConfigEnumRow(
-            "Units",
-            draft.units,
-            protoEntries(ConfigProtos.Config.DisplayConfig.DisplayUnits.entries),
-        ) { update(draft.toBuilder().setUnits(it).build()) }
-        ConfigEnumRow(
-            "Display mode",
-            draft.displaymode,
-            protoEntries(ConfigProtos.Config.DisplayConfig.DisplayMode.entries),
-        ) { update(draft.toBuilder().setDisplaymode(it).build()) }
-        ConfigEnumRow(
-            "OLED type",
-            draft.oled,
-            protoEntries(ConfigProtos.Config.DisplayConfig.OledType.entries),
-        ) { update(draft.toBuilder().setOled(it).build()) }
-        ConfigEnumRow(
-            "Compass orientation",
-            draft.compassOrientation,
-            protoEntries(ConfigProtos.Config.DisplayConfig.CompassOrientation.entries),
-        ) { update(draft.toBuilder().setCompassOrientation(it).build()) }
-        ConfigSwitchRow("Flip screen", null, draft.flipScreen) {
-            update(draft.toBuilder().setFlipScreen(it).build())
+    ConfigForm(current, connected, vm, vm::writeDisplayConfig, header = configHeader(vm, connected), grouped = false) { draft, update ->
+        SectionHeader("Device Screen", Modifier.padding(start = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column {
+                ConfigPickerRow(
+                    "Compass Orientation", compassOrientationLabel(draft.compassOrientation),
+                    protoEntries(ConfigProtos.Config.DisplayConfig.CompassOrientation.entries),
+                    description = "Indicates how to rotate or invert the compass output for accurate display.",
+                    label = ::compassOrientationLabel,
+                ) { update(draft.toBuilder().setCompassOrientation(it).build()) }
+                ConfigSwitchRow("12 Hour Clock", "Sets the screen clock format to 12-hour.", draft.use12HClock, icon = Icons.Outlined.Schedule) {
+                    update(draft.toBuilder().setUse12HClock(it).build())
+                }
+                ConfigSwitchRow("Bold Heading", "Bold the heading text on the screen.", draft.headingBold, icon = Icons.Filled.FormatBold) {
+                    update(draft.toBuilder().setHeadingBold(it).build())
+                }
+                ConfigPickerRow(
+                    "Display Units", displayUnitsLabel(draft.units),
+                    protoEntries(ConfigProtos.Config.DisplayConfig.DisplayUnits.entries),
+                    description = "Units shown on the device screen.",
+                    label = ::displayUnitsLabel,
+                ) { update(draft.toBuilder().setUnits(it).build()) }
+            }
         }
-        ConfigSwitchRow("Bold heading", null, draft.headingBold) {
-            update(draft.toBuilder().setHeadingBold(it).build())
-        }
-        ConfigSwitchRow("Wake on tap or motion", null, draft.wakeOnTapOrMotion) {
-            update(draft.toBuilder().setWakeOnTapOrMotion(it).build())
-        }
-        ConfigSwitchRow("12 hour clock", null, draft.use12HClock) {
-            update(draft.toBuilder().setUse12HClock(it).build())
-        }
-        ConfigSwitchRow("Long node names", null, draft.useLongNodeName) {
-            update(draft.toBuilder().setUseLongNodeName(it).build())
-        }
-        ConfigSwitchRow("Message bubbles", null, draft.enableMessageBubbles) {
-            update(draft.toBuilder().setEnableMessageBubbles(it).build())
+        SectionHeader("Timing and Overrides", Modifier.padding(start = 4.dp, top = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column {
+                ConfigPickerRow(
+                    "Screen on for", SCREEN_ON_INTERVALS.firstOrNull { it.first == draft.screenOnSecs }?.second ?: intervalLabel(draft.screenOnSecs),
+                    SCREEN_ON_INTERVALS.map { it.first },
+                    description = "How long the screen remains on after the user button is pressed or messages are received.",
+                    label = { v -> SCREEN_ON_INTERVALS.firstOrNull { it.first == v }?.second ?: intervalLabel(v) },
+                ) { update(draft.toBuilder().setScreenOnSecs(it).build()) }
+                ConfigPickerRow(
+                    "Carousel Interval", SCREEN_CAROUSEL_INTERVALS.firstOrNull { it.first == draft.autoScreenCarouselSecs }?.second ?: intervalLabel(draft.autoScreenCarouselSecs),
+                    SCREEN_CAROUSEL_INTERVALS.map { it.first },
+                    description = "Automatically moves to the next screen page, like a carousel, on this interval.",
+                    label = { v -> SCREEN_CAROUSEL_INTERVALS.firstOrNull { it.first == v }?.second ?: intervalLabel(v) },
+                ) { update(draft.toBuilder().setAutoScreenCarouselSecs(it).build()) }
+                ConfigSwitchRow("Wake Screen on tap or motion", "Requires that there be an accelerometer on your device.", draft.wakeOnTapOrMotion, icon = Icons.Outlined.Vibration) {
+                    update(draft.toBuilder().setWakeOnTapOrMotion(it).build())
+                }
+                ConfigSwitchRow("Flip Screen", "Flip screen vertically", draft.flipScreen, icon = Icons.Outlined.Flip) {
+                    update(draft.toBuilder().setFlipScreen(it).build())
+                }
+                ConfigPickerRow(
+                    "Display Mode", displayModeLabel(draft.displaymode),
+                    protoEntries(ConfigProtos.Config.DisplayConfig.DisplayMode.entries),
+                    description = "Override default screen layout.",
+                    label = ::displayModeLabel,
+                ) { update(draft.toBuilder().setDisplaymode(it).build()) }
+                ConfigPickerRow(
+                    "OLED Type", oledLabel(draft.oled),
+                    OLED_TYPES.let { if (draft.oled in it) it else it + draft.oled },
+                    description = "Override automatic OLED screen detection.",
+                    label = ::oledLabel,
+                ) { update(draft.toBuilder().setOled(it).build()) }
+            }
         }
     }
 }
 
+/**
+ * NetworkConfig.swift: WiFi Options and Ethernet Options by what the radio reports having,
+ * Network Servers, Address Mode, the static IPv4 fields with validation, UDP Broadcast.
+ * The DHCP save clears the static fields, as the original does.
+ */
 @Composable
 private fun NetworkSection(vm: SettingsViewModel, connected: Boolean) {
     val current by vm.networkConfig.collectAsState()
+    val metadata by vm.deviceMetadata.collectAsState()
+    val hasWifi = metadata?.hasWifi == true
+    val hasEthernet = metadata?.hasEthernet == true
+    val networked = hasWifi || hasEthernet
     ConfigForm(
-        current,
-        connected,
-        vm,
-        vm::writeNetworkConfig,
-        note = "WiFi and Ethernet are only present on some hardware; on a radio without " +
-            "them these settings do nothing.",
+        current, connected, vm, { d ->
+            val cleaned = if (d.addressMode != ConfigProtos.Config.NetworkConfig.AddressMode.STATIC)
+                d.toBuilder().setIpv4Config(ConfigProtos.Config.NetworkConfig.IpV4Config.getDefaultInstance()).build() else d
+            vm.writeNetworkConfig(cleaned)
+        },
+        note = if (metadata == null) "Connect the radio to learn whether it has WiFi or Ethernet." else if (!networked) "This radio reports neither WiFi nor Ethernet." else null,
+        header = configHeader(vm, connected),
+        grouped = false,
+        canSave = { d ->
+            d.addressMode != ConfigProtos.Config.NetworkConfig.AddressMode.STATIC ||
+                (IPv4.isRequiredValid(ipToString(d.ipv4Config.ip)) && IPv4.isRequiredValid(ipToString(d.ipv4Config.gateway)) &&
+                    IPv4.isRequiredValid(ipToString(d.ipv4Config.subnet)))
+        },
     ) { draft, update ->
-        ConfigSwitchRow("WiFi enabled", null, draft.wifiEnabled) {
-            update(draft.toBuilder().setWifiEnabled(it).build())
-        }
-        ConfigTextRow("WiFi SSID", draft.wifiSsid, maxLen = 32, enabled = draft.wifiEnabled) {
-            update(draft.toBuilder().setWifiSsid(it).build())
-        }
-        ConfigTextRow(
-            "WiFi password",
-            draft.wifiPsk,
-            maxLen = 64,
-            masked = true,
-            enabled = draft.wifiEnabled,
-        ) { update(draft.toBuilder().setWifiPsk(it).build()) }
-        ConfigSwitchRow("Ethernet enabled", null, draft.ethEnabled) {
-            update(draft.toBuilder().setEthEnabled(it).build())
-        }
-        ConfigSwitchRow("IPv6 enabled", null, draft.ipv6Enabled) {
-            update(draft.toBuilder().setIpv6Enabled(it).build())
-        }
-        ConfigEnumRow(
-            "Address mode",
-            draft.addressMode,
-            protoEntries(ConfigProtos.Config.NetworkConfig.AddressMode.entries),
-        ) { update(draft.toBuilder().setAddressMode(it).build()) }
         val static = draft.addressMode == ConfigProtos.Config.NetworkConfig.AddressMode.STATIC
-        ConfigTextRow("IP address", ipToString(draft.ipv4Config.ip), enabled = static, maxLen = 15) {
-            update(
-                draft.toBuilder()
-                    .setIpv4Config(draft.ipv4Config.toBuilder().setIp(ipToInt(it)))
-                    .build()
-            )
+        if (hasWifi) {
+            SectionHeader("WiFi Options", Modifier.padding(start = 4.dp))
+            GroupCard(Modifier.fillMaxWidth()) {
+                Column {
+                    ConfigSwitchRow("WiFi Enabled", "Enabling WiFi will disable the bluetooth connection to the app.", draft.wifiEnabled, icon = Icons.Outlined.Wifi) {
+                        update(draft.toBuilder().setWifiEnabled(it).build())
+                    }
+                    ConfigTextRow("SSID", draft.wifiSsid, maxLen = 32, icon = Icons.Outlined.Public, description = "WiFi network name to connect to") {
+                        update(draft.toBuilder().setWifiSsid(it).build())
+                    }
+                    ConfigTextRow("Password", draft.wifiPsk, maxLen = 63, masked = true, icon = Icons.Outlined.Password, description = "WiFi password for authentication") {
+                        update(draft.toBuilder().setWifiPsk(it).build())
+                    }
+                }
+            }
         }
-        ConfigTextRow("Gateway", ipToString(draft.ipv4Config.gateway), enabled = static, maxLen = 15) {
-            update(
-                draft.toBuilder()
-                    .setIpv4Config(draft.ipv4Config.toBuilder().setGateway(ipToInt(it)))
-                    .build()
-            )
+        if (hasEthernet) {
+            SectionHeader("Ethernet Options", Modifier.padding(start = 4.dp, top = 4.dp))
+            GroupCard(Modifier.fillMaxWidth()) {
+                Column {
+                    ConfigSwitchRow("Ethernet Enabled", "Enabling Ethernet will disable the bluetooth connection to the app.", draft.ethEnabled, icon = Icons.Outlined.Public) {
+                        update(draft.toBuilder().setEthEnabled(it).build())
+                    }
+                }
+            }
         }
-        ConfigTextRow("Subnet mask", ipToString(draft.ipv4Config.subnet), enabled = static, maxLen = 15) {
-            update(
-                draft.toBuilder()
-                    .setIpv4Config(draft.ipv4Config.toBuilder().setSubnet(ipToInt(it)))
-                    .build()
-            )
-        }
-        ConfigTextRow("DNS server", ipToString(draft.ipv4Config.dns), enabled = static, maxLen = 15) {
-            update(
-                draft.toBuilder()
-                    .setIpv4Config(draft.ipv4Config.toBuilder().setDns(ipToInt(it)))
-                    .build()
-            )
-        }
-        ConfigTextRow("NTP server", draft.ntpServer, maxLen = 64) {
-            update(draft.toBuilder().setNtpServer(it).build())
-        }
-        ConfigTextRow("Syslog server", draft.rsyslogServer, maxLen = 64) {
-            update(draft.toBuilder().setRsyslogServer(it).build())
+        if (networked) {
+            SectionHeader("Network Servers", Modifier.padding(start = 4.dp, top = 4.dp))
+            GroupCard(Modifier.fillMaxWidth()) {
+                Column {
+                    ConfigTextRow("NTP Server", draft.ntpServer, maxLen = 32, icon = Icons.Outlined.Schedule, description = "NTP server address. Defaults to meshtastic.pool.ntp.org") {
+                        update(draft.toBuilder().setNtpServer(it).build())
+                    }
+                    ConfigTextRow("Rsyslog Server", draft.rsyslogServer, maxLen = 32, icon = Icons.Outlined.Dns) {
+                        update(draft.toBuilder().setRsyslogServer(it).build())
+                    }
+                }
+            }
+            SectionHeader("Address Mode", Modifier.padding(start = 4.dp, top = 4.dp))
+            GroupCard(Modifier.fillMaxWidth()) {
+                Column {
+                    ConfigPickerRow(
+                        "Address Mode", addressModeLabel(draft.addressMode),
+                        protoEntries(ConfigProtos.Config.NetworkConfig.AddressMode.entries),
+                        label = ::addressModeLabel,
+                    ) { update(draft.toBuilder().setAddressMode(it).build()) }
+                }
+            }
+            if (static) {
+                SectionHeader("Static IPv4 Configuration", Modifier.padding(start = 4.dp, top = 4.dp))
+                GroupCard(Modifier.fillMaxWidth()) {
+                    Column {
+                        val ipv4 = draft.ipv4Config
+                        fun set(b: ConfigProtos.Config.NetworkConfig.IpV4Config.Builder) = update(draft.toBuilder().setIpv4Config(b).build())
+                        Ipv4Row("IP", ipv4.ip, required = true, icon = Icons.Outlined.Tag) { set(ipv4.toBuilder().setIp(it)) }
+                        Ipv4Row("Gateway", ipv4.gateway, required = true, icon = Icons.Outlined.CallSplit) { set(ipv4.toBuilder().setGateway(it)) }
+                        Ipv4Row("Subnet", ipv4.subnet, required = true, icon = Icons.Outlined.GridOn) { set(ipv4.toBuilder().setSubnet(it)) }
+                        Ipv4Row("DNS", ipv4.dns, required = false, icon = Icons.Outlined.Search) { set(ipv4.toBuilder().setDns(it)) }
+                        Text(
+                            "Address, gateway and subnet are required and must be valid IPv4 addresses. DNS may be left blank.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                        )
+                    }
+                }
+            }
+            SectionHeader("UDP Broadcast", Modifier.padding(start = 4.dp, top = 4.dp))
+            GroupCard(Modifier.fillMaxWidth()) {
+                Column {
+                    Text(
+                        "Enable broadcasting packets via UDP over the local network.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp),
+                    )
+                    ConfigSwitchRow("UDP Broadcast", null, draft.enabledProtocols and 1 != 0, icon = Icons.Outlined.Hub) { on ->
+                        update(draft.toBuilder().setEnabledProtocols(if (on) draft.enabledProtocols or 1 else draft.enabledProtocols and 1.inv()).build())
+                    }
+                }
+            }
         }
     }
 }
 
+/**
+ * PowerConfig.swift: Power (power saving, shutdown on power loss as a zero-means-off
+ * toggle, wait for Bluetooth) and Battery (ADC override). The original hides the ESP32
+ * and nRF52 rows by a hardware catalog this port does not carry, so every row shows.
+ */
 @Composable
 private fun PowerSection(vm: SettingsViewModel, connected: Boolean) {
     val current by vm.powerConfig.collectAsState()
-    ConfigForm(current, connected, vm, vm::writePowerConfig) { draft, update ->
-        ConfigSwitchRow(
-            "Power saving",
-            "For nodes that sleep between transmissions",
-            draft.isPowerSaving,
-        ) { update(draft.toBuilder().setIsPowerSaving(it).build()) }
-        ConfigNumberRow(
-            "Shutdown on battery after",
-            draft.onBatteryShutdownAfterSecs,
-            suffix = "s",
-            hint = "0 never shuts down",
-            allowZero = true,
-        ) { update(draft.toBuilder().setOnBatteryShutdownAfterSecs(it).build()) }
-        ConfigNumberRow(
-            "Wait for Bluetooth",
-            draft.waitBluetoothSecs,
-            suffix = "s",
-            hint = "How long the radio stays awake waiting for a phone",
-        ) { update(draft.toBuilder().setWaitBluetoothSecs(it).build()) }
-        ConfigNumberRow("Light sleep", draft.lsSecs, suffix = "s", allowZero = true) {
-            update(draft.toBuilder().setLsSecs(it).build())
+    ConfigForm(current, connected, vm, vm::writePowerConfig, header = configHeader(vm, connected), grouped = false) { draft, update ->
+        SectionHeader("Power", Modifier.padding(start = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column {
+                ConfigSwitchRow(
+                    "Power Saving",
+                    "Will sleep everything as much as possible, for the tracker and sensor role this will also include the lora radio. Don't use this setting if you want to use your device with the phone apps or are using a device without a user button.",
+                    draft.isPowerSaving, icon = Icons.Outlined.Bolt,
+                ) { update(draft.toBuilder().setIsPowerSaving(it).build()) }
+                // nonZeroToggle(onValue: 1800): half an hour when switched on.
+                ConfigSwitchRow(
+                    "Shutdown on Power Loss",
+                    "How long after external power is removed before the device powers off. Zero to disable.",
+                    draft.onBatteryShutdownAfterSecs != 0, icon = Icons.Outlined.PowerSettingsNew,
+                ) { on -> update(draft.toBuilder().setOnBatteryShutdownAfterSecs(if (on) 1800 else 0).build()) }
+                if (draft.onBatteryShutdownAfterSecs != 0) {
+                    ConfigNumberRow("Shutdown after", draft.onBatteryShutdownAfterSecs, suffix = "s") {
+                        update(draft.toBuilder().setOnBatteryShutdownAfterSecs(it).build())
+                    }
+                }
+                IntervalPickerRow(
+                    "Wait for Bluetooth Duration", draft.waitBluetoothSecs, Intervals.waitBluetooth,
+                    icon = Icons.Outlined.Bluetooth,
+                ) { update(draft.toBuilder().setWaitBluetoothSecs(it).build()) }
+            }
         }
-        ConfigNumberRow("Super deep sleep", draft.sdsSecs, suffix = "s", allowZero = true) {
-            update(draft.toBuilder().setSdsSecs(it).build())
+        SectionHeader("Battery", Modifier.padding(start = 4.dp, top = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column {
+                // ADCOverrideField: a toggle, and the multiplier while on; zero means no override.
+                ConfigSwitchRow("ADC Override", null, draft.adcMultiplierOverride != 0f) { on ->
+                    update(draft.toBuilder().setAdcMultiplierOverride(if (on) 2f else 0f).build())
+                }
+                if (draft.adcMultiplierOverride != 0f) {
+                    ConfigFloatRow("Multiplier", draft.adcMultiplierOverride, hint = "Between 2 and 6 on most boards") { v ->
+                        if (v > 0f) update(draft.toBuilder().setAdcMultiplierOverride(v).build())
+                    }
+                }
+            }
         }
-        ConfigNumberRow("Minimum wake", draft.minWakeSecs, suffix = "s", allowZero = true) {
-            update(draft.toBuilder().setMinWakeSecs(it).build())
-        }
-        ConfigFloatRow(
-            "ADC multiplier override",
-            draft.adcMultiplierOverride,
-            hint = "0 uses the firmware default for this board",
-        ) { update(draft.toBuilder().setAdcMultiplierOverride(it).build()) }
-        ConfigNumberRow(
-            "Battery INA address",
-            draft.deviceBatteryInaAddress,
-            hint = "I2C address of an INA current sensor, 0 for none",
-            allowZero = true,
-        ) { update(draft.toBuilder().setDeviceBatteryInaAddress(it).build()) }
     }
 }
 
+/**
+ * SecurityConfig.swift: Packet Authenticity, Direct Message Key (public key with Copy,
+ * private key masked with reveal and regenerate), Admin Keys (three slots), Logs,
+ * Administration (managed, only once an admin key exists). The iCloud key backup and the
+ * app-local lockdown section have no Android counterpart here.
+ */
 @Composable
 private fun SecuritySection(vm: SettingsViewModel, connected: Boolean) {
     val current by vm.securityConfig.collectAsState()
+    val metadata by vm.deviceMetadata.collectAsState()
+    val clipboard = LocalClipboardManager.current
     ConfigForm(
-        current,
-        connected,
-        vm,
-        vm::writeSecurityConfig,
-        note = "Managed mode locks this radio out of client configuration: it can then " +
-            "only be changed by a node holding an admin key. The private key is never " +
-            "shown or written by this app.",
+        current, connected, vm, vm::writeSecurityConfig,
+        header = configHeader(vm, connected),
+        grouped = false,
     ) { draft, update ->
-        ConfigInfoRow(
-            "Public key",
-            draft.publicKey.toByteArray()
-                .takeIf { it.isNotEmpty() }
-                ?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
-                ?: "not set",
-            selectable = true,
-        )
-        ConfigInfoRow("Private key", if (draft.privateKey.isEmpty) "not set" else "set")
-        ConfigInfoRow(
-            "Admin keys",
-            draft.adminKeyCount.let { if (it == 0) "none" else "$it configured" },
-        )
-        ConfigEnumRow(
-            "Packet signature policy",
-            draft.packetSignaturePolicy,
-            protoEntries(ConfigProtos.Config.SecurityConfig.PacketSignaturePolicy.entries),
-        ) { update(draft.toBuilder().setPacketSignaturePolicy(it).build()) }
-        ConfigSwitchRow(
-            "Managed mode",
-            "Only an admin key may change this radio's config",
-            draft.isManaged,
-        ) { update(draft.toBuilder().setIsManaged(it).build()) }
-        ConfigSwitchRow("Serial console", null, draft.serialEnabled) {
-            update(draft.toBuilder().setSerialEnabled(it).build())
+        val policyAllowed = connected && metadata?.hasXeddsa == true
+        SectionHeader("Packet Authenticity", Modifier.padding(start = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column {
+                ConfigPickerRow(
+                    "Protection Level", signaturePolicyLabel(draft.packetSignaturePolicy),
+                    protoEntries(ConfigProtos.Config.SecurityConfig.PacketSignaturePolicy.entries),
+                    description = if (metadata != null && metadata?.hasXeddsa == false) "This connected device does not support packet signature verification."
+                    else signaturePolicyDescription(draft.packetSignaturePolicy),
+                    warning = if (metadata == null) "This device has not reported whether it supports packet signature verification. Update its firmware to configure this setting." else null,
+                    enabled = policyAllowed,
+                    label = ::signaturePolicyLabel,
+                ) { update(draft.toBuilder().setPacketSignaturePolicy(it).build()) }
+            }
         }
-        ConfigSwitchRow("Debug log over API", null, draft.debugLogApiEnabled) {
-            update(draft.toBuilder().setDebugLogApiEnabled(it).build())
+        SectionHeader("Direct Message Key", Modifier.padding(start = 4.dp, top = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                val publicText = SecurityKey.text(draft.publicKey.toByteArray())
+                val derived = SecurityKey.publicKeyFor(draft.privateKey.toByteArray())
+                val matches = draft.privateKey.isEmpty || derived == null || derived.contentEquals(draft.publicKey.toByteArray())
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.Key, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Text("Public Key", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(start = 12.dp).weight(1f))
+                    OutlinedButton(enabled = publicText.isNotEmpty(), onClick = { clipboard.setText(AnnotatedString(publicText)) }) { Text("Copy") }
+                }
+                SelectionContainer {
+                    Text(
+                        publicText.ifEmpty { "not set" },
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        color = if (matches) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+                ConfigDescription("Generated from your private key and sent out to other nodes on the mesh to allow them to compute a shared secret key")
+                HorizontalDivider(Modifier.padding(vertical = 10.dp))
+                // PrivateKeyRows: typed text reaches the message only once it is a 32-byte key;
+                // the public key follows it.
+                KeyField(
+                    "Private Key", draft.privateKey.toByteArray(), icon = Icons.Filled.Key,
+                    description = "Used to create a shared key with a remote device",
+                ) { bytes ->
+                    val b = draft.toBuilder().setPrivateKey(com.google.protobuf.ByteString.copyFrom(bytes))
+                    SecurityKey.publicKeyFor(bytes)?.let { b.setPublicKey(com.google.protobuf.ByteString.copyFrom(it)) }
+                    update(b.build())
+                }
+                HorizontalDivider(Modifier.padding(vertical = 10.dp))
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.Autorenew, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Text("Regenerate Private Key", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(start = 12.dp).weight(1f))
+                    OutlinedButton(onClick = {
+                        val fresh = SecurityKey.generatePrivateKey()
+                        val pub = SecurityKey.publicKeyFor(fresh)!!
+                        update(
+                            draft.toBuilder()
+                                .setPrivateKey(com.google.protobuf.ByteString.copyFrom(fresh))
+                                .setPublicKey(com.google.protobuf.ByteString.copyFrom(pub))
+                                .build()
+                        )
+                    }) { Icon(Icons.Outlined.LockReset, contentDescription = "Regenerate private key") }
+                }
+                ConfigDescription("Generate a new private key to replace the one currently in use. The public key will automatically be regenerated from your private key.")
+            }
         }
-        ConfigSwitchRow(
-            "Admin channel",
-            "Accept legacy unauthenticated admin messages on the admin channel",
-            draft.adminChannelEnabled,
-        ) { update(draft.toBuilder().setAdminChannelEnabled(it).build()) }
+        SectionHeader("Admin Keys", Modifier.padding(start = 4.dp, top = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                val keys = (0 until SecurityKey.SLOTS).map { draft.adminKeyList.getOrNull(it)?.toByteArray() ?: ByteArray(0) }
+                listOf("Primary Admin Key", "Secondary Admin Key", "Tertiary Admin Key").forEachIndexed { slot, title ->
+                    if (slot > 0) HorizontalDivider(Modifier.padding(vertical = 10.dp))
+                    KeyField(title, keys[slot], icon = Icons.Outlined.Key, description = null) { bytes ->
+                        // Positional: an empty slot still occupies its place. Managed mode goes
+                        // with the last key.
+                        val next = keys.toMutableList().also { it[slot] = bytes }
+                        val b = draft.toBuilder().clearAdminKey()
+                        next.forEach { b.addAdminKey(com.google.protobuf.ByteString.copyFrom(it)) }
+                        if (next.all { it.isEmpty() }) b.setIsManaged(false)
+                        update(b.build())
+                    }
+                }
+                ConfigDescription("The public key authorized to send admin messages to this node")
+            }
+        }
+        SectionHeader("Logs", Modifier.padding(start = 4.dp, top = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column {
+                ConfigSwitchRow("Serial Console", "Serial Console over the Stream API.", draft.serialEnabled, icon = Icons.Outlined.Terminal) {
+                    update(draft.toBuilder().setSerialEnabled(it).build())
+                }
+                ConfigSwitchRow("Debug Logs", "Output live debug logging over serial, view and export position-redacted device logs over Bluetooth.", draft.debugLogApiEnabled, icon = Icons.Outlined.BugReport) {
+                    update(draft.toBuilder().setDebugLogApiEnabled(it).build())
+                }
+            }
+        }
+        SectionHeader("Administration", Modifier.padding(start = 4.dp, top = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column {
+                val hasAdminKey = draft.adminKeyList.any { !it.isEmpty }
+                ConfigSwitchRow(
+                    "Managed Device",
+                    "Device is managed by a mesh administrator, the user is unable to access any of the device settings.",
+                    draft.isManaged, enabled = hasAdminKey, icon = Icons.Outlined.ManageAccounts,
+                ) { update(draft.toBuilder().setIsManaged(it).build()) }
+                if (!hasAdminKey) {
+                    Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.Top) {
+                        Icon(Icons.Filled.Warning, contentDescription = null, tint = IosOrange, modifier = Modifier.size(18.dp))
+                        Text("An admin key must be set before enabling managed mode.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 8.dp))
+                    }
+                }
+            }
+        }
     }
+}
+
+// ---------------------------------------------------------------- section-specific rows
+
+/** A 32-byte key as base64: masked with a reveal, red while the text is not a key, blank clears. */
+@Composable
+private fun KeyField(
+    title: String,
+    value: ByteArray,
+    icon: ImageVector,
+    description: String?,
+    onSet: (ByteArray) -> Unit,
+) {
+    var text by remember(value.contentHashCode()) { mutableStateOf(SecurityKey.text(value)) }
+    var reveal by remember { mutableStateOf(false) }
+    val valid = SecurityKey.isValid(text)
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(start = 12.dp).weight(1f))
+        IconButton(onClick = { reveal = !reveal }) {
+            Icon(if (reveal) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, contentDescription = if (reveal) "Hide" else "Reveal")
+        }
+    }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { candidate ->
+            text = candidate.trim()
+            if (SecurityKey.isValid(text)) onSet(SecurityKey.data(text))
+        },
+        singleLine = true,
+        isError = !valid,
+        visualTransformation = if (reveal) VisualTransformation.None else PasswordVisualTransformation(),
+        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    description?.let { ConfigDescription(it) }
+}
+
+/** The 0..48 GPIO picker with "Unset" for zero. */
+@Composable
+private fun GpioPickerRow(title: String, value: Int, description: String?, onSet: (Int) -> Unit) {
+    ConfigPickerRow(
+        title, if (value == 0) "Unset" else value.toString(), (0..48).toList(),
+        description = description,
+        label = { if (it == 0) "Unset" else it.toString() },
+        onPick = onSet,
+    )
+}
+
+/**
+ * UpdateIntervalPicker: the curated options, plus the stored value when it is not one of
+ * them, flagged as not optimized.
+ */
+@Composable
+private fun IntervalPickerRow(
+    title: String,
+    value: Int,
+    options: List<Int>,
+    description: String? = null,
+    icon: ImageVector? = null,
+    onSet: (Int) -> Unit,
+) {
+    val listed = if (value in options) options else options + value
+    val outOfRange = value !in options
+    ConfigPickerRow(
+        title, intervalLabel(value), listed,
+        description = description,
+        warning = if (outOfRange) "The configured value (${intervalLabel(value)}) is not one of the optimized options." else null,
+        label = ::intervalLabel,
+        icon = icon,
+        onPick = onSet,
+    )
+}
+
+/** IPv4Row: a dotted quad typed as text; a required field tints blank or malformed as invalid. */
+@Composable
+private fun Ipv4Row(title: String, value: Int, required: Boolean, icon: ImageVector, onSet: (Int) -> Unit) {
+    val text = if (value == 0) "" else ipToString(value)
+    val valid = if (required) IPv4.isRequiredValid(text) else IPv4.isValid(text)
+    ConfigTextRow(
+        title, text, hint = "e.g. 192.168.1.10", maxLen = 15, icon = icon,
+        invalid = !valid,
+    ) { typed -> onSet(if (IPv4.isValid(typed) && typed.isNotBlank()) ipToInt(typed.trim()) else 0) }
+}
+
+/** A destructive action row, red, for the reset commands. */
+@Composable
+private fun DestructiveRow(title: String, onClick: () -> Unit) {
+    ListItem(
+        headlineContent = { Text(title, color = MaterialTheme.colorScheme.error) },
+        modifier = Modifier.clickable(onClick = onClick),
+    )
+    HorizontalDivider()
 }
 
 // ---------------------------------------------------------------- form shell
@@ -901,6 +1379,7 @@ private fun <T> ConfigPickerRow(
     description: String? = null,
     warning: String? = null,
     enabled: Boolean = true,
+    icon: ImageVector? = null,
     label: (T) -> String,
     onPick: (T) -> Unit,
 ) {
@@ -912,8 +1391,19 @@ private fun <T> ConfigPickerRow(
             .padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-            Text(valueLabel, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyLarge)
+            icon?.let {
+                Icon(it, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(end = 12.dp))
+            }
+            // The title keeps its words; a long value yields first, as the iOS picker row does.
+            Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f, fill = false), color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(12.dp))
+            Text(
+                valueLabel,
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.bodyLarge,
+                textAlign = TextAlign.End,
+                modifier = Modifier.weight(1.4f, fill = false),
+            )
             Icon(Icons.Filled.UnfoldMore, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
         }
         description?.let { ConfigDescription(it) }
@@ -1070,20 +1560,28 @@ private fun ConfigTextRow(
     maxLen: Int = 128,
     masked: Boolean = false,
     enabled: Boolean = true,
+    icon: ImageVector? = null,
+    description: String? = null,
+    invalid: Boolean = false,
     onSet: (String) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
     ListItem(
         headlineContent = { Text(title) },
         supportingContent = {
-            Text(
-                when {
-                    value.isEmpty() -> "unset"
-                    masked -> "•".repeat(value.length.coerceAtMost(12))
-                    else -> value
-                }
-            )
+            Column {
+                Text(
+                    when {
+                        value.isEmpty() -> "unset"
+                        masked -> "\u2022".repeat(value.length.coerceAtMost(12))
+                        else -> value
+                    },
+                    color = if (invalid) MaterialTheme.colorScheme.error else Color.Unspecified,
+                )
+                description?.let { ConfigDescription(it) }
+            }
         },
+        leadingContent = icon?.let { { Icon(it, contentDescription = null, tint = MaterialTheme.colorScheme.primary) } },
         modifier = Modifier.clickable(enabled = enabled) { open = true },
     )
     HorizontalDivider()

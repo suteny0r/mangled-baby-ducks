@@ -46,6 +46,7 @@ import org.meshtastic.proto.AppOnlyProtos
 import org.meshtastic.proto.ChannelProtos
 import org.meshtastic.proto.ConfigProtos
 import com.suteny0r.mangledbabyducks.db.MapNode
+import org.meshtastic.proto.MeshProtos
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ConnectViewModel(app: Application) : AndroidViewModel(app) {
@@ -625,6 +626,56 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
     val loraConfig: StateFlow<ConfigProtos.Config.LoRaConfig?> =
         configFlow("config.lora") { it.lora }
+
+    /** The connected radio's DeviceMetadata; null until a handshake has delivered one. */
+    val deviceMetadata: StateFlow<MeshProtos.DeviceMetadata?> = container.radioManager.deviceMetadata
+
+    /** Our location for Set Fixed Position: the radio's own fix, else the phone's. */
+    private suspend fun ourLocation(): Triple<Int, Int, Int>? {
+        val me = container.radioManager.myNodeNum.value
+        container.database.positionDao().mapNodes().first().firstOrNull { it.nodeNum == me }?.let {
+            return Triple(it.latitudeI, it.longitudeI, 0)
+        }
+        return container.locationSharer.lastFix.value?.let { Triple(it.latitudeI, it.longitudeI, it.altitude) }
+    }
+
+    /** One-shot outcome of an admin action on this screen, shown and cleared by the form. */
+    val adminResult = MutableStateFlow<String?>(null)
+
+    /** FixedPositionRow.send: the toggle has already moved; a failure puts it back. */
+    fun setFixedPosition(enable: Boolean, onFailure: () -> Unit) {
+        viewModelScope.launch {
+            val ok = if (enable) {
+                val here = ourLocation()
+                if (here == null) {
+                    adminResult.value = "No position to send: neither the radio nor the phone has a fix."
+                    false
+                } else container.radioManager.setFixedPosition(here.first, here.second, here.third)
+            } else {
+                container.radioManager.removeFixedPosition()
+            }
+            if (!ok) {
+                if (adminResult.value == null) adminResult.value = "Fixed position change failed."
+                onFailure()
+            }
+        }
+    }
+
+    /** DeviceResetSection.reset: the radio forgets its nodes; this app clears its copy too. */
+    fun resetNodeDb() {
+        viewModelScope.launch {
+            val ok = container.radioManager.sendNodeDbReset()
+            adminResult.value = if (ok) "Node database reset sent; the radio is clearing its nodes." else "Node database reset failed."
+        }
+    }
+
+    /** DeviceResetSection.factoryReset. */
+    fun factoryReset(resetDevice: Boolean) {
+        viewModelScope.launch {
+            val ok = container.radioManager.sendFactoryReset(resetDevice)
+            adminResult.value = if (ok) "Factory reset sent; the radio will reboot." else "Factory reset failed."
+        }
+    }
 
     /** The firmware's region -> presets map (2.8+), decoded; empty when the radio sent none. */
     val regionPresets: StateFlow<Map<ConfigProtos.Config.LoRaConfig.RegionCode, RegionPresetInfo>> =

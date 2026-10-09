@@ -16,6 +16,56 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## The other seven config forms ported from the generated upstream forms (2026-10-09 12:50, verified on the phone)
+
+- Upstream (2026-09-18 on) drives every config screen from `Config/Forms/<X>Config.swift`
+  overlays (sections, order, symbols, controls, show/enable conditions, omitted fields)
+  plus `Model/FieldMetadataRegistry.swift` (labels, descriptions, units, bounds, enum
+  value labels and descriptions, deprecations). `ui/ConfigEnums.kt` carries the strings
+  and option sets (interval sets, GPS / screen intervals, role order and warnings, enum
+  labels, position flag specs, signature policy texts), plus `SecurityKey` / `X25519`
+  (RFC 7748 over BigInteger, for Regenerate Private Key and deriving the public key) and
+  `IPv4`.
+- `RadioManager.deviceMetadata` keeps the handshake's DeviceMetadata in memory (hasWifi,
+  hasEthernet, has_xeddsa, pio_env): no schema change. Admin commands added:
+  `setFixedPosition`, `removeFixedPosition`, `sendNodeDbReset`, `sendFactoryReset`.
+  `SettingsViewModel`: `deviceMetadata`, `adminResult`, `setFixedPosition(enable,
+  onFailure)`, `resetNodeDb`, `factoryReset`.
+- Device: Options (role with per-role description, the Router / Router Late / Client
+  Base confirmation, deprecated note; rebroadcast mode with description; node-info
+  interval from the broadcastLong set), Hardware (double tap, disable triple click, LED
+  Heartbeat shown in the positive sense), Debug (time zone), GPIO (button, buzzer as
+  0..48 pickers with Unset), Reset (NodeDB, Factory with both variants) while connected.
+  Save normalizes Router Client -> Client Mute and the 10800 s node-info floor.
+- Position: Position Packet (interval, Smart Position and its two limits), Device GPS
+  (mode, update interval, Fixed Position with the Set / Remove confirmation that sends or
+  clears the position and reverts on cancel or failure), Position Flags as toggles with
+  Altitude MSL / Geoidal under Altitude and HDOP/VDOP under DOP, Advanced Device GPS.
+- Bluetooth: enabled, pairing mode, six-digit PIN with "BLE Pin must be 6 digits long."
+  and Save held back until it is.
+- Display: Device Screen and Timing and Overrides with the curated screen-on / carousel
+  option sets; the four OLED types plus the current one.
+- Network: WiFi Options and Ethernet Options only when the metadata says the radio has
+  them (the GAT562 has neither; the form says so), Network Servers, Address Mode, the
+  static IPv4 fields validated (Save disabled until address, gateway and subnet are
+  well formed; a DHCP save clears them), UDP Broadcast.
+- Power: Power Saving, Shutdown on Power Loss (zero-means-off toggle, 1800 s when on,
+  seconds row beneath), Wait for Bluetooth, ADC Override toggle with the multiplier.
+  Deviation: upstream gates these on a hardware catalog (ESP32 / nRF52 + role) this port
+  does not carry, so every row shows.
+- Security: Packet Authenticity (policy with per-level description, enabled only when
+  the metadata reports has_xeddsa, note when unknown), Direct Message Key (public key
+  with Copy and a red tint when it does not match the private key; private key masked
+  with reveal, typed text reaches the draft only as a valid 32-byte key; Regenerate),
+  Admin Keys (three positional slots; clearing all turns Managed off), Logs, Managed
+  Device gated on an admin key. Not ported: the iCloud key backup row and the app-local
+  Lockdown section.
+- Primitives: `ConfigPickerRow(icon)` with the value column yielding before the title,
+  `ConfigTextRow(icon, description, invalid)`, `GpioPickerRow`, `IntervalPickerRow`
+  (curated set + the stored value flagged as not optimized), `Ipv4Row`, `KeyField`,
+  `DestructiveRow`, `configHeader`, `AdminResultLine`. Saves were not exercised (they
+  reboot the radio); every section was opened and read on the phone.
+
 ## LoRa config form ported from LoRaConfig.swift (2026-10-09 11:35, verified on the phone)
 
 - `ui/LoRaEnums.kt` ports LoraConfigEnums.swift: region and preset labels and picker

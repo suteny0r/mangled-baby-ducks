@@ -100,6 +100,14 @@ class RadioManager(
     val regionPresets: StateFlow<MeshProtos.LoRaRegionPresetMap?> = _regionPresets.asStateFlow()
 
     /**
+     * The connected radio's DeviceMetadata (hasWifi, hasEthernet, has_xeddsa, pio_env),
+     * which the config forms gate rows on. In memory only: the firmware sends it on every
+     * handshake, so it needs no schema and is null until a radio has connected.
+     */
+    private val _deviceMetadata = MutableStateFlow<MeshProtos.DeviceMetadata?>(null)
+    val deviceMetadata: StateFlow<MeshProtos.DeviceMetadata?> = _deviceMetadata.asStateFlow()
+
+    /**
      * AccessoryManager.packetsSent / packetsReceived: one tick per ToRadio written and
      * per FromRadio read, for the RX/TX activity lights in the header.
      */
@@ -457,8 +465,10 @@ class RadioManager(
                 ingest.config(fromRadio.config)
             MeshProtos.FromRadio.PayloadVariantCase.MODULECONFIG ->
                 ingest.moduleConfig(fromRadio.moduleConfig)
-            MeshProtos.FromRadio.PayloadVariantCase.METADATA ->
+            MeshProtos.FromRadio.PayloadVariantCase.METADATA -> {
+                _deviceMetadata.value = fromRadio.metadata
                 ingest.deviceMetadata(fromRadio.metadata)
+            }
             MeshProtos.FromRadio.PayloadVariantCase.REGION_PRESETS -> {
                 _regionPresets.value = fromRadio.regionPresets
                 Log.i(TAG, "Region preset map: ${fromRadio.regionPresets.regionGroupsCount} regions, ${fromRadio.regionPresets.groupsCount} groups")
@@ -967,6 +977,32 @@ class RadioManager(
      */
     suspend fun sendNodeReboot(targetNum: Long): Boolean =
         sendRemoteAdmin(targetNum.toInt(), wantResponse = false) { it.setRebootSeconds(5) }
+
+    /** AccessoryManager.setFixedPosition: the radio stores this position and stops using its GPS. */
+    suspend fun setFixedPosition(latitudeI: Int, longitudeI: Int, altitude: Int): Boolean =
+        sendAdmin {
+            it.setSetFixedPosition(
+                MeshProtos.Position.newBuilder()
+                    .setLatitudeI(latitudeI)
+                    .setLongitudeI(longitudeI)
+                    .setAltitude(altitude)
+                    .setTime((System.currentTimeMillis() / 1000).toInt())
+                    .build()
+            )
+        }
+
+    /** AccessoryManager.removeFixedPosition. */
+    suspend fun removeFixedPosition(): Boolean = sendAdmin { it.setRemoveFixedPosition(true) }
+
+    /** AccessoryManager.sendNodeDBReset: the radio forgets every node it has heard. */
+    suspend fun sendNodeDbReset(): Boolean = sendAdmin { it.setNodedbReset(true) }
+
+    /**
+     * AccessoryManager.sendFactoryReset: config only, or config plus keys and BLE bonds
+     * (factory_reset_device). The radio reboots and this link ends either way.
+     */
+    suspend fun sendFactoryReset(resetDevice: Boolean): Boolean =
+        sendAdmin { if (resetDevice) it.setFactoryResetDevice(1) else it.setFactoryResetConfig(1) }
 
     /**
      * Ask a node to forget another node from its node database (admin
