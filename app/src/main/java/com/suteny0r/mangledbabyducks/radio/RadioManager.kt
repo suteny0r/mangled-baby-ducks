@@ -462,6 +462,10 @@ class RadioManager(
             MeshProtos.FromRadio.PayloadVariantCase.REGION_PRESETS -> {
                 _regionPresets.value = fromRadio.regionPresets
                 Log.i(TAG, "Region preset map: ${fromRadio.regionPresets.regionGroupsCount} regions, ${fromRadio.regionPresets.groupsCount} groups")
+                fromRadio.regionPresets.regionGroupsList.forEach { rg ->
+                    val g = fromRadio.regionPresets.groupsList.getOrNull(rg.groupIndex)
+                    Log.d(TAG, "Region ${rg.region}: default ${g?.defaultPreset} licensed=${g?.licensedOnly} presets=${g?.presetsList}")
+                }
             }
             MeshProtos.FromRadio.PayloadVariantCase.CONFIG_COMPLETE_ID -> {
                 val id = fromRadio.configCompleteId.uint()
