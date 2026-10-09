@@ -16,6 +16,26 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Message links, sender distance, drop-a-pin (2026-10-09 10:30, verified on the emulator)
+
+- `ui/LinkText.kt`: `linkifiedText` wraps web URLs (scheme or `www.`) in
+  `LinkAnnotation.Url`; Compose 1.7 `Text` opens them through the UriHandler. White on our
+  accent bubble, accent on theirs, underlined both. Verified: a channel message with two
+  URLs rendered as links and the maps one opened Google Maps on the emulator.
+- Distance under the sender avatar in threads (9 sp caption) and in the car thread row's
+  status line through the host `DistanceSpan`; `MessagesViewModel.positionByNode` /
+  `myLocation` mirror NodesViewModel. Car side builds but is unverified on the DHU (the
+  phone runs the Play build).
+- Composer pin button opens `LocationPickerScreen` (satellite MapLibre view, fixed centre
+  pin, starts on our location) and inserts `https://maps.google.com/?q=lat,lon` into the
+  draft. The draft is hoisted into ThreadView (`rememberSaveable`) so the picker's early
+  return keeps it. Not iOS behaviour: its map-pin button sends the radio's own position
+  after the message (RequestPositionButton), which this port still lacks.
+- Emulator recipe for message UI: restore the SOBE snapshot through Backup Management,
+  then insert rows with `run-as <pkg> sqlite3 databases/mesh.db` (all columns; the live
+  schema has no defaults on relayNode/relays/pkiEncrypted/xeddsaSigned), force-stop and
+  relaunch so Room re-reads. Sending without a radio stores nothing.
+
 ## Backup export/import, location tracking for distances, emulator (2026-10-08 15:00)
 
 Shipped as 0.2.10 (versionCode 12): commits c96c048 + a09f056 + 7e0c3cd, tag v0.2.10, GitHub

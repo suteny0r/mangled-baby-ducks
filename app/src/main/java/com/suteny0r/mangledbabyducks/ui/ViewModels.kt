@@ -406,6 +406,21 @@ class MessagesViewModel(app: Application) : AndroidViewModel(app) {
 
     val myNodeNum: StateFlow<Long> = container.radioManager.myNodeNum
 
+    /** Latest position per node, for the distance under each sender's avatar. */
+    val positionByNode: StateFlow<Map<Long, MapNode>> = container.database.positionDao().mapNodes()
+        .map { list -> list.associateBy { it.nodeNum } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+    /** Same rule as NodesViewModel.myLocation: the radio's own fix when it has one, else the phone's. */
+    val myLocation: StateFlow<Pair<Double, Double>?> = combine(
+        container.locationSharer.lastFix,
+        positionByNode,
+        myNodeNum,
+    ) { fix, positions, me ->
+        positions[me]?.let { it.latitude to it.longitude }
+            ?: fix?.let { it.latitudeI / 1e7 to it.longitudeI / 1e7 }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     /** Row previews: newest message per channel and per DM peer, unread flags per thread. */
     val channelPreviews: StateFlow<Map<Int, MessageEntity>> = db.messageDao().channelPreviews()
         .map { list -> list.associateBy { it.channel } }

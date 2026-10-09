@@ -901,9 +901,11 @@ class CarThreadScreen(carContext: CarContext, private val target: ThreadTarget) 
 
     private var messages: List<MessageEntity> = emptyList()
     private var names: Map<Long, String> = emptyMap()
+    private var positions: Map<Long, MapNode> = emptyMap()
     private var myNum = 0L
 
     init {
+        observe(container.database.positionDao().mapNodes()) { list -> positions = list.associateBy { it.nodeNum } }
         val dao = container.database.messageDao()
         val flow = when (target) {
             is ThreadTarget.Channel -> dao.channelMessages(target.index)
@@ -935,12 +937,17 @@ class CarThreadScreen(carContext: CarContext, private val target: ThreadTarget) 
     override fun onGetTemplate(): Template {
         val limit = contentLimit(ConstraintManager.CONTENT_LIMIT_TYPE_LIST, LIST_ROW_CAP)
         val list = ItemList.Builder().setNoItemsMessage("No messages yet")
+        val here = carLocation(myNum, positions.values.toList())
         messages.take(limit).forEach { message ->
             val mine = message.fromNum == myNum
             val sender = if (mine) "Me" else names[message.fromNum] ?: nodeNumString(message.fromNum)
-            val status = buildString {
-                append(relativeTime(message.timestamp))
-                if (mine) append(if (message.receivedAck) " · delivered" else " · sending")
+            val status = SpannableStringBuilder(relativeTime(message.timestamp))
+            if (mine) status.append(if (message.receivedAck) " · delivered" else " · sending")
+            // Distance to the sender, as the phone thread shows under the avatar.
+            val there = positions[message.fromNum]
+            if (!mine && here != null && there != null) {
+                status.append(" · ")
+                status.append(distanceSpan(haversineMeters(here.first, here.second, there.latitude, there.longitude)))
             }
             list.addItem(
                 Row.Builder()

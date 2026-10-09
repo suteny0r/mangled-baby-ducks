@@ -115,7 +115,7 @@ private const val STREETS_STYLE_URL = "https://tiles.openfreemap.org/styles/libe
  * A raster style carries no glyphs, so the openfreemap glyph endpoint is added
  * for the node labels.
  */
-private val SATELLITE_STYLE_JSON = """
+internal val SATELLITE_STYLE_JSON = """
 {
   "version": 8,
   "name": "Satellite",

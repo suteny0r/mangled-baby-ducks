@@ -97,6 +97,7 @@ import com.suteny0r.mangledbabyducks.ui.theme.IosOrange
 import com.suteny0r.mangledbabyducks.ui.theme.IosRed
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import androidx.compose.material.icons.outlined.AddLocationAlt
 
 /*
  * Port of the iOS Messages stack: Messages.swift (two-row sidebar), ChannelList.swift and
@@ -541,6 +542,21 @@ private fun ThreadView(
     var statusFor by rememberSaveable { mutableStateOf<Long?>(null) }
     var detailsFor by rememberSaveable { mutableStateOf<Long?>(null) }
     var deleteFor by rememberSaveable { mutableStateOf<Long?>(null) }
+    // The draft lives here, not in the composer, so opening the pin picker (an early
+    // return below) does not lose what was typed.
+    var draft by rememberSaveable { mutableStateOf("") }
+    var pickingLocation by rememberSaveable { mutableStateOf(false) }
+    val positions by vm.positionByNode.collectAsState()
+    val here by vm.myLocation.collectAsState()
+    // Distance from us to a sender, for the caption under the avatar; null when either
+    // side has no position.
+    val distanceTo: (Long) -> String? = { num ->
+        val there = positions[num]
+        val from = here
+        if (there != null && from != null && num != myNum) {
+            formatDistance(haversineMeters(from.first, from.second, there.latitude, there.longitude))
+        } else null
+    }
 
     val byId = remember(list) { list.associateBy { it.messageId } }
     val tapbacksByTarget = remember(tapbackList) { tapbackList.groupBy { it.replyId } }
@@ -565,6 +581,21 @@ private fun ThreadView(
             delay(30_000)
             now = System.currentTimeMillis()
         }
+    }
+
+    if (pickingLocation) {
+        BackHandler { pickingLocation = false }
+        LocationPickerScreen(
+            initial = here,
+            onPick = { lat, lon ->
+                val link = mapsLink(lat, lon)
+                val joined = if (draft.isBlank()) link else draft.trimEnd() + " " + link
+                if (joined.encodeToByteArray().size <= MeshProtocol.MAX_TEXT_BYTES) draft = joined
+                pickingLocation = false
+            },
+            onBack = { pickingLocation = false },
+        )
+        return
     }
 
     // ChannelMessageRow wraps the sender avatar in a NavigationLink to NodeDetail, pushed
@@ -657,6 +688,7 @@ private fun ThreadView(
                     onRetry = { vm.retry(message) },
                     onDelete = { deleteFor = message.messageId },
                     onOpenNode = { detailNode = message.fromNum },
+                    distance = distanceTo(message.fromNum),
                 )
             }
         }
@@ -707,11 +739,15 @@ private fun ThreadView(
             }
         }
         Composer(
+            text = draft,
+            onTextChange = { draft = it },
             replyTo = replyTo,
             onCancelReply = { replyTo = null },
+            onPickLocation = { pickingLocation = true },
             onSend = { text ->
                 onSend(text, replyTo?.messageId ?: 0, false)
                 replyTo = null
+                draft = ""
             },
         )
     }
@@ -738,6 +774,7 @@ private fun MessageRow(
     onRetry: () -> Unit,
     onDelete: () -> Unit,
     onOpenNode: () -> Unit,
+    distance: String? = null,
 ) {
     val status = if (mine) deliveryOf(message, isDirect, now) else null
     val sender by produceState<UserEntity?>(initialValue = null, message.fromNum) {
@@ -783,15 +820,29 @@ private fun MessageRow(
             if (mine) {
                 Spacer(Modifier.width(50.dp).weight(1f))
             } else {
-                NodeAvatar(
-                    sender?.shortName,
-                    message.fromNum,
-                    50.dp,
-                    Modifier
-                        .padding(end = 10.dp, bottom = 6.dp)
-                        .clip(CircleShape)
-                        .clickable(onClick = onOpenNode),
-                )
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(end = 10.dp, bottom = 6.dp),
+                ) {
+                    NodeAvatar(
+                        sender?.shortName,
+                        message.fromNum,
+                        50.dp,
+                        Modifier
+                            .clip(CircleShape)
+                            .clickable(onClick = onOpenNode),
+                    )
+                    // Distance from us to the sender, when both positions are known.
+                    distance?.let {
+                        Text(
+                            it,
+                            fontSize = 9.sp,
+                            lineHeight = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                    }
+                }
             }
             Column(horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
                 if (!mine) {
@@ -834,9 +885,12 @@ private fun Bubble(
     onDetails: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    // MessageText tints link runs and lets them open; on our accent bubble the link is
+    // white like the rest of the text, underlined, since the accent colour would vanish.
+    val linkColor = if (mine) Color.White else MaterialTheme.colorScheme.primary
     Box {
         Text(
-            message.payload ?: "EMPTY MESSAGE",
+            linkifiedText(message.payload ?: "EMPTY MESSAGE", linkColor),
             style = MaterialTheme.typography.bodyLarge,
             color = if (mine) Color.White else MaterialTheme.colorScheme.onSurface,
             modifier = Modifier
@@ -1122,8 +1176,14 @@ private fun DeliveryDialog(status: Delivery, onRetry: () -> Unit, onDismiss: () 
 
 /** TextMessageField: a capsule text field, an up-arrow send button once there is text. */
 @Composable
-private fun Composer(replyTo: ReplyContext?, onCancelReply: () -> Unit, onSend: (String) -> Unit) {
-    var text by remember { mutableStateOf("") }
+private fun Composer(
+    text: String,
+    onTextChange: (String) -> Unit,
+    replyTo: ReplyContext?,
+    onCancelReply: () -> Unit,
+    onPickLocation: () -> Unit,
+    onSend: (String) -> Unit,
+) {
     val bytes = text.encodeToByteArray().size
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1133,11 +1193,21 @@ private fun Composer(replyTo: ReplyContext?, onCancelReply: () -> Unit, onSend: 
                 }
                 Text("Reply", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(end = 8.dp))
             }
+            // Drop a pin: a map link into the draft. (iOS's map-pin button instead sends
+            // the radio's position after the message.)
+            IconButton(onClick = onPickLocation) {
+                Icon(
+                    Icons.Outlined.AddLocationAlt,
+                    contentDescription = "Insert a map location",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(28.dp),
+                )
+            }
             OutlinedTextField(
                 value = text,
                 onValueChange = { candidate ->
                     // Enforce the 200-byte wire limit on UTF-8 size, not char count.
-                    if (candidate.encodeToByteArray().size <= MeshProtocol.MAX_TEXT_BYTES) text = candidate
+                    if (candidate.encodeToByteArray().size <= MeshProtocol.MAX_TEXT_BYTES) onTextChange(candidate)
                 },
                 modifier = Modifier.weight(1f),
                 placeholder = { Text("Message") },
@@ -1151,10 +1221,7 @@ private fun Composer(replyTo: ReplyContext?, onCancelReply: () -> Unit, onSend: 
                 ),
             )
             if (text.isNotBlank()) {
-                IconButton(onClick = {
-                    onSend(text.trim())
-                    text = ""
-                }) {
+                IconButton(onClick = { onSend(text.trim()) }) {
                     Icon(
                         Icons.Filled.ArrowCircleUp,
                         contentDescription = "Send",
