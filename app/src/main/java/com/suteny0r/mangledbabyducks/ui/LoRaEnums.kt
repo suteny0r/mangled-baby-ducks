@@ -71,6 +71,42 @@ fun selectableRegions(supports2_8: Boolean): List<RegionCode> = listOf(
     RegionCode.ITU3_2M, RegionCode.ITU1_70CM, RegionCode.ITU2_70CM, RegionCode.ITU3_70CM, RegionCode.ITU2_125CM,
 ).filter { it !in REGIONS_HIDDEN && (supports2_8 || it !in REGIONS_2_8) }
 
+/** RegionCodes.prohibitsTurboPresets: EU band plans cap bandwidth below what Turbo uses. */
+fun regionProhibitsTurbo(region: RegionCode): Boolean = region in setOf(
+    RegionCode.EU_433, RegionCode.EU_868, RegionCode.EU_866, RegionCode.EU_874, RegionCode.EU_917, RegionCode.EU_N_868,
+)
+
+/** RegionCodes.allowsBandLimitedPresets: where Lite, Narrow and Tiny are legal (used without a firmware map). */
+fun regionAllowsBandLimited(region: RegionCode): Boolean = region in setOf(
+    RegionCode.EU_868, RegionCode.EU_866, RegionCode.EU_N_868, RegionCode.ITU1_2M, RegionCode.ITU2_2M, RegionCode.ITU3_2M,
+    RegionCode.ITU1_70CM, RegionCode.ITU2_70CM, RegionCode.ITU3_70CM, RegionCode.ITU2_125CM,
+)
+
+/** RegionCodes.dutyCycle: the hourly transmit limit, percent; 0 when the region is unset. */
+fun regionDutyCycle(region: RegionCode): Int = when (region) {
+    RegionCode.UNSET, RegionCode.UNRECOGNIZED -> 0
+    RegionCode.EU_433, RegionCode.EU_868, RegionCode.UA_433, RegionCode.EU_866, RegionCode.EU_874,
+    RegionCode.EU_917, RegionCode.EU_N_868 -> 10
+    else -> 100
+}
+
+/** ModemPresets.isTurbo: the 500 kHz presets the US band plan expects. */
+fun presetIsTurbo(preset: ModemPreset): Boolean =
+    preset == ModemPreset.LONG_TURBO || preset == ModemPreset.SHORT_TURBO || preset == ModemPreset.MEDIUM_TURBO
+
+/** ModemPresets.isBandLimited: Lite (125 kHz), Narrow (62.5 kHz) and Tiny (20 kHz). */
+fun presetIsBandLimited(preset: ModemPreset): Boolean = preset in setOf(
+    ModemPreset.LITE_FAST, ModemPreset.LITE_SLOW, ModemPreset.NARROW_FAST, ModemPreset.NARROW_SLOW,
+    ModemPreset.TINY_FAST, ModemPreset.TINY_SLOW,
+)
+
+/**
+ * LoRaConfig.paFanHardware: the four boards whose firmware drives a PA fan from a GPIO
+ * (RF95_FAN_EN). HardwareModel values BETAFPV_2400_TX, RADIOMASTER_900_BANDIT_NANO,
+ * RADIOMASTER_900_BANDIT, TBEAM_1_WATT.
+ */
+val PA_FAN_HARDWARE = setOf(45, 64, 74, 122)
+
 /** ModemPresets.description. */
 fun presetLabel(preset: ModemPreset): String = when (preset) {
     ModemPreset.LONG_FAST -> "Long Range - Fast"
@@ -111,20 +147,6 @@ fun selectablePresets(supports2_8: Boolean): List<ModemPreset> = listOf(
     ModemPreset.NARROW_SLOW, ModemPreset.TINY_FAST, ModemPreset.TINY_SLOW, ModemPreset.MEDIUM_TURBO,
 ).filter { !presetIsDeprecated(it) && (supports2_8 || it !in PRESETS_2_8) }
 
-/**
- * The preset's bandwidth in kHz (firmware RadioInterface::applyModemConfig). The US
- * 915 MHz band needs 500 kHz for this kind of digital modulation, so on 2.8 firmware
- * only the Turbo presets are compliant there.
- */
-fun presetBandwidthKHz(preset: ModemPreset): Int = when (preset) {
-    ModemPreset.LONG_TURBO, ModemPreset.SHORT_TURBO, ModemPreset.MEDIUM_TURBO -> 500
-    ModemPreset.LITE_FAST, ModemPreset.LITE_SLOW -> 125
-    ModemPreset.NARROW_FAST, ModemPreset.NARROW_SLOW -> 62
-    ModemPreset.TINY_FAST, ModemPreset.TINY_SLOW -> 20
-    ModemPreset.LONG_SLOW, ModemPreset.VERY_LONG_SLOW -> 125
-    else -> 250
-}
-
 /** ModemPresets.defaultCodingRate. */
 fun presetDefaultCodingRate(preset: ModemPreset): Int = when (preset) {
     ModemPreset.LONG_TURBO, ModemPreset.LONG_MODERATE, ModemPreset.LONG_SLOW -> 8
@@ -135,6 +157,18 @@ fun presetDefaultCodingRate(preset: ModemPreset): Int = when (preset) {
 /** CodingRates. */
 object CodingRates {
     val validRange = 5..8
+
+    /**
+     * The first firmware that honours `coding_rate` while a preset is on; before it,
+     * applyModemConfig took the rate from the preset (meshtastic/firmware#9155).
+     */
+    const val OVERRIDE_FIRMWARE = "2.7.18"
+
+    /** The rate the radio is actually using: the preset's own on firmware that cannot override. */
+    fun effective(codingRate: Int, usePreset: Boolean, preset: ModemPreset, supportsOverride: Boolean): Int {
+        if (!supportsOverride && usePreset) return 0
+        return normalized(codingRate, usePreset, preset)
+    }
 
     fun options(usePreset: Boolean, preset: ModemPreset): List<Int> {
         if (!usePreset) return validRange.toList()

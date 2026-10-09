@@ -65,6 +65,8 @@ import androidx.compose.ui.text.font.FontWeight
 import kotlin.math.roundToInt
 import com.suteny0r.mangledbabyducks.ui.theme.IosGreen
 import com.suteny0r.mangledbabyducks.ui.theme.IosOrange
+import androidx.compose.material.icons.outlined.Air
+import androidx.compose.material.icons.outlined.Autorenew
 
 /**
  * The radio config sections this app can read and write, one screen each, mirroring the
@@ -115,30 +117,44 @@ private fun LoRaSection(vm: SettingsViewModel, connected: Boolean) {
     val myUser by vm.myUser.collectAsState()
     val regionPresets by vm.regionPresets.collectAsState()
     val supports2_8 = firmwareAtLeast(myInfo?.firmwareVersion, "2.8.0")
+    val supportsCrOverride = firmwareAtLeast(myInfo?.firmwareVersion, CodingRates.OVERRIDE_FIRMWARE)
     ConfigForm(
         current, connected, vm, vm::writeLoraConfig,
         header = if (connected && myInfo != null) "Configuration for: ${myUser?.longName ?: "Unknown"}" else null,
         grouped = false,
+        canSave = { d ->
+            d.region != ConfigProtos.Config.LoRaConfig.RegionCode.UNRECOGNIZED &&
+                (d.usePreset || !Bandwidths.unsupported(d.bandwidth, d.region, null))
+        },
     ) { draft, update ->
         val region = draft.region
         val preset = draft.modemPreset
         val usePreset = draft.usePreset
         val defaultCr = presetDefaultCodingRate(preset)
-        val normalizedCr = CodingRates.normalized(draft.codingRate, usePreset, preset)
+        val normalizedCr = CodingRates.effective(draft.codingRate, usePreset, preset, supportsCrOverride)
         val canOverrideCr = defaultCr < CodingRates.validRange.last
         // Only consulted on 2.8 firmware: a map left behind by another radio means nothing here.
         val regionInfo = if (supports2_8) regionPresets[region] else null
+        // ModemPresetRow.available: the firmware-gated set, minus Turbo where the EU band
+        // plans forbid it, constrained to the radio's map for the region, or without a map
+        // minus the band-limited presets outside their regions; the current preset always
+        // stays visible so the picker never renders blank.
         val availablePresets = run {
-            val base = selectablePresets(supports2_8)
+            var base = selectablePresets(supports2_8)
+            if (regionProhibitsTurbo(region)) base = base.filter { !presetIsTurbo(it) }
             var list = base
             if (regionInfo != null && regionInfo.presets.isNotEmpty()) {
                 val constrained = base.filter { it in regionInfo.presets }
                 if (constrained.isNotEmpty()) list = constrained
+            } else if (!regionAllowsBandLimited(region)) {
+                list = list.filter { !presetIsBandLimited(it) }
             }
-            if (presetIsDeprecated(preset) && preset !in list) list = list + preset
+            if (preset !in list) list = list + preset
             list
         }
         val bandwidthIssue = !usePreset && Bandwidths.unsupported(draft.bandwidth, region, null)
+        val dutyCycle = regionDutyCycle(region)
+        val hasPaFan = (myUser?.hwModelId ?: 0) in PA_FAN_HARDWARE
 
         SectionHeader("Options", Modifier.padding(start = 4.dp))
         GroupCard(Modifier.fillMaxWidth()) {
@@ -146,6 +162,8 @@ private fun LoRaSection(vm: SettingsViewModel, connected: Boolean) {
                 ConfigPickerRow(
                     "Region", regionLabel(region), selectableRegions(supports2_8),
                     description = "The region where you will be using your radios.",
+                    warning = if (region == ConfigProtos.Config.LoRaConfig.RegionCode.UNRECOGNIZED)
+                        "This radio uses a newer region that this app does not support. Choose a supported region before saving." else null,
                     label = ::regionLabel,
                 ) { newRegion ->
                     var next = draft.toBuilder().setRegion(newRegion)
@@ -191,7 +209,7 @@ private fun LoRaSection(vm: SettingsViewModel, connected: Boolean) {
                     // on 2.8; with a firmware map, any preset outside the US list gets the note.
                     val usWarning = when {
                         !supports2_8 || region != ConfigProtos.Config.LoRaConfig.RegionCode.US -> null
-                        presetBandwidthKHz(preset) < 500 ->
+                        !presetIsTurbo(preset) ->
                             "${presetLabel(preset)}'s bandwidth is not compliant in the US. The Turbo presets are recommended."
                         else -> null
                     }
@@ -248,6 +266,7 @@ private fun LoRaSection(vm: SettingsViewModel, connected: Boolean) {
                         "Spread Factor",
                         (if (draft.spreadFactor == 0) 12 else draft.spreadFactor).toString(),
                         (7..12).toList(),
+                        description = "Number of chirps per symbol, as 2 raised to this value.",
                         label = { it.toString() },
                     ) { update(draft.toBuilder().setSpreadFactor(if (it == 12) 0 else it).build()) }
                 }
@@ -257,7 +276,9 @@ private fun LoRaSection(vm: SettingsViewModel, connected: Boolean) {
                         Text("Coding Rate", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
                         Text(CodingRates.description(normalizedCr, preset), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    if (usePreset) {
+                    if (usePreset && !supportsCrOverride) {
+                        ConfigDescription("Raising the coding rate above the preset's needs firmware ${CodingRates.OVERRIDE_FIRMWARE} or later. This radio uses ${presetLabel(preset)}'s 4/$defaultCr.")
+                    } else if (usePreset) {
                         Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text("Follow Preset Coding Rate", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
                             Switch(
@@ -276,19 +297,19 @@ private fun LoRaSection(vm: SettingsViewModel, connected: Boolean) {
                                     value = maxOf(normalizedCr, defaultCr + 1),
                                     range = (defaultCr + 1)..CodingRates.validRange.last,
                                 ) { update(draft.toBuilder().setCodingRate(it).build()) }
-                                ConfigDescription("Uses 4/$normalizedCr while keeping the ${presetLabel(preset)} bandwidth and spread factor. Higher values add error correction, but each packet uses more airtime and has less throughput.")
+                                ConfigDescription("Uses 4/$normalizedCr while keeping the ${presetLabel(preset)} bandwidth and spread factor. Every packet takes longer on air, which uses more of the duty cycle and channel utilization budget.")
                             }
                         }
                     } else {
                         CodingRateSlider(value = normalizedCr, range = CodingRates.validRange) {
                             update(draft.toBuilder().setCodingRate(CodingRates.normalized(it, false, preset)).build())
                         }
-                        ConfigDescription("Coding rate controls error-correction redundancy. Higher values can help noisy links, but reduce throughput and increase airtime. Keep 4/5 unless your channel plan calls for a different value.")
+                        ConfigDescription("Coding rate controls error-correction redundancy. Higher values can help noisy links, but reduce throughput.")
                     }
                 }
                 HorizontalDivider()
                 ConfigPickerRow(
-                    "Hop Limit", draft.hopLimit.toString(), (0..7).toList(),
+                    "Hop Limit", draft.hopLimit.toString(), (1..7).toList(),
                     description = "How many times a message may be repeated before it stops being forwarded.",
                     label = { it.toString() },
                 ) { update(draft.toBuilder().setHopLimit(it).build()) }
@@ -306,6 +327,18 @@ private fun LoRaSection(vm: SettingsViewModel, connected: Boolean) {
                     draft.sx126XRxBoostedGain,
                     icon = Icons.Outlined.Equalizer,
                 ) { update(draft.toBuilder().setSx126XRxBoostedGain(it).build()) }
+                // Only in bands with an hourly limit: elsewhere there is nothing to override.
+                if (dutyCycle in 1..99) {
+                    ConfigSwitchRow("Override Duty Cycle", null, draft.overrideDutyCycle, icon = Icons.Outlined.Autorenew) {
+                        update(draft.toBuilder().setOverrideDutyCycle(it).build())
+                    }
+                }
+                // Only on the boards whose firmware drives a fan; nothing reports one.
+                if (hasPaFan) {
+                    ConfigSwitchRow("PA Fan Disabled", null, draft.paFanDisabled, icon = Icons.Outlined.Air) {
+                        update(draft.toBuilder().setPaFanDisabled(it).build())
+                    }
+                }
                 ConfigFloatRow(
                     "Frequency Override",
                     draft.overrideFrequency,
@@ -317,7 +350,7 @@ private fun LoRaSection(vm: SettingsViewModel, connected: Boolean) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text("Transmit Power", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
                         Text(
-                            if (draft.txPower == 0) "Max" else "${draft.txPower} dBm",
+                            "${draft.txPower} dBm",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(end = 8.dp),
                         )
@@ -744,6 +777,8 @@ private fun <T : Any> ConfigForm(
     header: String? = null,
     /** False when [rows] lays out its own section cards (several sections, as on iOS). */
     grouped: Boolean = true,
+    /** LoRaConfig.canSave: a draft the radio could not take keeps Save disabled. */
+    canSave: (T) -> Boolean = { true },
     rows: @Composable ColumnScope.(T, (T) -> Unit) -> Unit,
 ) {
     // Keyed on `current`: a fresh config from the radio (which is what a successful save
@@ -778,7 +813,7 @@ private fun <T : Any> ConfigForm(
             }
             val dirty = value != current
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(enabled = connected && dirty, onClick = { onSave(value) }) {
+                Button(enabled = connected && dirty && canSave(value), onClick = { onSave(value) }) {
                     Text("Save to radio")
                 }
                 if (dirty) {

@@ -36,8 +36,19 @@ invariants worth not breaking. Read it first; this file is the session log on to
   stepper 0..30 with "Max" at 0). Wording follows the iOS build the user compared against,
   which is newer than the local clone in two places: the US warning covers every
   non-Turbo preset ("The Turbo presets are recommended"; the clone only names Long Fast),
-  and the follow-preset text is the short form. Rule used: on 2.8 firmware in the US,
-  presets under 500 kHz are non-compliant (`presetBandwidthKHz`).
+  and the follow-preset text is the short form.
+- The Apple clone was then pulled (2026-08-18 -> 2026-10-05; the user asked). Upstream
+  moved the config screens to `Views/Settings/Config/Forms/` as generated forms over
+  `Model/FieldMetadataRegistry.swift` (labels and descriptions per proto field). The port
+  now follows that tree: US warning for every non-Turbo preset (`presetIsTurbo`), EU
+  regions drop the Turbo presets from the picker, Lite/Narrow/Tiny hidden outside their
+  regions when no map arrived, the current preset always listed, coding-rate override
+  gated on firmware 2.7.18 (`CodingRates.effective`), Hop Limit 1..7, Spread Factor
+  description, Override Duty Cycle only in bands with an hourly limit, PA Fan Disabled on
+  the four boards with a fan (`PA_FAN_HARDWARE`), unsupported-region notice with Save
+  disabled, Save also disabled on an unsupported custom bandwidth, Transmit Power shown
+  as "N dBm" at zero too. Pull the clone before any port from now on (memory
+  `refresh-apple-clone`).
 - Dropped from this port's form: the derived-frequency summary row and the duty-cycle
   override switch, which the original does not show here. `ConfigForm` gained `header`
   and `grouped = false`; `ConfigPickerRow` (title, accent value, description, warning) and
