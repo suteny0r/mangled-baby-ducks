@@ -67,6 +67,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.Date
+import androidx.compose.material.icons.outlined.Verified
+import androidx.compose.ui.text.font.FontFamily
 
 /** State and actions behind BackupManagement.swift. */
 class BackupViewModel(app: Application) : AndroidViewModel(app) {
@@ -97,7 +99,7 @@ class BackupViewModel(app: Application) : AndroidViewModel(app) {
             val name = container.database.userDao().get(nodeNum)?.longName
             backingUp.value = true
             try {
-                when (val result = container.backups.createBackup(nodeNum, name)) {
+                when (val result = container.backups.createBackup(nodeNum, container.currentDeviceId(nodeNum), name)) {
                     is BackupResult.Success -> refresh()
                     is BackupResult.Skipped -> error.value = "Backup Failed" to result.reason
                     BackupResult.NoBackupFound -> error.value = "Backup Failed" to "Backup could not be created."
@@ -129,7 +131,7 @@ class BackupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun delete(entry: BackupEntry) {
-        container.backups.deleteBackup(entry.nodeNum)
+        container.backups.deleteBackup(entry.key)
         refresh()
     }
 
@@ -374,11 +376,34 @@ private fun BackupRow(entry: BackupEntry, enabled: Boolean, onRestore: () -> Uni
             )
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f)) {
-                Text(entry.displayName, style = MaterialTheme.typography.titleMedium)
+                Text(entry.displayName, style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                // BackupRowView: the two identifiers answer different questions. The node
+                // number is what the radio reports now and changes on the 2.8 upgrade; the
+                // device id is what the backup is filed under and does not.
+                if (entry.nodeName != null) {
+                    Text(
+                        "!%08x".format(entry.nodeNum),
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                entry.deviceId?.let { id ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.Verified, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(12.dp))
+                        Text(
+                            id,
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            modifier = Modifier.padding(start = 4.dp),
+                        )
+                    }
+                }
                 Text(
-                    "$date • $time",
+                    "$date \u2022 $time",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
                 )
             }
             Text(

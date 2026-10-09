@@ -32,8 +32,11 @@ private const val HISTORICAL_MS = 10 * 60 * 1000L
 class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackupManager? = null) {
 
     /** Called when this radio's MyNodeInfo arrives; returns the local node num. */
-    suspend fun myInfo(myInfo: MeshProtos.MyNodeInfo, bleName: String?, radioAddress: String?): Long {
+    suspend fun myInfo(myInfo: MeshProtos.MyNodeInfo, bleName: String?, radioAddress: String?, deviceId: String? = null): Long {
         val num = myInfo.myNodeNum.uint()
+        // Clear a stray node-number backup on connect: this radio's snapshot moves onto
+        // its device id, so the 2.8 renumbering cannot orphan it.
+        backups?.adoptLegacyBackups(deviceId, num, radioAddress)
         var existing = db.myInfoDao().myInfoOnce()
         if (existing != null && existing.myNodeNum != num) {
             // handleMyInfo's defensiveResetIfForeignDatabase: this connect landed on another
@@ -43,7 +46,9 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
             // new radio is ingested; nodes carry no owner column, so a merge is a bleed.
             Log.w(TAG, "Connected to node $num but the store belongs to ${existing.myNodeNum}; backing up and resetting")
             val previous = existing.myNodeNum
-            backups?.createBackup(previous, db.userDao().get(previous)?.longName ?: existing.bleName)
+            // No device id in hand for the previous radio; performBackup keeps whatever key
+            // its last backup used.
+            backups?.createBackup(previous, null, db.userDao().get(previous)?.longName ?: existing.bleName)
             withContext(Dispatchers.IO) { db.clearAllTables() }
             existing = null
         }
@@ -75,17 +80,20 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
     /**
      * Inbound ADMIN_APP replies to a remote admin request (PacketIngest.adminResponse is
      * dispatched from RadioManager for every ADMIN_APP packet whose sender is not our own
-     * node). DeviceMetadata lands on the my_info row; ModuleConfig rows land on the
-     * config table, keyed the same way the handshake does.
+     * node). A remote node's DeviceMetadata lands on that node's row (its firmware
+     * version is what the node detail shows); ModuleConfig rows land on the config
+     * table, keyed the same way the handshake does.
      */
     suspend fun adminResponse(packet: MeshProtos.MeshPacket) {
         val myNum = db.myInfoDao().myInfoOnce()?.myNodeNum
-        if (myNum != null && packet.from.uint() == myNum) return
+        val from = packet.from.uint()
+        if (myNum != null && from == myNum) return
         try {
             val admin = AdminProtos.AdminMessage.parseFrom(packet.decoded.payload)
             when (admin.payloadVariantCase) {
                 AdminProtos.AdminMessage.PayloadVariantCase.GET_DEVICE_METADATA_RESPONSE -> {
-                    deviceMetadata(admin.getGetDeviceMetadataResponse())
+                    val version = admin.getGetDeviceMetadataResponse().firmwareVersion.takeIf { it.isNotBlank() }
+                    db.nodeDao().get(from)?.let { db.nodeDao().upsert(it.copy(firmwareVersion = version)) }
                 }
                 AdminProtos.AdminMessage.PayloadVariantCase.GET_MODULE_CONFIG_RESPONSE -> {
                     moduleConfig(admin.getGetModuleConfigResponse())

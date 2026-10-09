@@ -210,6 +210,10 @@ class AppContainer(context: Context) {
      */
     suspend fun currentNodeNum(): Long? = database.myInfoDao().myInfoOnce()?.myNodeNum
 
+    /** The device id for a backup of [num]: the live radio's, and only when it is the store's owner. */
+    fun currentDeviceId(num: Long): String? =
+        if (radioManager.myNodeNum.value == num) radioManager.deviceId.value else null
+
     private suspend fun currentNodeName(num: Long): String? =
         database.userDao().get(num)?.longName
             ?: database.myInfoDao().myInfoOnce()?.bleName
@@ -225,7 +229,7 @@ class AppContainer(context: Context) {
             current == null -> Log.w(TAG, "No current node num, skipping backup")
             current == targetNodeNum -> Log.i(TAG, "Skipping backup because the target is the active node")
             else -> {
-                when (val result = backups.createBackup(current, currentNodeName(current))) {
+                when (val result = backups.createBackup(current, currentDeviceId(current), currentNodeName(current))) {
                     is BackupResult.Success -> Log.i(TAG, "Backup created: ${result.entry.fileSize} bytes for node $current")
                     is BackupResult.Skipped -> Log.w(TAG, "Backup skipped: ${result.reason}")
                     BackupResult.NoBackupFound -> Unit

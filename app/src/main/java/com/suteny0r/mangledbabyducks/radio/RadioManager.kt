@@ -108,6 +108,44 @@ class RadioManager(
     val deviceMetadata: StateFlow<MeshProtos.DeviceMetadata?> = _deviceMetadata.asStateFlow()
 
     /**
+     * MyNodeInfo.device_id of the connected radio as lowercase hex, which keys its backup.
+     * Null until a handshake has delivered one, and for radios that report none.
+     */
+    private val _deviceId = MutableStateFlow<String?>(null)
+    val deviceId: StateFlow<String?> = _deviceId.asStateFlow()
+
+    /**
+     * AccessoryManager.appliesLoRaConfigWithoutReboot: firmware 2.8 applies every LoRa
+     * change live (firmware #9962). Read from the live metadata only, and conservative: no
+     * version means assume it may reboot.
+     */
+    val appliesLoRaConfigWithoutReboot: Boolean
+        get() {
+            val v = _deviceMetadata.value?.firmwareVersion?.takeIf { it.isNotBlank() } ?: return false
+            val have = v.substringBefore('-').substringBefore('+').split('.').map { it.filter(Char::isDigit).toIntOrNull() ?: 0 }
+            val major = have.getOrElse(0) { 0 }
+            val minor = have.getOrElse(1) { 0 }
+            return major > 2 || (major == 2 && minor >= 8)
+        }
+
+    /**
+     * AccessoryManager.refreshNodeDatabaseAfterLoRaChange: on 2.8 a LoRa save does not
+     * reboot, so nothing re-reads the config, and the radio's answers about which nodes
+     * it hears on the new settings change too. Re-request the config, then the node
+     * database once the modem has settled.
+     */
+    fun refreshAfterLoRaChange() {
+        if (_state.value !is RadioState.Subscribed) return
+        scope.launch {
+            runCatching { send { it.setWantConfigId(MeshProtocol.NONCE_ONLY_CONFIG) } }
+            kotlinx.coroutines.delay(2_000)
+            if (_state.value is RadioState.Subscribed) {
+                runCatching { send { it.setWantConfigId(MeshProtocol.NONCE_ONLY_DB) } }
+            }
+        }
+    }
+
+    /**
      * AccessoryManager.packetsSent / packetsReceived: one tick per ToRadio written and
      * per FromRadio read, for the RX/TX activity lights in the header.
      */
@@ -448,7 +486,9 @@ class RadioManager(
     private suspend fun processFromRadio(fromRadio: MeshProtos.FromRadio) {
         when (fromRadio.payloadVariantCase) {
             MeshProtos.FromRadio.PayloadVariantCase.MY_INFO -> {
-                _myNodeNum.value = ingest.myInfo(fromRadio.myInfo, _deviceName.value, lastAddress)
+                val idBytes = fromRadio.myInfo.deviceId.toByteArray()
+                _deviceId.value = if (idBytes.isEmpty()) null else idBytes.joinToString("") { "%02x".format(it) }
+                _myNodeNum.value = ingest.myInfo(fromRadio.myInfo, _deviceName.value, lastAddress, _deviceId.value)
                 _identityReady.value = true
             }
             MeshProtos.FromRadio.PayloadVariantCase.NODE_INFO -> {

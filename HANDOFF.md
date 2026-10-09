@@ -16,6 +16,39 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Backups keyed by device id, LoRa save without reboot, remote firmware version (2026-10-09 13:15, verified on the phone)
+Three upstream catch-ups from the refreshed clone (`8425daa6`):
+- **Backup keying** (`NodeBackupManager.swift` / `BackupModels.swift`): `BackupEntry.deviceId`
+  (lowercase hex of `MyNodeInfo.device_id`, kept in `RadioManager.deviceId` from MY_INFO, no
+  Room change) and `BackupEntry.key = deviceId ?: nodeNum`. Directories and the index map
+  are keyed by `key`; index is version 2 (`deviceId` field), version-1 files load
+  unchanged. `createBackup(nodeNum, deviceId, name)`; the cross-radio backup in
+  `PacketIngest.myInfo` passes null and `performBackup` keeps whatever key the node's last
+  backup used. `adoptLegacyBackups(deviceId, nodeNum, address)` runs from `myInfo` on every
+  connect: node-number entries matching the node number or radio address move onto the
+  device key (newest wins, duplicates deleted). Verified: SOBE's folder `255142777` became
+  `e7a5e0e6…`, logcat "Backup for node 255142777 now keyed by device e7a5…"; Spiney Norman
+  and Spanky Ham stay node-keyed until they next connect. Rows show name, `!hex` node num,
+  device id with a badge, date. Export/import carry `deviceId`; import accepts alphanumeric
+  directory names. `deleteBackup(key)`; `restoreFromBackup(nodeNum)` resolves through
+  `entryFor(nodeNum)`.
+- **LoRa no-reboot** (upstream b91d3f06): `RadioManager.appliesLoRaConfigWithoutReboot`
+  = live `deviceMetadata.firmwareVersion` ≥ 2.8.0 (unknown → false).
+  `SettingsViewModel.writeLoraConfig` calls `refreshAfterLoRaChange()` after a successful
+  save on such firmware: NONCE_ONLY_CONFIG now, NONCE_ONLY_DB 2 s later. `ConfigForm`
+  gained `saveNote`; the LoRa form shows "Your device may reboot after saving." on 2.8
+  (seen on SOBE 2.8.1) and the default "After config values save the node will reboot."
+  elsewhere. Not exercised with a real LoRa save.
+- **Remote device metadata** (bug): `PacketIngest.adminResponse` wrote a remote node's
+  `GET_DEVICE_METADATA_RESPONSE` into the `my_info` row. It now sets
+  `NodeEntity.firmwareVersion` for `packet.from`, which the node detail's "Firmware
+  Version" row already displays. Could not be verified end to end: firmware 2.5+
+  (`AdminModule::handleReceived`) drops any remote admin payload whose sender key is not in
+  the target's `security.admin_key` list with a NOT_AUTHORIZED nak, so Spiney Norman never
+  answered SOBE. A node's firmware version is therefore only learnable from nodes that
+  list our public key as an admin key. Proving it needs SOBE's key added to Spiney's
+  admin keys (a config write on Spiney).
+
 ## The other seven config forms ported from the generated upstream forms (2026-10-09 12:50, verified on the phone)
 
 - Upstream (2026-09-18 on) drives every config screen from `Config/Forms/<X>Config.swift`

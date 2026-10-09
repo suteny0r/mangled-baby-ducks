@@ -834,7 +834,21 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         else -> ByteArray(size).also { java.security.SecureRandom().nextBytes(it) }
     }
 
-    fun writeLoraConfig(lora: ConfigProtos.Config.LoRaConfig) = writeConfig { setLora(lora) }
+    /**
+     * LoRaConfig.save: on 2.8 the change applies without a reboot, so nothing re-reads the
+     * config on its own; ask the radio for it, and for its node database, afterwards.
+     */
+    fun writeLoraConfig(lora: ConfigProtos.Config.LoRaConfig) {
+        viewModelScope.launch {
+            _writeResult.value = null
+            val ok = container.radioManager.setConfig(ConfigProtos.Config.newBuilder().setLora(lora).build())
+            _writeResult.value = ok
+            if (ok && container.radioManager.appliesLoRaConfigWithoutReboot) container.radioManager.refreshAfterLoRaChange()
+        }
+    }
+
+    /** Whether a LoRa save will keep the link up (firmware 2.8+); drives the form's wording. */
+    val loraSavesWithoutReboot: Boolean get() = container.radioManager.appliesLoRaConfigWithoutReboot
 
     fun writeDeviceConfig(device: ConfigProtos.Config.DeviceConfig) =
         writeConfig { setDevice(device) }

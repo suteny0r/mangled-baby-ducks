@@ -29,15 +29,27 @@ data class BackupEntry(
     val fileSize: Long,
     /** SHA-256 hex digest of the snapshot's `mesh.db`. */
     val checksum: String,
-    /** Directory name under the backup folder, which is the node number. */
+    /** Directory name under the backup folder: the entry's [key]. */
     val backupPath: String,
+    /**
+     * Lowercase hex of the radio's `MyNodeInfo.device_id`, once a connection has learned
+     * one. Null for backups taken before this was recorded and for radios that report
+     * none; those stay keyed by node number.
+     */
+    val deviceId: String? = null,
     /**
      * `my_info.radioAddress` of the snapshot, copied into the index so
      * `resolveNodeNum(forPeripheralId:)` does not have to open every backup the way iOS
      * reads `MyInfoEntity.peripheralId` out of each one.
      */
     val radioAddress: String?,
-)
+) {
+    /**
+     * Where the entry sits in the index. Node numbers change on the 2.8 upgrade; the
+     * device id does not, so a backup keyed on it survives the renumbering.
+     */
+    val key: String get() = deviceId ?: nodeNum.toString()
+}
 
 /** BackupModels.swift NodeBackupResult. */
 sealed interface BackupResult {
@@ -60,7 +72,7 @@ class NodeBackupManager(private val context: Context, private val database: Mesh
 
     private val baseDir: File = resolveBaseDir(context)
     private val indexFile: File get() = File(baseDir, INDEX_FILE_NAME)
-    private var entries: MutableMap<Long, BackupEntry> = loadIndex()
+    private var entries: MutableMap<String, BackupEntry> = loadIndex()
     private val lock = Mutex()
 
     init {
@@ -71,7 +83,11 @@ class NodeBackupManager(private val context: Context, private val database: Mesh
 
     // MARK: - Queries
 
-    fun hasBackup(nodeNum: Long): Boolean = entries.containsKey(nodeNum)
+    fun hasBackup(nodeNum: Long): Boolean = entryFor(nodeNum) != null
+
+    /** The newest snapshot of this node, whichever key it sits under. */
+    fun entryFor(nodeNum: Long): BackupEntry? =
+        entries.values.filter { it.nodeNum == nodeNum }.maxByOrNull { it.createdAt }
 
     /** Most recent first. */
     fun listBackups(): List<BackupEntry> = entries.values.sortedByDescending { it.createdAt }
@@ -90,7 +106,7 @@ class NodeBackupManager(private val context: Context, private val database: Mesh
      * the saved radio is already the new one, must still be filed under the radio whose
      * data it holds.
      */
-    suspend fun createBackup(nodeNum: Long, nodeName: String?): BackupResult =
+    suspend fun createBackup(nodeNum: Long, deviceId: String?, nodeName: String?): BackupResult =
         lock.withLock {
             // The snapshot is filed under [nodeNum], so the store must actually be that
             // radio's. A cleared store (switch to a radio with no backup, before its dump
@@ -109,7 +125,7 @@ class NodeBackupManager(private val context: Context, private val database: Mesh
             var lastError: Exception? = null
             repeat(2) { attempt ->
                 try {
-                    val entry = performBackup(nodeNum, nodeName, radioAddress)
+                    val entry = performBackup(nodeNum, deviceId, nodeName, radioAddress)
                     Log.i(TAG, "Backup created for node $nodeNum: ${entry.fileSize} bytes, checksum ${entry.checksum}")
                     return@withLock BackupResult.Success(entry)
                 } catch (e: Exception) {
@@ -120,9 +136,14 @@ class NodeBackupManager(private val context: Context, private val database: Mesh
             BackupResult.Skipped("Backup failed: ${lastError?.message ?: "unknown error"}")
         }
 
-    private suspend fun performBackup(nodeNum: Long, nodeName: String?, radioAddress: String?): BackupEntry =
+    private suspend fun performBackup(nodeNum: Long, deviceId: String?, nodeName: String?, radioAddress: String?): BackupEntry =
         withContext(Dispatchers.IO) {
-            val dir = File(baseDir, nodeNum.toString())
+            // Key by device id when one is known, else by whatever this node was last filed
+            // under; a node-number key beside a device-keyed one would be a second backup
+            // of the same radio.
+            val deviceKey = deviceId ?: entries.values.firstOrNull { it.nodeNum == nodeNum }?.deviceId
+            val key = deviceKey ?: nodeNum.toString()
+            val dir = File(baseDir, key)
             if (dir.exists()) dir.deleteRecursively()
             dir.mkdirs()
 
@@ -147,13 +168,58 @@ class NodeBackupManager(private val context: Context, private val database: Mesh
                 fileSize = destination.length(),
                 checksum = sha256(destination),
                 backupPath = dir.name,
+                deviceId = deviceKey,
                 radioAddress = radioAddress,
             )
-            entries[nodeNum] = entry
-            enforceBackupLimit(keeping = nodeNum)
+            // A legacy node-number entry for this same radio is superseded, not kept.
+            entries.values.filter { it.key != key && it.nodeNum == nodeNum }.forEach { stale ->
+                File(baseDir, stale.backupPath).deleteRecursively()
+                entries.remove(stale.key)
+            }
+            entries[key] = entry
+            enforceBackupLimit(keeping = key)
             saveIndex()
             entry
         }
+
+    /**
+     * `adoptLegacyBackups`: on connect, move this radio's node-number-keyed backup onto its
+     * device id so the next renumbering does not orphan it. Candidates are the entries
+     * with no device id that carry this node number or this radio address; the newest
+     * survives under the device key and the rest go.
+     */
+    suspend fun adoptLegacyBackups(deviceId: String?, nodeNum: Long, radioAddress: String?) {
+        if (deviceId == null) return
+        lock.withLock {
+            withContext(Dispatchers.IO) {
+                val legacy = entries.values.filter { e ->
+                    e.deviceId == null && (e.nodeNum == nodeNum || (radioAddress != null && e.radioAddress == radioAddress))
+                }
+                if (legacy.isEmpty()) return@withContext
+                val candidates = legacy + listOfNotNull(entries[deviceId])
+                val survivor = candidates.maxByOrNull { it.createdAt } ?: return@withContext
+                val target = File(baseDir, deviceId)
+                if (survivor.key != deviceId) {
+                    target.deleteRecursively()
+                    val moved = File(baseDir, survivor.backupPath).renameTo(target)
+                    if (!moved) {
+                        Log.w(TAG, "Could not move backup ${survivor.key} onto device key $deviceId")
+                        return@withContext
+                    }
+                    entries.remove(survivor.key)
+                    entries[deviceId] = survivor.copy(deviceId = deviceId, backupPath = deviceId)
+                }
+                for (other in candidates) {
+                    if (other.key == survivor.key) continue
+                    File(baseDir, other.backupPath).deleteRecursively()
+                    entries.remove(other.key)
+                    Log.i(TAG, "Removed backup ${other.key}: duplicate of $deviceId from an earlier node number")
+                }
+                saveIndex()
+                Log.i(TAG, "Backup for node $nodeNum now keyed by device $deviceId")
+            }
+        }
+    }
 
     /** `runSQLiteCompaction`: checkpoint, leave WAL mode, VACUUM, drop the sidecars. */
     private fun compact(store: File) {
@@ -165,27 +231,27 @@ class NodeBackupManager(private val context: Context, private val database: Mesh
         for (sidecar in SIDECARS) File(store.path + sidecar).delete()
     }
 
-    private fun enforceBackupLimit(keeping: Long) {
+    private fun enforceBackupLimit(keeping: String) {
         if (entries.size <= MAX_BACKUPS) return
         entries.values
-            .filter { it.nodeNum != keeping }
+            .filter { it.key != keeping }
             .sortedBy { it.createdAt }
             .take(entries.size - MAX_BACKUPS)
             .forEach { entry ->
                 File(baseDir, entry.backupPath).deleteRecursively()
-                entries.remove(entry.nodeNum)
-                Log.i(TAG, "Pruned oldest backup for node ${entry.nodeNum} to enforce limit of $MAX_BACKUPS")
+                entries.remove(entry.key)
+                Log.i(TAG, "Pruned oldest backup ${entry.key} to enforce limit of $MAX_BACKUPS")
             }
     }
 
     // MARK: - Delete
 
-    fun deleteBackup(nodeNum: Long): Boolean {
-        val entry = entries[nodeNum] ?: return false
+    fun deleteBackup(key: String): Boolean {
+        val entry = entries[key] ?: return false
         File(baseDir, entry.backupPath).deleteRecursively()
-        entries.remove(nodeNum)
+        entries.remove(key)
         saveIndex()
-        Log.i(TAG, "Deleted backup for node $nodeNum")
+        Log.i(TAG, "Deleted backup $key")
         return true
     }
 
@@ -199,7 +265,9 @@ class NodeBackupManager(private val context: Context, private val database: Mesh
      * what the per-entity import helpers do on iOS.
      */
     suspend fun restoreFromBackup(nodeNum: Long): BackupResult = lock.withLock {
-        val entry = entries[nodeNum] ?: return@withLock BackupResult.NoBackupFound
+        // By node number rather than key: this radio's backup may still sit under its
+        // node number, or under its device id after an adoption.
+        val entry = entryFor(nodeNum) ?: return@withLock BackupResult.NoBackupFound
         val store = File(File(baseDir, entry.backupPath), DB_NAME)
         if (!store.exists()) {
             Log.e(TAG, "Backup store file missing for node $nodeNum")
@@ -208,7 +276,7 @@ class NodeBackupManager(private val context: Context, private val database: Mesh
         withContext(Dispatchers.IO) {
             if (sha256(store) != entry.checksum) {
                 Log.e(TAG, "Checksum mismatch for node $nodeNum; backup is corrupt, deleting")
-                deleteBackup(nodeNum)
+                deleteBackup(entry.key)
                 return@withContext BackupResult.Skipped("Restore failed: Backup file integrity check failed")
             }
             val stage = File(context.cacheDir, "$STAGE_PREFIX${UUID.randomUUID()}").apply { mkdirs() }
@@ -337,7 +405,8 @@ class NodeBackupManager(private val context: Context, private val database: Mesh
                         // Only the two shapes we wrote; anything else (including path
                         // escapes) is ignored rather than written.
                         val ok = name == INDEX_FILE_NAME ||
-                            (name.endsWith("/$DB_NAME") && name.substringBefore('/').toLongOrNull() != null && name.count { it == '/' } == 1)
+                            (name.endsWith("/$DB_NAME") && name.count { it == '/' } == 1 &&
+                                name.substringBefore('/').all { it.isLetterOrDigit() })
                         if (ok && !entry.isDirectory) {
                             val target = File(stage, name)
                             target.parentFile?.mkdirs()
@@ -358,29 +427,36 @@ class NodeBackupManager(private val context: Context, private val database: Mesh
                     val backupPath = o.getString("backupPath")
                     val createdAt = o.getLong("createdAt")
                     val checksum = o.getString("checksum")
+                    val deviceId = o.optString("deviceId").ifEmpty { null }
+                    val key = deviceId ?: nodeNum.toString()
                     val db = File(File(stage, backupPath), DB_NAME)
                     if (!db.exists() || sha256(db) != checksum) {
-                        Log.w(TAG, "Import: snapshot for node $nodeNum missing or checksum mismatch, skipped")
+                        Log.w(TAG, "Import: snapshot $key missing or checksum mismatch, skipped")
                         skipped++
                         continue
                     }
-                    val existing = entries[nodeNum]
+                    val existing = entries[key] ?: entryFor(nodeNum)
                     if (existing != null && existing.createdAt >= createdAt) {
                         Log.i(TAG, "Import: existing backup for node $nodeNum is as new or newer, skipped")
                         skipped++
                         continue
                     }
-                    val dir = File(baseDir, nodeNum.toString())
+                    val dir = File(baseDir, key)
                     dir.deleteRecursively()
                     dir.mkdirs()
                     db.copyTo(File(dir, DB_NAME), overwrite = true)
-                    entries[nodeNum] = BackupEntry(
+                    entries.values.filter { it.key != key && it.nodeNum == nodeNum }.forEach { stale ->
+                        File(baseDir, stale.backupPath).deleteRecursively()
+                        entries.remove(stale.key)
+                    }
+                    entries[key] = BackupEntry(
                         nodeNum = nodeNum,
                         nodeName = o.optString("nodeName").ifEmpty { null },
                         createdAt = createdAt,
                         fileSize = db.length(),
                         checksum = checksum,
-                        backupPath = nodeNum.toString(),
+                        backupPath = key,
+                        deviceId = deviceId,
                         radioAddress = o.optString("radioAddress").ifEmpty { null },
                     )
                     imported++
@@ -395,15 +471,17 @@ class NodeBackupManager(private val context: Context, private val database: Mesh
 
     // MARK: - Index
 
-    private fun loadIndex(): MutableMap<Long, BackupEntry> {
+    private fun loadIndex(): MutableMap<String, BackupEntry> {
         val file = File(resolveBaseDir(context), INDEX_FILE_NAME)
         if (!file.exists()) return mutableMapOf()
         return runCatching {
             val root = JSONObject(file.readText())
             val array = root.optJSONArray("entries") ?: JSONArray()
-            val map = mutableMapOf<Long, BackupEntry>()
+            val map = mutableMapOf<String, BackupEntry>()
             for (i in 0 until array.length()) {
                 val o = array.getJSONObject(i)
+                // Version 1 indexes carry no deviceId; their entries keep their node-number
+                // keys until the radio reconnects and adoptLegacyBackups moves them.
                 val entry = BackupEntry(
                     nodeNum = o.getLong("nodeNum"),
                     nodeName = o.optString("nodeName").ifEmpty { null },
@@ -411,9 +489,10 @@ class NodeBackupManager(private val context: Context, private val database: Mesh
                     fileSize = o.getLong("fileSize"),
                     checksum = o.getString("checksum"),
                     backupPath = o.getString("backupPath"),
+                    deviceId = o.optString("deviceId").ifEmpty { null },
                     radioAddress = o.optString("radioAddress").ifEmpty { null },
                 )
-                map[entry.nodeNum] = entry
+                map[entry.key] = entry
             }
             map
         }.getOrElse {
@@ -433,12 +512,13 @@ class NodeBackupManager(private val context: Context, private val database: Mesh
                     put("fileSize", e.fileSize)
                     put("checksum", e.checksum)
                     put("backupPath", e.backupPath)
+                    e.deviceId?.let { put("deviceId", it) }
                     e.radioAddress?.let { put("radioAddress", it) }
                 }
             )
         }
         val root = JSONObject().apply {
-            put("version", 1)
+            put("version", 2)
             put("entries", array)
             put("lastModified", System.currentTimeMillis())
         }
@@ -458,16 +538,16 @@ class NodeBackupManager(private val context: Context, private val database: Mesh
         var modified = false
         entries.values.toList().forEach { entry ->
             if (!File(File(baseDir, entry.backupPath), DB_NAME).exists()) {
-                Log.w(TAG, "Orphaned index entry for node ${entry.nodeNum}: backup file missing, removing entry")
-                entries.remove(entry.nodeNum)
+                Log.w(TAG, "Orphaned index entry ${entry.key}: backup file missing, removing entry")
+                entries.remove(entry.key)
                 modified = true
             }
         }
+        val referenced = entries.values.map { it.backupPath }.toSet()
         baseDir.listFiles()?.forEach { item ->
             if (item.name == INDEX_FILE_NAME || item.name == "$INDEX_FILE_NAME.tmp") return@forEach
-            val num = item.name.toLongOrNull()
-            if (item.isDirectory && num != null && !entries.containsKey(num)) {
-                Log.w(TAG, "Orphaned backup directory for node $num, removing")
+            if (item.isDirectory && item.name !in referenced) {
+                Log.w(TAG, "Orphaned backup directory ${item.name}, removing")
                 item.deleteRecursively()
                 modified = true
             }

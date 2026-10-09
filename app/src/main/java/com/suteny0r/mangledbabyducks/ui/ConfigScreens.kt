@@ -157,6 +157,7 @@ private fun LoRaSection(vm: SettingsViewModel, connected: Boolean) {
         current, connected, vm, vm::writeLoraConfig,
         header = if (connected && myInfo != null) "Configuration for: ${myUser?.longName ?: "Unknown"}" else null,
         grouped = false,
+        saveNote = if (vm.loraSavesWithoutReboot) "Your device may reboot after saving." else "After config values save the node will reboot.",
         canSave = { d ->
             d.region != ConfigProtos.Config.LoRaConfig.RegionCode.UNRECOGNIZED &&
                 (d.usePreset || !Bandwidths.unsupported(d.bandwidth, d.region, null))
@@ -1275,6 +1276,8 @@ private fun <T : Any> ConfigForm(
     grouped: Boolean = true,
     /** LoRaConfig.canSave: a draft the radio could not take keeps Save disabled. */
     canSave: (T) -> Boolean = { true },
+    /** SaveConfigButton's confirmation line; LoRa on 2.8 replaces it with "may reboot". */
+    saveNote: String = "After config values save the node will reboot.",
     rows: @Composable ColumnScope.(T, (T) -> Unit) -> Unit,
 ) {
     // Keyed on `current`: a fresh config from the radio (which is what a successful save
@@ -1288,10 +1291,7 @@ private fun <T : Any> ConfigForm(
                 Text(it, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(16.dp))
             }
         }
-        Text(
-            "Saving makes the radio store this section and reboot.",
-            style = MaterialTheme.typography.bodySmall,
-        )
+        Text(saveNote, style = MaterialTheme.typography.bodySmall)
         note?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
