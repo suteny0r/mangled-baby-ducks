@@ -97,7 +97,24 @@ import com.suteny0r.mangledbabyducks.ui.theme.IosOrange
 import com.suteny0r.mangledbabyducks.ui.theme.IosRed
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import androidx.compose.material.icons.outlined.AddLocationAlt
+import android.widget.Toast
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.filled.AddLocation
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.FormatBold
+import androidx.compose.material.icons.filled.FormatItalic
+import androidx.compose.material.icons.filled.FormatStrikethrough
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.outlined.Map
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.LinkInteractionListener
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 
 /*
  * Port of the iOS Messages stack: Messages.swift (two-row sidebar), ChannelList.swift and
@@ -181,8 +198,8 @@ fun MessagesScreen(vm: MessagesViewModel = viewModel()) {
             messages = vm.channelMessages(thread.index),
             tapbacks = vm.channelTapbacks(thread.index),
             vm = vm,
-            onSend = { text, replyId, isEmoji ->
-                vm.sendToChannel(text, thread.index, replyId, isEmoji)
+            onSend = { text, replyId, isEmoji, sharePosition ->
+                vm.sendToChannel(text, thread.index, replyId, isEmoji, sharePosition)
             },
             onOpened = { vm.markChannelRead(thread.index) },
             onBack = { openThread = null },
@@ -192,8 +209,8 @@ fun MessagesScreen(vm: MessagesViewModel = viewModel()) {
             messages = vm.directMessages(thread.peerNum),
             tapbacks = vm.directTapbacks(thread.peerNum),
             vm = vm,
-            onSend = { text, replyId, isEmoji ->
-                vm.sendDirect(text, thread.peerNum, replyId, isEmoji)
+            onSend = { text, replyId, isEmoji, sharePosition ->
+                vm.sendDirect(text, thread.peerNum, replyId, isEmoji, sharePosition)
             },
             onOpened = { vm.markDmRead(thread.peerNum) },
             onBack = { openThread = null },
@@ -214,6 +231,7 @@ private fun ThreadList(
 ) {
     val channels by vm.channels.collectAsState()
     val contacts by vm.contacts.collectAsState()
+    val names by vm.namesByNum.collectAsState()
     val unreadChannels by vm.unreadChannels.collectAsState()
     val unreadDirect by vm.unreadDirect.collectAsState()
     // Messages.swift: the sidebar is two rows, Channels and Direct Messages, and each
@@ -274,6 +292,7 @@ private fun ThreadList(
                             lock = channelLock(channel),
                             name = name,
                             preview = channelPreviews[channel.index],
+                            names = names,
                             muted = channel.mute,
                             onClick = { onOpen(ThreadTarget.Channel(channel.index, name)) },
                             onDelete = if (channelPreviews[channel.index] != null) {
@@ -301,6 +320,7 @@ private fun ThreadList(
                             lock = userLock(user),
                             name = name,
                             preview = dmPreviews[user.num],
+                            names = names,
                             muted = user.mute,
                             onClick = { onOpen(ThreadTarget.Direct(user.num, name)) },
                             onDelete = if (dmPreviews[user.num] != null) {
@@ -400,6 +420,7 @@ private fun ConversationRow(
     muted: Boolean,
     onClick: () -> Unit,
     onDelete: (() -> Unit)? = null,
+    names: Map<Long, String> = emptyMap(),
 ) {
     // iOS row contextMenu: Delete Messages (destructive) when the thread has any.
     var menu by remember { mutableStateOf(false) }
@@ -458,8 +479,10 @@ private fun ConversationRow(
                 }
             }
             preview?.payload?.let {
+                // MessagePreviewText: markdown rendered, links reduced to their text.
+                val previewColor = MaterialTheme.colorScheme.onSurfaceVariant
                 Text(
-                    it,
+                    remember(it, names) { renderMessageMarkdown(it, { n -> names[n] }, previewColor, Color.Transparent, null, linksAsText = true) },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 4,
@@ -521,7 +544,7 @@ private fun ThreadView(
     messages: Flow<List<MessageEntity>>,
     tapbacks: Flow<List<MessageEntity>>,
     vm: MessagesViewModel,
-    onSend: (text: String, replyId: Long, isEmoji: Boolean) -> Unit,
+    onSend: (text: String, replyId: Long, isEmoji: Boolean, sharePosition: Boolean) -> Unit,
     onOpened: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -542,12 +565,14 @@ private fun ThreadView(
     var statusFor by rememberSaveable { mutableStateOf<Long?>(null) }
     var detailsFor by rememberSaveable { mutableStateOf<Long?>(null) }
     var deleteFor by rememberSaveable { mutableStateOf<Long?>(null) }
-    // The draft lives here, not in the composer, so opening the pin picker (an early
-    // return below) does not lose what was typed.
-    var draft by rememberSaveable { mutableStateOf("") }
-    var pickingLocation by rememberSaveable { mutableStateOf(false) }
+    // The draft lives here, not in the composer, so it survives the node-detail early
+    // return below and a tab switch. A TextFieldValue, because the formatting toolbar
+    // works on the selection.
+    var draft by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
     val positions by vm.positionByNode.collectAsState()
     val here by vm.myLocation.collectAsState()
+    val names by vm.namesByNum.collectAsState()
+    val allUsers by vm.allUsers.collectAsState()
     // Distance from us to a sender, for the caption under the avatar; null when either
     // side has no position.
     val distanceTo: (Long) -> String? = { num ->
@@ -581,21 +606,6 @@ private fun ThreadView(
             delay(30_000)
             now = System.currentTimeMillis()
         }
-    }
-
-    if (pickingLocation) {
-        BackHandler { pickingLocation = false }
-        LocationPickerScreen(
-            initial = here,
-            onPick = { lat, lon ->
-                val link = mapsLink(lat, lon)
-                val joined = if (draft.isBlank()) link else draft.trimEnd() + " " + link
-                if (joined.encodeToByteArray().size <= MeshProtocol.MAX_TEXT_BYTES) draft = joined
-                pickingLocation = false
-            },
-            onBack = { pickingLocation = false },
-        )
-        return
     }
 
     // ChannelMessageRow wraps the sender avatar in a NavigationLink to NodeDetail, pushed
@@ -679,7 +689,7 @@ private fun ThreadView(
                         byId[message.replyId]?.payload ?: "EMPTY MESSAGE"
                     } else null,
                     tapbacks = tapbacksByTarget[message.messageId].orEmpty(),
-                    onTapback = { emoji -> onSend(emoji, message.messageId, true) },
+                    onTapback = { emoji -> onSend(emoji, message.messageId, true, false) },
                     onReply = {
                         replyTo = ReplyContext(message.messageId, (message.payload ?: "").take(80))
                     },
@@ -688,6 +698,8 @@ private fun ThreadView(
                     onRetry = { vm.retry(message) },
                     onDelete = { deleteFor = message.messageId },
                     onOpenNode = { detailNode = message.fromNum },
+                    onOpenMention = { detailNode = it },
+                    names = names,
                     distance = distanceTo(message.fromNum),
                 )
             }
@@ -739,15 +751,19 @@ private fun ThreadView(
             }
         }
         Composer(
-            text = draft,
-            onTextChange = { draft = it },
+            draft = draft,
+            onDraftChange = { draft = it },
             replyTo = replyTo,
             onCancelReply = { replyTo = null },
-            onPickLocation = { pickingLocation = true },
-            onSend = { text ->
-                onSend(text, replyTo?.messageId ?: 0, false)
+            isDirect = target is ThreadTarget.Direct,
+            myName = names[myNum] ?: "Unknown",
+            here = here,
+            users = allUsers.filter { it.num != myNum },
+            names = names,
+            onSend = { text, sharePosition ->
+                onSend(text, replyTo?.messageId ?: 0, false, sharePosition)
                 replyTo = null
-                draft = ""
+                draft = TextFieldValue("")
             },
         )
     }
@@ -774,6 +790,8 @@ private fun MessageRow(
     onRetry: () -> Unit,
     onDelete: () -> Unit,
     onOpenNode: () -> Unit,
+    onOpenMention: (Long) -> Unit,
+    names: Map<Long, String>,
     distance: String? = null,
 ) {
     val status = if (mine) deliveryOf(message, isDirect, now) else null
@@ -859,6 +877,8 @@ private fun MessageRow(
                     onRetry = if (status?.canRetry == true) onRetry else null,
                     onDelete = onDelete,
                     onDetails = onShowDetails,
+                    names = names,
+                    onOpenMention = onOpenMention,
                 )
                 if (tapbacks.isNotEmpty()) {
                     TapbackPill(tapbacks, vm)
@@ -883,14 +903,30 @@ private fun Bubble(
     onRetry: (() -> Unit)? = null,
     onDelete: () -> Unit,
     onDetails: () -> Unit,
+    names: Map<Long, String>,
+    onOpenMention: (Long) -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
-    // MessageText tints link runs and lets them open; on our accent bubble the link is
-    // white like the rest of the text, underlined, since the accent colour would vanish.
+    // MessageText: inline markdown, mentions as links, link runs tinted and tappable. On
+    // our accent bubble the link is white like the rest of the text, underlined, since
+    // the accent colour would vanish. A mention opens the node (handleURL's
+    // meshtastic:///nodes deep link); anything else goes to the browser.
     val linkColor = if (mine) Color.White else MaterialTheme.colorScheme.primary
+    val codeBackground = if (mine) Color.White.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surface
+    val uriHandler = LocalUriHandler.current
+    val linkListener = remember(onOpenMention) {
+        LinkInteractionListener { annotation ->
+            val url = (annotation as? LinkAnnotation.Url)?.url ?: return@LinkInteractionListener
+            val node = mentionNodeNum(url)
+            if (node != null) onOpenMention(node) else runCatching { uriHandler.openUri(url) }
+        }
+    }
+    val rendered = remember(message.payload, names, mine) {
+        renderMessageMarkdown(message.payload ?: "EMPTY MESSAGE", { names[it] }, linkColor, codeBackground, linkListener)
+    }
     Box {
         Text(
-            linkifiedText(message.payload ?: "EMPTY MESSAGE", linkColor),
+            rendered,
             style = MaterialTheme.typography.bodyLarge,
             color = if (mine) Color.White else MaterialTheme.colorScheme.onSurface,
             modifier = Modifier
@@ -1175,69 +1211,253 @@ private fun DeliveryDialog(status: Delivery, onRetry: () -> Unit, onDismiss: () 
 }
 
 /** TextMessageField: a capsule text field, an up-arrow send button once there is text. */
+/**
+ * TextMessageField.swift's FormattingComposeArea: the markdown preview above the field,
+ * the @mention autocomplete, the field itself with cancel-reply and send, and, while the
+ * field has focus, the toolbar: formatting styles (once there are three characters),
+ * Alert, Request Position, and the byte gauge. One item is this port's own: a Google Maps
+ * link of where we are (the radio's fix, else the phone's).
+ */
 @Composable
 private fun Composer(
-    text: String,
-    onTextChange: (String) -> Unit,
+    draft: TextFieldValue,
+    onDraftChange: (TextFieldValue) -> Unit,
     replyTo: ReplyContext?,
     onCancelReply: () -> Unit,
-    onPickLocation: () -> Unit,
-    onSend: (String) -> Unit,
+    isDirect: Boolean,
+    myName: String,
+    here: Pair<Double, Double>?,
+    users: List<UserEntity>,
+    names: Map<Long, String>,
+    onSend: (text: String, sharePosition: Boolean) -> Unit,
 ) {
+    val context = LocalContext.current
+    val text = draft.text
     val bytes = text.encodeToByteArray().size
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (replyTo != null) {
-                IconButton(onClick = onCancelReply) {
-                    Icon(Icons.Filled.Cancel, contentDescription = "Cancel reply", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(32.dp))
-                }
-                Text("Reply", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(end = 8.dp))
-            }
-            // Drop a pin: a map link into the draft. (iOS's map-pin button instead sends
-            // the radio's position after the message.)
-            IconButton(onClick = onPickLocation) {
-                Icon(
-                    Icons.Outlined.AddLocationAlt,
-                    contentDescription = "Insert a map location",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(28.dp),
+    var focused by remember { mutableStateOf(false) }
+    var showToolbar by remember { mutableStateOf(false) }
+    var linkDialog by remember { mutableStateOf<TextRange?>(null) }
+    var sharePosition by rememberSaveable { mutableStateOf(false) }
+    val mentionQuery = remember(text) { MentionParser.activeMentionQuery(text) }
+    // The toolbar follows focus, with the original's short grace so a tap on one of its
+    // buttons (which takes focus for an instant) does not fold it away.
+    LaunchedEffect(focused, linkDialog) {
+        if (focused) showToolbar = true
+        else {
+            delay(300)
+            if (!focused && linkDialog == null) showToolbar = false
+        }
+    }
+
+    /** Apply a new draft if it fits the wire limit, else say so. */
+    fun apply(result: FormattingResult) {
+        if (result.text.encodeToByteArray().size <= MeshProtocol.MAX_TEXT_BYTES) {
+            onDraftChange(TextFieldValue(result.text, result.selection))
+        } else {
+            Toast.makeText(context, "That would exceed ${MeshProtocol.MAX_TEXT_BYTES} bytes", Toast.LENGTH_SHORT).show()
+        }
+    }
+    fun append(suffix: String) {
+        val joined = text + suffix
+        apply(FormattingResult(joined, TextRange(joined.length)))
+    }
+
+    Column(Modifier.fillMaxWidth()) {
+        // MessagePreview: our bubble as it will render, once the draft holds paired markdown.
+        if (containsMarkdownSyntax(text)) {
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 4.dp), horizontalArrangement = Arrangement.End) {
+                Text(
+                    renderMessageMarkdown(text, { names[it] }, Color.White, Color.White.copy(alpha = 0.18f), null),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = Color.White,
+                    modifier = Modifier
+                        .widthIn(max = 300.dp)
+                        .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(15.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
                 )
             }
-            OutlinedTextField(
-                value = text,
-                onValueChange = { candidate ->
-                    // Enforce the 200-byte wire limit on UTF-8 size, not char count.
-                    if (candidate.encodeToByteArray().size <= MeshProtocol.MAX_TEXT_BYTES) onTextChange(candidate)
-                },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Message") },
-                maxLines = 4,
-                shape = RoundedCornerShape(20.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = MaterialTheme.colorScheme.surface,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-                    focusedBorderColor = MaterialTheme.colorScheme.outline,
-                    unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
-                ),
-            )
-            if (text.isNotBlank()) {
-                IconButton(onClick = { onSend(text.trim()) }) {
-                    Icon(
-                        Icons.Filled.ArrowCircleUp,
-                        contentDescription = "Send",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(36.dp),
+        }
+        // MentionAutocomplete: up to ten nodes matching what follows the @.
+        mentionQuery?.let { query ->
+            val needle = query.lowercase()
+            val matches = users.filter { u ->
+                needle.isEmpty() || listOfNotNull(u.longName, u.shortName, u.userId).any { it.lowercase().contains(needle) }
+            }.take(10)
+            if (matches.isNotEmpty()) {
+                HorizontalDivider()
+                Column(Modifier.fillMaxWidth().heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
+                    matches.forEach { user ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    val next = MentionParser.insertMentionToken(text, user.num)
+                                    apply(FormattingResult(next, TextRange(next.length)))
+                                }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            NodeAvatar(user.shortName, user.num, 36.dp)
+                            Column {
+                                Text(user.longName ?: "Unknown", style = MaterialTheme.typography.bodyLarge)
+                                user.userId?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                            }
+                        }
+                        HorizontalDivider(Modifier.padding(start = 56.dp))
+                    }
+                }
+            }
+        }
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (replyTo != null) {
+                    IconButton(onClick = onCancelReply) {
+                        Icon(Icons.Filled.Cancel, contentDescription = "Cancel reply", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(32.dp))
+                    }
+                    Text("Reply", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(end = 8.dp))
+                }
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { candidate ->
+                        // Enforce the 200-byte wire limit on UTF-8 size, not char count.
+                        if (candidate.text.encodeToByteArray().size <= MeshProtocol.MAX_TEXT_BYTES) onDraftChange(candidate)
+                    },
+                    modifier = Modifier.weight(1f).onFocusChanged { focused = it.isFocused },
+                    placeholder = { Text("Message") },
+                    maxLines = 6,
+                    shape = RoundedCornerShape(20.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.surface,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                        focusedBorderColor = MaterialTheme.colorScheme.outline,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+                    ),
+                )
+                if (text.isNotBlank()) {
+                    IconButton(onClick = {
+                        onSend(text.trim(), sharePosition)
+                        sharePosition = false
+                    }) {
+                        Icon(
+                            Icons.Filled.ArrowCircleUp,
+                            contentDescription = "Send",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(36.dp),
+                        )
+                    }
+                }
+            }
+        }
+        if (showToolbar) {
+            HorizontalDivider()
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+                    // FormattingToolbarButtons: wrap or toggle the selection, or drop an
+                    // empty pair at the caret.
+                    if (text.length >= 3) {
+                        MarkdownStyle.entries.forEach { style ->
+                            ToolbarButton(styleIcon(style), style.label) {
+                                val sel = draft.selection
+                                if (style == MarkdownStyle.LINK) {
+                                    val selected = text.substring(sel.min, sel.max)
+                                    if (isMarkdownLink(selected)) unwrapLink(text, sel)?.let(::apply) else linkDialog = sel
+                                } else if (sel.collapsed) {
+                                    apply(insertDelimiters(text, sel.start, style))
+                                } else {
+                                    apply(wrapSelection(text, sel, style))
+                                }
+                            }
+                        }
+                    }
+                    // AlertButton: the bell character makes receiving radios ring.
+                    ToolbarButton(Icons.Filled.NotificationsActive, "Alert") {
+                        append("\uD83D\uDD14 Alert Bell Character! \u0007")
+                    }
+                    // RequestPositionButton: the sentence now, our position right after the
+                    // text when it is sent, with a response requested from a DM peer.
+                    ToolbarButton(Icons.Filled.AddLocation, "Share position", tint = if (sharePosition) MaterialTheme.colorScheme.primary else null) {
+                        sharePosition = true
+                        val sentence = if (isDirect) "has shared their position and requested a response with your position" else "has shared their position with you"
+                        val next = "\uD83D\uDCCD $myName $sentence."
+                        apply(FormattingResult(next, TextRange(next.length)))
+                    }
+                    // Not in the original: a map link of where we are, readable by any client.
+                    ToolbarButton(Icons.Outlined.Map, "Map link", enabled = here != null) {
+                        here?.let { (lat, lon) -> append((if (text.isEmpty()) "" else " ") + mapsLink(lat, lon)) }
+                    }
+                }
+                // TextMessageSize: "Bytes: n" over a gauge of the 200-byte limit.
+                Column(Modifier.padding(start = 6.dp).width(84.dp)) {
+                    Text(
+                        "Bytes: $bytes",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (bytes >= MeshProtocol.MAX_TEXT_BYTES) IosRed else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                    LinearProgressIndicator(
+                        progress = { bytes.toFloat() / MeshProtocol.MAX_TEXT_BYTES },
+                        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
                     )
                 }
             }
         }
-        if (text.isNotEmpty()) {
-            Text(
-                "$bytes / ${MeshProtocol.MAX_TEXT_BYTES}",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (bytes >= MeshProtocol.MAX_TEXT_BYTES) IosRed else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.align(Alignment.End).padding(top = 2.dp),
-            )
-        }
+    }
+
+    // FormattingToolbarButtons' "Insert Link" alert.
+    linkDialog?.let { range ->
+        var url by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { linkDialog = null },
+            title = { Text("Insert Link") },
+            text = {
+                Column {
+                    Text("Enter the URL for the selected text", style = MaterialTheme.typography.bodyMedium)
+                    OutlinedTextField(
+                        value = url,
+                        onValueChange = { url = it },
+                        placeholder = { Text("https://") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = url.isNotBlank(), onClick = {
+                    apply(wrapSelectionWithLink(text, range, url.trim()))
+                    linkDialog = null
+                }) { Text("Insert") }
+            },
+            dismissButton = { TextButton(onClick = { linkDialog = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+private fun styleIcon(style: MarkdownStyle): ImageVector = when (style) {
+    MarkdownStyle.BOLD -> Icons.Filled.FormatBold
+    MarkdownStyle.ITALIC -> Icons.Filled.FormatItalic
+    MarkdownStyle.STRIKETHROUGH -> Icons.Filled.FormatStrikethrough
+    MarkdownStyle.CODE -> Icons.Filled.Code
+    MarkdownStyle.LINK -> Icons.Filled.Link
+}
+
+@Composable
+private fun ToolbarButton(
+    icon: ImageVector,
+    label: String,
+    enabled: Boolean = true,
+    tint: Color? = null,
+    onClick: () -> Unit,
+) {
+    IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(36.dp)) {
+        Icon(
+            icon,
+            contentDescription = label,
+            tint = tint ?: if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+            modifier = Modifier.size(22.dp),
+        )
     }
 }

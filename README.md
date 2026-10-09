@@ -11,8 +11,10 @@ Meshtastic LLC.
 
 - Connects to a radio over Bluetooth LE or TCP and keeps the session alive in the background.
 - Channel and direct messages, tapbacks, acks and naks, per-conversation notifications.
-  Links in messages open on tap; a pin button in the composer drops a map link into the
-  draft; each sender's avatar shows the distance to that node when both positions are known.
+  Messages render inline markdown (bold, italic, strikethrough, code, links) and @mentions;
+  links open on tap and a mention opens that node. The composer's toolbar applies the
+  formatting, inserts an alert bell, shares your position after the message, or drops a
+  map link of where you are. Each sender's avatar shows the distance to that node.
 - Node list with favorites, ignore, search, node detail, traceroute, and public-key repair.
 - Map of positioned nodes and waypoints (OpenFreeMap streets, Esri satellite).
 - Editable radio configuration for all eight config sections, channel import/export via

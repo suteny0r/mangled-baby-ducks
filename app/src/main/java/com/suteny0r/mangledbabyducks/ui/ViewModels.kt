@@ -452,21 +452,54 @@ class MessagesViewModel(app: Application) : AndroidViewModel(app) {
     fun directTapbacks(peer: Long) = container.radioManager.myNodeNum
         .flatMapLatest { db.messageDao().directTapbacks(it, peer) }
 
-    fun sendToChannel(text: String, channel: Int, replyId: Long = 0, isEmoji: Boolean = false) {
+    fun sendToChannel(text: String, channel: Int, replyId: Long = 0, isEmoji: Boolean = false, sharePosition: Boolean = false) {
         viewModelScope.launch {
-            container.radioManager.sendTextMessage(
+            val ok = container.radioManager.sendTextMessage(
                 text, channel = channel, replyId = replyId, isEmoji = isEmoji,
             )
+            // TextMessageField.sendMessage: the position follows the text, to the whole
+            // channel, without asking anyone to answer.
+            if (ok && sharePosition) sendOurPosition(MeshProtocol.BROADCAST_NUM, channel, wantResponse = false)
         }
     }
 
-    fun sendDirect(text: String, toNum: Long, replyId: Long = 0, isEmoji: Boolean = false) {
+    fun sendDirect(text: String, toNum: Long, replyId: Long = 0, isEmoji: Boolean = false, sharePosition: Boolean = false) {
         viewModelScope.launch {
-            container.radioManager.sendTextMessage(
+            val ok = container.radioManager.sendTextMessage(
                 text, toNum = toNum, replyId = replyId, isEmoji = isEmoji,
             )
+            // A direct share also asks the peer for its position back.
+            if (ok && sharePosition) sendOurPosition(toNum, 0, wantResponse = true)
         }
     }
+
+    /** Our position as the lists define it: the radio's own fix when present, else the phone's. */
+    private suspend fun sendOurPosition(toNum: Long, channel: Int, wantResponse: Boolean) {
+        val here = myLocation.value ?: return
+        val altitude = container.locationSharer.lastFix.value?.altitude ?: 0
+        container.radioManager.sendDestPosition(
+            toNum = toNum,
+            latitudeI = (here.first * 1e7).toInt(),
+            longitudeI = (here.second * 1e7).toInt(),
+            altitude = altitude,
+            channel = channel,
+            wantResponse = wantResponse,
+        )
+    }
+
+    /** Long name per node for resolving `@!hex` mentions and the position-share sentence. */
+    val namesByNum: StateFlow<Map<Long, String>> = db.nodeDao().nodesWithUsers()
+        .map { list ->
+            list.mapNotNull { e ->
+                val name = e.user?.longName?.takeIf { it.isNotBlank() } ?: e.user?.shortName?.takeIf { it.isNotBlank() }
+                name?.let { e.node.num to it }
+            }.toMap()
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+    /** Every known user, for the @mention autocomplete (MentionAutocomplete queries all nodes). */
+    val allUsers: StateFlow<List<UserEntity>> = db.userDao().allContacts()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     fun markChannelRead(channel: Int) {
         viewModelScope.launch {

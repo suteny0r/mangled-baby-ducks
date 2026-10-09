@@ -16,6 +16,37 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Composer toolbar, markdown, mentions (2026-10-09 11:00, verified on the emulator)
+
+- The pin-drop picker from the previous entry is gone (user: not what was wanted). In its
+  place, TextMessageField.swift's FormattingComposeArea: `ui/MessageMarkdown.kt` ports
+  MarkdownFormatting.swift (wrap/toggle/insert delimiters, link wrap/unwrap, orphan
+  cleanup), MentionParser.swift (`@!<8 hex>` tokens, trailing-@ query, token insert,
+  resolve to `[@Name](meshtastic:///nodes?nodenum=N)`), and an inline renderer
+  (`renderMessageMarkdown`: code, `[text](url)`, bold, strike, italic by earliest match,
+  recursive, backslash escapes, bare URLs autolinked, control chars dropped).
+- Composer: draft is a `TextFieldValue` hoisted in ThreadView (selection drives the
+  toolbar); markdown preview bubble above the field when `containsMarkdownSyntax`;
+  @mention autocomplete (up to 10 users, avatar + long name + id); toolbar while focused
+  (300 ms grace): Bold/Italic/Strike/Code/Link once the draft has 3 chars, Alert (appends
+  the bell sentence + U+0007), Share position (sentence + flag; on send the ViewModel
+  sends our position after the text: broadcast without response on a channel, to the peer
+  with want-response in a DM, `sendDestPosition(wantResponse)`), Map link (this port's
+  own: `mapsLink(here)`), and the Bytes gauge. Programmatic inserts that would pass 200
+  bytes toast instead.
+- Bubbles render through the markdown renderer with a `LinkInteractionListener`: a
+  `meshtastic:///nodes?nodenum=` link opens the node detail in the thread (handleURL),
+  anything else goes to the UriHandler. Conversation list previews render the markdown
+  with links reduced to text (MessagePreviewText).
+- Verified on the emulator: a seeded message with bold/italic/strike/link/two mentions
+  rendered correctly; Bold at a collapsed caret inserted `****` with the caret inside;
+  Alert and Share position filled the draft; Map link appended the coordinates; the
+  preview bubble tracked the draft. Not covered: a real send (no radio on the emulator)
+  and the position packet after it.
+- Our notifier has no channel-mute or notification-preference gating yet, so the iOS
+  "self-mention overrides a muted channel" rule has nothing to override; `containsMention`
+  is there for when it does.
+
 ## Message links, sender distance, drop-a-pin (2026-10-09 10:30, verified on the emulator)
 
 - `ui/LinkText.kt`: `linkifiedText` wraps web URLs (scheme or `www.`) in

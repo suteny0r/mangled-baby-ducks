@@ -1034,6 +1034,7 @@ class RadioManager(
         longitudeI: Int,
         altitude: Int,
         channel: Int,
+        wantResponse: Boolean = true,
     ): Boolean {
         val position = MeshProtos.Position.newBuilder()
             .setLatitudeI(latitudeI)
@@ -1048,7 +1049,7 @@ class RadioManager(
             portnum = Portnums.PortNum.POSITION_APP,
             reliable = false,
             wantAck = false,
-            wantResponse = true,
+            wantResponse = wantResponse,
             channel = channel,
             hopsAway = 0,
         ) { it.setPayload(position.toByteString()) }

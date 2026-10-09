@@ -44,3 +44,7 @@ fun formatDistance(meters: Double): String {
     if (meters < 1000) return "${meters.toInt()} m"
     return if (meters < 10_000) "%.1f km".format(meters / 1000) else "${(meters / 1000).toInt()} km"
 }
+
+/** A Google Maps link for a coordinate; opens in Maps, the web app, or any map app registering the host. */
+fun mapsLink(latitude: Double, longitude: Double): String =
+    String.format(Locale.US, "https://maps.google.com/?q=%.5f,%.5f", latitude, longitude)
