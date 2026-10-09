@@ -130,7 +130,7 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                 IconButton(onClick = { section = null }) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                 }
-                Text(open.title, style = MaterialTheme.typography.headlineSmall)
+                Text(open.pageTitle, style = MaterialTheme.typography.headlineSmall)
             }
             ConfigSectionDetail(open, vm, connected)
         }

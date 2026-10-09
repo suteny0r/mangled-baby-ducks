@@ -92,6 +92,14 @@ class RadioManager(
     val deviceName: StateFlow<String?> = _deviceName.asStateFlow()
 
     /**
+     * AccessoryManager.loRaRegionPresets: the 2.8 firmware's region -> legal presets map,
+     * sent during the want_config handshake. Empty on older firmware. Decoded by the
+     * LoRa form; kept raw here so this file needs no UI types.
+     */
+    private val _regionPresets = MutableStateFlow<MeshProtos.LoRaRegionPresetMap?>(null)
+    val regionPresets: StateFlow<MeshProtos.LoRaRegionPresetMap?> = _regionPresets.asStateFlow()
+
+    /**
      * AccessoryManager.packetsSent / packetsReceived: one tick per ToRadio written and
      * per FromRadio read, for the RX/TX activity lights in the header.
      */
@@ -451,6 +459,10 @@ class RadioManager(
                 ingest.moduleConfig(fromRadio.moduleConfig)
             MeshProtos.FromRadio.PayloadVariantCase.METADATA ->
                 ingest.deviceMetadata(fromRadio.metadata)
+            MeshProtos.FromRadio.PayloadVariantCase.REGION_PRESETS -> {
+                _regionPresets.value = fromRadio.regionPresets
+                Log.i(TAG, "Region preset map: ${fromRadio.regionPresets.regionGroupsCount} regions, ${fromRadio.regionPresets.groupsCount} groups")
+            }
             MeshProtos.FromRadio.PayloadVariantCase.CONFIG_COMPLETE_ID -> {
                 val id = fromRadio.configCompleteId.uint()
                 if (id == MeshProtocol.NONCE_ONLY_DB.toLong() && lastNodeInfoAt != 0L) {

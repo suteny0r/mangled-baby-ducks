@@ -16,6 +16,34 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## LoRa config form ported from LoRaConfig.swift (2026-10-09 11:35, verified on the phone)
+
+- `ui/LoRaEnums.kt` ports LoraConfigEnums.swift: region and preset labels and picker
+  order, 2.8 gating (`firmwareAtLeast(my_info.firmwareVersion, "2.8.0")`), deprecated
+  presets, CodingRates (0 = follow preset; options above the preset's default), Bandwidths
+  (picker value 0 = 250 kHz default; 2.4 GHz set), `LoRaRegionPresetMap.decoded()`,
+  `presetToSelect` (region change picks Long Turbo for a factory-fresh US node, or the
+  region's default when the current preset is illegal there).
+- `RadioManager.regionPresets` keeps `FromRadio.REGION_PRESETS` (SOBE on 2.8.1 sends 34
+  regions / 6 groups); `SettingsViewModel.regionPresets` decodes it. Only consulted on 2.8
+  firmware.
+- The form: "Configuration for: <name>" header (shown while connected), Options card
+  (Region + description, licensed-band notice, Use Preset with icon + description, Presets
+  + US compliance warning), Advanced card (Ignore MQTT, Ok to MQTT, Transmit Enabled with
+  icons and descriptions; custom Bandwidth + Spread Factor when presets are off; Coding
+  Rate with Follow Preset toggle and the two sliders; Hop Limit 0..7; Frequency Slot,
+  disabled while an override is set; RX Boosted Gain; Frequency Override; Transmit Power
+  stepper 0..30 with "Max" at 0). Wording follows the iOS build the user compared against,
+  which is newer than the local clone in two places: the US warning covers every
+  non-Turbo preset ("The Turbo presets are recommended"; the clone only names Long Fast),
+  and the follow-preset text is the short form. Rule used: on 2.8 firmware in the US,
+  presets under 500 kHz are non-compliant (`presetBandwidthKHz`).
+- Dropped from this port's form: the derived-frequency summary row and the duty-cycle
+  override switch, which the original does not show here. `ConfigForm` gained `header`
+  and `grouped = false`; `ConfigPickerRow` (title, accent value, description, warning) and
+  `ConfigSwitchRow(icon)` are the new primitives; `ConfigSection.pageTitle` gives the
+  page "LoRa Config".
+
 ## Composer toolbar, markdown, mentions (2026-10-09 11:00, verified on the emulator)
 
 - The pin-drop picker from the previous entry is gone (user: not what was wanted). In its

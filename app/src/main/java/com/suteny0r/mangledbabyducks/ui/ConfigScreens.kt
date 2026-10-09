@@ -38,14 +38,41 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import org.meshtastic.proto.ConfigProtos
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ListAlt
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.UnfoldMore
+import androidx.compose.material.icons.filled.Verified
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material.icons.outlined.Equalizer
+import androidx.compose.material.icons.outlined.GraphicEq
+import androidx.compose.material.icons.outlined.MonitorHeart
+import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Slider
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import kotlin.math.roundToInt
+import com.suteny0r.mangledbabyducks.ui.theme.IosGreen
+import com.suteny0r.mangledbabyducks.ui.theme.IosOrange
 
 /**
  * The radio config sections this app can read and write, one screen each, mirroring the
  * "Radio Configuration" / "Device Configuration" lists in the iOS app's `Settings.swift`.
  * Module configs (`module.*`) are not here yet.
  */
-enum class ConfigSection(val title: String, val summary: String) {
-    LORA("LoRa", "Region, modem preset, hop limit, transmit"),
+enum class ConfigSection(val title: String, val summary: String, val pageTitle: String = title) {
+    LORA("LoRa", "Region, modem preset, hop limit, transmit", pageTitle = "LoRa Config"),
     DEVICE("Device", "Role, rebroadcast, node info interval"),
     POSITION("Position", "GPS mode, broadcast interval, position flags"),
     BLUETOOTH("Bluetooth", "Pairing mode and PIN"),
@@ -74,85 +101,280 @@ fun ConfigSectionDetail(section: ConfigSection, vm: SettingsViewModel, connected
 
 // ---------------------------------------------------------------- sections
 
+/**
+ * LoRaConfig.swift: header, an Options section (region, Use Preset, presets with the US
+ * compliance warning, the licensed-band notice) and an Advanced section (MQTT flags,
+ * transmit, custom bandwidth / spread factor, coding rate with the follow-preset toggle
+ * and sliders, hop limit, frequency slot, RX boosted gain, frequency override, transmit
+ * power stepper). Wording follows the current iOS build the user compared against.
+ */
 @Composable
 private fun LoRaSection(vm: SettingsViewModel, connected: Boolean) {
     val current by vm.loraConfig.collectAsState()
-    val primaryChannelName by vm.primaryChannelName.collectAsState()
-    ConfigForm(current, connected, vm, vm::writeLoraConfig) { draft, update ->
-        // ChannelFrequencySummary: the radio tunes itself from region + preset + the
-        // primary channel name, so a stored slot of 0 is not "no frequency", it is
-        // "derive it". Shown against the draft, so picking a region or preset updates it
-        // before the write.
-        val calculator = LoRaChannelCalculator(draft)
-        val slot = calculator.effectiveSlot(
-            LoRaChannelCalculator.hashName(primaryChannelName, draft)
+    val myInfo by vm.myInfo.collectAsState()
+    val myUser by vm.myUser.collectAsState()
+    val regionPresets by vm.regionPresets.collectAsState()
+    val supports2_8 = firmwareAtLeast(myInfo?.firmwareVersion, "2.8.0")
+    ConfigForm(
+        current, connected, vm, vm::writeLoraConfig,
+        header = if (connected && myInfo != null) "Configuration for: ${myUser?.longName ?: "Unknown"}" else null,
+        grouped = false,
+    ) { draft, update ->
+        val region = draft.region
+        val preset = draft.modemPreset
+        val usePreset = draft.usePreset
+        val defaultCr = presetDefaultCodingRate(preset)
+        val normalizedCr = CodingRates.normalized(draft.codingRate, usePreset, preset)
+        val canOverrideCr = defaultCr < CodingRates.validRange.last
+        // Only consulted on 2.8 firmware: a map left behind by another radio means nothing here.
+        val regionInfo = if (supports2_8) regionPresets[region] else null
+        val availablePresets = run {
+            val base = selectablePresets(supports2_8)
+            var list = base
+            if (regionInfo != null && regionInfo.presets.isNotEmpty()) {
+                val constrained = base.filter { it in regionInfo.presets }
+                if (constrained.isNotEmpty()) list = constrained
+            }
+            if (presetIsDeprecated(preset) && preset !in list) list = list + preset
+            list
+        }
+        val bandwidthIssue = !usePreset && Bandwidths.unsupported(draft.bandwidth, region, null)
+
+        SectionHeader("Options", Modifier.padding(start = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column {
+                ConfigPickerRow(
+                    "Region", regionLabel(region), selectableRegions(supports2_8),
+                    description = "The region where you will be using your radios.",
+                    label = ::regionLabel,
+                ) { newRegion ->
+                    var next = draft.toBuilder().setRegion(newRegion)
+                    // applyRegionPresetDefault: a factory-fresh node picking US moves off Long
+                    // Fast; an illegal preset falls back to the region's default.
+                    val factoryFresh = (current?.region ?: ConfigProtos.Config.LoRaConfig.RegionCode.UNSET) == ConfigProtos.Config.LoRaConfig.RegionCode.UNSET
+                    presetToSelect(newRegion, factoryFresh, supports2_8, usePreset, regionPresets[newRegion].takeIf { supports2_8 }, preset)
+                        ?.let { next = next.setModemPreset(it) }
+                    update(next.build())
+                }
+                if (regionInfo?.licensedOnly == true) {
+                    val licensed = myUser?.isLicensed == true
+                    Row(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.Top) {
+                        Icon(
+                            if (licensed) Icons.Filled.Verified else Icons.Filled.Warning,
+                            contentDescription = null,
+                            tint = if (licensed) IosGreen else IosOrange,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Column(Modifier.padding(start = 8.dp)) {
+                            Text("Licensed band", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                            Text(
+                                if (licensed) "This region is restricted to licensed amateur radio operators. Your operator profile is marked as licensed."
+                                else "This region is restricted to licensed amateur radio operators. Enable \u201cLicensed Operator\u201d and set your call sign in User Config before transmitting.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    HorizontalDivider()
+                }
+                ConfigSwitchRow(
+                    "Use Preset",
+                    "Use the modem preset settings instead of a manual bandwidth, spread factor and coding rate",
+                    usePreset,
+                    icon = Icons.AutoMirrored.Outlined.ListAlt,
+                ) { on ->
+                    val cr = CodingRates.normalized(draft.codingRate, on, preset)
+                    update(draft.toBuilder().setUsePreset(on).setCodingRate(cr).build())
+                }
+                if (usePreset) {
+                    // Long Fast stays selectable in the US, but its bandwidth is not US-compliant
+                    // on 2.8; with a firmware map, any preset outside the US list gets the note.
+                    val usWarning = when {
+                        !supports2_8 || region != ConfigProtos.Config.LoRaConfig.RegionCode.US -> null
+                        presetBandwidthKHz(preset) < 500 ->
+                            "${presetLabel(preset)}'s bandwidth is not compliant in the US. The Turbo presets are recommended."
+                        else -> null
+                    }
+                    ConfigPickerRow(
+                        "Presets", presetLabel(preset), availablePresets,
+                        description = "Available modem presets, default is Long Fast.",
+                        warning = usWarning,
+                        label = ::presetLabel,
+                    ) { newPreset ->
+                        val cr = CodingRates.normalized(draft.codingRate, usePreset, newPreset)
+                        update(draft.toBuilder().setModemPreset(newPreset).setCodingRate(cr).build())
+                    }
+                }
+            }
+        }
+
+        SectionHeader("Advanced", Modifier.padding(start = 4.dp, top = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column {
+                ConfigSwitchRow(
+                    "Ignore MQTT",
+                    "Ignore packets received over LoRa that travelled via MQTT anywhere on their path.",
+                    draft.ignoreMqtt,
+                    icon = Icons.Outlined.Dns,
+                ) { update(draft.toBuilder().setIgnoreMqtt(it).build()) }
+                ConfigSwitchRow("Ok to MQTT", null, draft.configOkToMqtt, icon = Icons.Outlined.Public) {
+                    update(draft.toBuilder().setConfigOkToMqtt(it).build())
+                }
+                ConfigSwitchRow(
+                    "Transmit Enabled",
+                    "Allow the LoRa radio to transmit. Turn off while hot-swapping antennas or bench testing.",
+                    draft.txEnabled,
+                    icon = Icons.Outlined.GraphicEq,
+                ) { update(draft.toBuilder().setTxEnabled(it).build()) }
+                if (!usePreset) {
+                    // CustomBandwidthPicker: the stored value, an "Unsupported" entry when the
+                    // radio cannot do it here, the 2.4 GHz default, then the legal set.
+                    val options = buildList {
+                        val stored = Bandwidths.pickerValueForStored(draft.bandwidth, region)
+                        if (bandwidthIssue) add(stored)
+                        if (region == ConfigProtos.Config.LoRaConfig.RegionCode.LORA_24) add(0)
+                        Bandwidths.selectable(region, null).forEach { add(Bandwidths.pickerValue(it)) }
+                    }.distinct()
+                    ConfigPickerRow(
+                        "Bandwidth",
+                        if (bandwidthIssue) "Unsupported (${Bandwidths.labelForPicker(Bandwidths.pickerValueForStored(draft.bandwidth, region), region)})"
+                        else Bandwidths.labelForPicker(Bandwidths.pickerValueForStored(draft.bandwidth, region), region),
+                        options,
+                        warning = if (bandwidthIssue) "This bandwidth is not supported by the connected radio in the selected region. Choose a supported value before saving." else null,
+                        label = { Bandwidths.labelForPicker(it, region) },
+                    ) { update(draft.toBuilder().setBandwidth(it).build()) }
+                    // Spread factor 7..12; the firmware stores 12 as 0 (its default).
+                    ConfigPickerRow(
+                        "Spread Factor",
+                        (if (draft.spreadFactor == 0) 12 else draft.spreadFactor).toString(),
+                        (7..12).toList(),
+                        label = { it.toString() },
+                    ) { update(draft.toBuilder().setSpreadFactor(if (it == 12) 0 else it).build()) }
+                }
+                // Coding rate.
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                    Row(Modifier.fillMaxWidth()) {
+                        Text("Coding Rate", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                        Text(CodingRates.description(normalizedCr, preset), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (usePreset) {
+                        Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("Follow Preset Coding Rate", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                            Switch(
+                                checked = normalizedCr == 0,
+                                enabled = canOverrideCr,
+                                onCheckedChange = { follow ->
+                                    update(draft.toBuilder().setCodingRate(if (follow || !canOverrideCr) 0 else defaultCr + 1).build())
+                                },
+                            )
+                        }
+                        when {
+                            !canOverrideCr -> ConfigDescription("This preset already uses 4/$defaultCr, the highest redundancy available.")
+                            normalizedCr == 0 -> ConfigDescription("Uses ${presetLabel(preset)}'s 4/$defaultCr coding rate. Turn this off to raise it.")
+                            else -> {
+                                CodingRateSlider(
+                                    value = maxOf(normalizedCr, defaultCr + 1),
+                                    range = (defaultCr + 1)..CodingRates.validRange.last,
+                                ) { update(draft.toBuilder().setCodingRate(it).build()) }
+                                ConfigDescription("Uses 4/$normalizedCr while keeping the ${presetLabel(preset)} bandwidth and spread factor. Higher values add error correction, but each packet uses more airtime and has less throughput.")
+                            }
+                        }
+                    } else {
+                        CodingRateSlider(value = normalizedCr, range = CodingRates.validRange) {
+                            update(draft.toBuilder().setCodingRate(CodingRates.normalized(it, false, preset)).build())
+                        }
+                        ConfigDescription("Coding rate controls error-correction redundancy. Higher values can help noisy links, but reduce throughput and increase airtime. Keep 4/5 unless your channel plan calls for a different value.")
+                    }
+                }
+                HorizontalDivider()
+                ConfigPickerRow(
+                    "Hop Limit", draft.hopLimit.toString(), (0..7).toList(),
+                    description = "How many times a message may be repeated before it stops being forwarded.",
+                    label = { it.toString() },
+                ) { update(draft.toBuilder().setHopLimit(it).build()) }
+                ConfigNumberRow(
+                    "Frequency Slot",
+                    draft.channelNum,
+                    hint = "0 derives the slot from the primary channel name",
+                    allowZero = true,
+                    enabled = draft.overrideFrequency <= 0f,
+                    description = "Your node\u2019s operating frequency is calculated based on the region, modem preset, and this field. When 0, the slot is automatically calculated based on the primary channel name.",
+                ) { update(draft.toBuilder().setChannelNum(it).build()) }
+                ConfigSwitchRow(
+                    "RX Boosted Gain",
+                    "Enable RX boosted gain mode on SX126X based radios",
+                    draft.sx126XRxBoostedGain,
+                    icon = Icons.Outlined.Equalizer,
+                ) { update(draft.toBuilder().setSx126XRxBoostedGain(it).build()) }
+                ConfigFloatRow(
+                    "Frequency Override",
+                    draft.overrideFrequency,
+                    hint = "MHz; 0 uses the slot above",
+                    icon = Icons.Outlined.MonitorHeart,
+                ) { update(draft.toBuilder().setOverrideFrequency(it).build()) }
+                // Transmit power stepper, 0..30 dBm, 0 meaning the region's legal maximum.
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Transmit Power", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                        Text(
+                            if (draft.txPower == 0) "Max" else "${draft.txPower} dBm",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(end = 8.dp),
+                        )
+                        Stepper(
+                            onMinus = { if (draft.txPower > 0) update(draft.toBuilder().setTxPower(draft.txPower - 1).build()) },
+                            onPlus = { if (draft.txPower < 30) update(draft.toBuilder().setTxPower(draft.txPower + 1).build()) },
+                            minusEnabled = draft.txPower > 0,
+                            plusEnabled = draft.txPower < 30,
+                        )
+                    }
+                    ConfigDescription("Radio transmit power. Leave at zero to use the highest level legal for the region, which is what most radios should use.")
+                }
+            }
+        }
+    }
+}
+
+/** The grey explanatory line under a row, iOS's `.callout` gray text. */
+@Composable
+private fun ConfigDescription(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp),
+    )
+}
+
+@Composable
+private fun CodingRateSlider(value: Int, range: IntRange, onSet: (Int) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("4/${range.first}", style = MaterialTheme.typography.labelMedium)
+        Slider(
+            value = value.toFloat(),
+            onValueChange = { onSet(it.roundToInt()) },
+            valueRange = range.first.toFloat()..range.last.toFloat(),
+            steps = (range.last - range.first - 1).coerceAtLeast(0),
+            modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
         )
-        val frequency = calculator.frequencyMHz(slot)
-        ConfigReadOnlyRow(
-            "Frequency",
-            if (frequency > 0) "%.3f MHz".format(frequency) else "Unknown",
-            buildString {
-                append(calculator.regionName)
-                append("  •  slot ")
-                append(if (slot > 0) slot.toString() else "unknown")
-                if (draft.channelNum == 0) append(" (derived)")
-            },
-        )
-        ConfigEnumRow(
-            "Region",
-            draft.region,
-            protoEntries(ConfigProtos.Config.LoRaConfig.RegionCode.entries),
-        ) { update(draft.toBuilder().setRegion(it).build()) }
-        ConfigEnumRow(
-            "Modem preset",
-            draft.modemPreset,
-            protoEntries(ConfigProtos.Config.LoRaConfig.ModemPreset.entries),
-            // A preset choice only takes effect with usePreset set; without it the
-            // radio keeps using the custom bandwidth/spread factor/coding rate.
-            subtitle = if (draft.usePreset) null else
-                "custom: bw ${draft.bandwidth}, sf ${draft.spreadFactor}, cr ${draft.codingRate}",
-        ) { update(draft.toBuilder().setModemPreset(it).setUsePreset(true).build()) }
-        ConfigEnumRow("Hop limit", draft.hopLimit, (1..7).toList()) {
-            update(draft.toBuilder().setHopLimit(it).build())
+        Text("4/${range.last}", style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+/** The iOS Stepper's minus / plus pill. */
+@Composable
+private fun Stepper(onMinus: () -> Unit, onPlus: () -> Unit, minusEnabled: Boolean, plusEnabled: Boolean) {
+    Row(
+        Modifier
+            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(10.dp)),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onMinus, enabled = minusEnabled, modifier = Modifier.size(40.dp)) {
+            Icon(Icons.Filled.Remove, contentDescription = "Decrease")
         }
-        ConfigSwitchRow("Transmit enabled", null, draft.txEnabled) {
-            update(draft.toBuilder().setTxEnabled(it).build())
-        }
-        ConfigNumberRow(
-            "Transmit power",
-            draft.txPower,
-            suffix = "dBm",
-            allowZero = true,
-            unsigned = false,
-        ) {
-            update(draft.toBuilder().setTxPower(it).build())
-        }
-        ConfigNumberRow(
-            "Frequency slot",
-            draft.channelNum,
-            // iOS shows the stored number too (LoRaConfig.swift's Frequency Slot field is
-            // bound straight to channelNum): typing the derived slot in would PIN it, and
-            // the radio would stay there even if the channel name changed. So the stored
-            // 0 stands, with what it currently resolves to beside it.
-            derived = if (draft.channelNum == 0 && slot > 0) "(now $slot)" else null,
-            hint = "0 derives the slot from the region, preset and channel name",
-            allowZero = true,
-        ) { update(draft.toBuilder().setChannelNum(it).build()) }
-        ConfigSwitchRow(
-            "Boosted RX gain",
-            "SX126x receivers only",
-            draft.sx126XRxBoostedGain,
-        ) { update(draft.toBuilder().setSx126XRxBoostedGain(it).build()) }
-        ConfigSwitchRow(
-            "Override duty cycle",
-            "Ignore the region's legal duty cycle limit",
-            draft.overrideDutyCycle,
-        ) { update(draft.toBuilder().setOverrideDutyCycle(it).build()) }
-        ConfigSwitchRow("Ignore MQTT", null, draft.ignoreMqtt) {
-            update(draft.toBuilder().setIgnoreMqtt(it).build())
-        }
-        ConfigSwitchRow("OK to MQTT", "Let gateways forward this node's packets", draft.configOkToMqtt) {
-            update(draft.toBuilder().setConfigOkToMqtt(it).build())
+        Box(Modifier.width(1.dp).height(22.dp).background(MaterialTheme.colorScheme.outlineVariant))
+        IconButton(onClick = onPlus, enabled = plusEnabled, modifier = Modifier.size(40.dp)) {
+            Icon(Icons.Filled.Add, contentDescription = "Increase")
         }
     }
 }
@@ -518,6 +740,10 @@ private fun <T : Any> ConfigForm(
     vm: SettingsViewModel,
     onSave: (T) -> Unit,
     note: String? = null,
+    /** ConfigHeader's "Configuration for: <name>" line, when the form has a radio. */
+    header: String? = null,
+    /** False when [rows] lays out its own section cards (several sections, as on iOS). */
+    grouped: Boolean = true,
     rows: @Composable ColumnScope.(T, (T) -> Unit) -> Unit,
 ) {
     // Keyed on `current`: a fresh config from the radio (which is what a successful save
@@ -526,6 +752,11 @@ private fun <T : Any> ConfigForm(
     val result by vm.writeResult.collectAsState()
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        header?.let {
+            GroupCard(Modifier.fillMaxWidth()) {
+                Text(it, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(16.dp))
+            }
+        }
         Text(
             "Saving makes the radio store this section and reboot.",
             style = MaterialTheme.typography.bodySmall,
@@ -540,7 +771,11 @@ private fun <T : Any> ConfigForm(
                 style = MaterialTheme.typography.bodyMedium,
             )
         } else {
-            Card(Modifier.fillMaxWidth()) { Column { rows(value, { draft = it }) } }
+            if (grouped) {
+                Card(Modifier.fillMaxWidth()) { Column { rows(value, { draft = it }) } }
+            } else {
+                rows(value, { draft = it })
+            }
             val dirty = value != current
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(enabled = connected && dirty, onClick = { onSave(value) }) {
@@ -587,16 +822,74 @@ private fun ConfigSwitchRow(
     subtitle: String?,
     checked: Boolean,
     enabled: Boolean = true,
+    icon: ImageVector? = null,
     onChange: (Boolean) -> Unit,
 ) {
     ListItem(
         headlineContent = { Text(title) },
         supportingContent = if (subtitle == null) null else ({ Text(subtitle) }),
+        leadingContent = icon?.let { { Icon(it, contentDescription = null, tint = MaterialTheme.colorScheme.primary) } },
         trailingContent = {
             Switch(checked = checked, enabled = enabled, onCheckedChange = onChange)
         },
     )
     HorizontalDivider()
+}
+
+/**
+ * The iOS Picker row: title, the chosen value trailing in the accent colour with the
+ * up/down glyph, an optional description and warning under it. Tapping opens the list.
+ */
+@Composable
+private fun <T> ConfigPickerRow(
+    title: String,
+    valueLabel: String,
+    options: List<T>,
+    description: String? = null,
+    warning: String? = null,
+    enabled: Boolean = true,
+    label: (T) -> String,
+    onPick: (T) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled) { open = true }
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            Text(valueLabel, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyLarge)
+            Icon(Icons.Filled.UnfoldMore, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+        }
+        description?.let { ConfigDescription(it) }
+        warning?.let {
+            Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.Top) {
+                Icon(Icons.Filled.Warning, contentDescription = null, tint = IosOrange, modifier = Modifier.size(20.dp))
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
+        }
+    }
+    HorizontalDivider()
+    if (open) {
+        EnumPickerDialog(
+            title = title,
+            options = options,
+            selected = options.firstOrNull { label(it) == valueLabel },
+            label = label,
+            onDismiss = { open = false },
+            onPick = {
+                onPick(it)
+                open = false
+            },
+        )
+    }
 }
 
 @Composable
@@ -646,6 +939,7 @@ private fun ConfigNumberRow(
     // Most of these fields are proto uint32, which the generated Java exposes as a signed
     // Int: the firmware's "disabled" sentinel 0xFFFFFFFF would otherwise read as -1.
     unsigned: Boolean = true,
+    description: String? = null,
     onSet: (Int) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
@@ -653,10 +947,13 @@ private fun ConfigNumberRow(
     ListItem(
         headlineContent = { Text(title) },
         supportingContent = {
-            Text(
-                if (value == 0 && !allowZero) "unset"
-                else listOfNotNull(shown, suffix, derived).joinToString(" ")
-            )
+            Column {
+                Text(
+                    if (value == 0 && !allowZero) "unset"
+                    else listOfNotNull(shown, suffix, derived).joinToString(" ")
+                )
+                description?.let { ConfigDescription(it) }
+            }
         },
         modifier = Modifier.clickable(enabled = enabled) { open = true },
     )
@@ -685,12 +982,14 @@ private fun ConfigFloatRow(
     value: Float,
     hint: String? = null,
     enabled: Boolean = true,
+    icon: ImageVector? = null,
     onSet: (Float) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
     ListItem(
         headlineContent = { Text(title) },
         supportingContent = { Text(value.toString()) },
+        leadingContent = icon?.let { { Icon(it, contentDescription = null, tint = MaterialTheme.colorScheme.primary) } },
         modifier = Modifier.clickable(enabled = enabled) { open = true },
     )
     HorizontalDivider()
@@ -839,7 +1138,7 @@ private fun PositionFlagsRow(flags: Int, onSet: (Int) -> Unit) {
 internal fun <T> EnumPickerDialog(
     title: String,
     options: List<T>,
-    selected: T,
+    selected: T?,
     label: (T) -> String,
     onDismiss: () -> Unit,
     onPick: (T) -> Unit,

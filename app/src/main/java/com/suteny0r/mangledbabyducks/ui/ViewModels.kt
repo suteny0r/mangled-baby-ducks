@@ -626,6 +626,12 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     val loraConfig: StateFlow<ConfigProtos.Config.LoRaConfig?> =
         configFlow("config.lora") { it.lora }
 
+    /** The firmware's region -> presets map (2.8+), decoded; empty when the radio sent none. */
+    val regionPresets: StateFlow<Map<ConfigProtos.Config.LoRaConfig.RegionCode, RegionPresetInfo>> =
+        container.radioManager.regionPresets
+            .map { it?.decoded() ?: emptyMap() }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
     /**
      * The primary channel's name, which is what the firmware hashes into a frequency slot
      * when channel_num is 0. Blank means the preset's own name is hashed instead; see
