@@ -1377,6 +1377,10 @@ private fun Composer(
                     ToolbarButton(Icons.Filled.NotificationsActive, "Alert") {
                         append("\uD83D\uDD14 Alert Bell Character! \u0007")
                     }
+                    // Not in the original: a map link of where we are, readable by any client.
+                    ToolbarButton(Icons.Outlined.Map, "Map link", enabled = here != null) {
+                        here?.let { (lat, lon) -> append((if (text.isEmpty()) "" else " ") + mapsLink(lat, lon)) }
+                    }
                     // RequestPositionButton: the sentence now, our position right after the
                     // text when it is sent, with a response requested from a DM peer.
                     ToolbarButton(Icons.Filled.AddLocation, "Share position", tint = if (sharePosition) MaterialTheme.colorScheme.primary else null) {
@@ -1384,10 +1388,6 @@ private fun Composer(
                         val sentence = if (isDirect) "has shared their position and requested a response with your position" else "has shared their position with you"
                         val next = "\uD83D\uDCCD $myName $sentence."
                         apply(FormattingResult(next, TextRange(next.length)))
-                    }
-                    // Not in the original: a map link of where we are, readable by any client.
-                    ToolbarButton(Icons.Outlined.Map, "Map link", enabled = here != null) {
-                        here?.let { (lat, lon) -> append((if (text.isEmpty()) "" else " ") + mapsLink(lat, lon)) }
                     }
                 }
                 // TextMessageSize: "Bytes: n" over a gauge of the 200-byte limit.

@@ -16,6 +16,13 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## 0.2.12 shipped (2026-10-09 13:35)
+Shipped as 0.2.12 (versionCode 14): composer toolbar and markdown, the eight config form
+ports, device-id backup keying, LoRa no-reboot, remote metadata fix, plus the composer
+toolbar order swapped (Map link before Share position, user request). Tag v0.2.12, GitHub
+release with both APKs, upload set in `art/play/0.2.12/` (bundle + `release-notes.txt`)
+for the Play internal testing track. The phone runs the sideloaded 0.2.12 debug build.
+
 ## Backups keyed by device id, LoRa save without reboot, remote firmware version (2026-10-09 13:15, verified on the phone)
 Three upstream catch-ups from the refreshed clone (`8425daa6`):
 - **Backup keying** (`NodeBackupManager.swift` / `BackupModels.swift`): `BackupEntry.deviceId`

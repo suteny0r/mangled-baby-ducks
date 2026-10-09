@@ -1,0 +1,6 @@
+<en-US>
+Message composer: formatting toolbar (bold, italic, strikethrough, code, link), alert bell, share position, and a map link of your current location; inline markdown and @mentions render in threads. Tappable links and distance captions under sender avatars.
+Radio configuration: LoRa, Device, Position, Bluetooth, Display, Network, Power and Security forms follow the current upstream layouts and rules; LoRa saves on firmware 2.8 no longer expect a reboot.
+Backups are keyed by the radio's device id so they survive the firmware 2.8 node renumbering; rows show node number and device id.
+Fix: a remote node's firmware version is stored on that node, not on your own radio.
+</en-US>
