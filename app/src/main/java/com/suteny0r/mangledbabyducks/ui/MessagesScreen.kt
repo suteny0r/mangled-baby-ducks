@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Groups
@@ -78,6 +79,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -113,6 +115,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.LinkInteractionListener
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 
@@ -907,6 +910,7 @@ private fun Bubble(
     onOpenMention: (Long) -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    val clipboard = LocalClipboardManager.current
     // MessageText: inline markdown, mentions as links, link runs tinted and tappable. On
     // our accent bubble the link is white like the rest of the text, underlined, since
     // the accent colour would vanish. A mention opens the node (handleURL's
@@ -971,6 +975,15 @@ private fun Bubble(
                     onReply()
                 },
             )
+            // MessageContextMenuItems "Copy": UIPasteboard.general.string = message.messagePayload.
+            DropdownMenuItem(
+                text = { Text("Copy") },
+                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                onClick = {
+                    menuOpen = false
+                    clipboard.setText(AnnotatedString(message.payload ?: ""))
+                },
+            )
             DropdownMenuItem(
                 text = { Text("Message Details") },
                 leadingIcon = { Icon(Icons.Outlined.Info, contentDescription = null) },
@@ -999,6 +1012,20 @@ private fun Bubble(
             )
         }
     }
+}
+
+/**
+ * TextMessageField.onChange: drop characters from the end until the UTF-8 size fits the
+ * 200-byte wire limit. The cursor lands at the end of the kept text, like dropLast() leaves it.
+ */
+private fun clampToWireLimit(value: TextFieldValue): TextFieldValue {
+    if (value.text.encodeToByteArray().size <= MeshProtocol.MAX_TEXT_BYTES) return value
+    var text = value.text
+    while (text.encodeToByteArray().size > MeshProtocol.MAX_TEXT_BYTES) {
+        // Drop a whole code point so a surrogate pair is never split.
+        text = text.substring(0, text.offsetByCodePoints(text.length, -1))
+    }
+    return value.copy(text = text, selection = TextRange(text.length))
 }
 
 /** One corner badge: the glyph knocked out of a filled green disc, as the SF palette style draws it. */
@@ -1320,8 +1347,11 @@ private fun Composer(
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { candidate ->
-                        // Enforce the 200-byte wire limit on UTF-8 size, not char count.
-                        if (candidate.text.encodeToByteArray().size <= MeshProtocol.MAX_TEXT_BYTES) onDraftChange(candidate)
+                        // Enforce the 200-byte wire limit on UTF-8 size, not char count. An edit
+                        // that overflows (a paste) is trimmed from the end until it fits, as
+                        // TextMessageField does with dropLast(); refusing it outright made a
+                        // long paste look like paste was broken.
+                        onDraftChange(clampToWireLimit(candidate))
                     },
                     modifier = Modifier.weight(1f).onFocusChanged { focused = it.isFocused },
                     placeholder = { Text("Message") },
