@@ -16,6 +16,51 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## External Notification module config (2026-10-09 22:30, verified on the phone)
+Port of `ExternalNotificationConfig.swift`: Settings gains a "Module Configuration" group
+(`ModuleSection` enum in `ConfigScreens.kt`, parallel to the LocalConfig `ConfigSection`) with
+one entry so far, External Notification. The form has the same three sections as upstream —
+Options (enabled, alert on bell/message, PWM/I2S buzzer mode), Primary GPIO (active high/low,
+output pin, output duration, nag timeout), Optional GPIO (the alerts and pins split out to the
+buzzer and vibra motor) — reusing the existing `ConfigSwitchRow`/`ConfigPickerRow`/
+`GpioPickerRow` row kit. `RadioManager.setModuleConfig` is a new standalone
+`set_module_config` admin write with no edit transaction, matching the Swift
+`saveExternalNotificationModuleConfig` family: none of the per-module saves wrap begin/commit,
+unlike the whole-section `setConfig` the LocalConfig forms use. `SettingsViewModel` reads it
+through a new `moduleConfigFlow` (same shape as `configFlow`, keyed `module.external_notification`)
+and writes it with `writeExternalNotificationConfig`, sharing the forms' `writeResult` line.
+New option lists in `ConfigEnums.kt`: `Intervals.nagTimeout` (seconds) and `OUTPUT_MS_INTERVALS`
+(milliseconds, `OutputIntervals.allCases` — note its 2/3/4-second steps don't fit the existing
+`intervalLabel` scale, hence the separate `outputMsLabel`). Verified on the phone against Ren
+Hoek (a Heltec V4 TFT, firmware 2.8.1): the form loaded the radio's real config (Enabled, Use
+PWM Buzzer, and the message-buzzer alert all already on, Buzzer GPIO 6), matching Device
+Config's buzzer GPIO. No write was made to the radio during this verification pass. Checked
+the GPIO fields against `meshtastic/firmware`'s `variants/esp32s3/heltec_v4/variant.h`: the
+board defines no buzzer/vibra pin at all, so GPIO 6 (used because Use PWM Buzzer makes the
+firmware fall back to Device Config's buzzer_gpio) is free and uncontested; GPIO 12 is
+`LORA_RESET` and must not be assigned to a notification output. The rest of Settings.swift's
+"Module Configuration" group (MQTT, Canned Messages, Serial, Store & Forward, Telemetry, ...)
+is a known gap.
+
+## Device Config: set timezone from phone (2026-10-09 21:30, verified on the phone)
+Port of AccessoryManager+FromRadio.swift's "Handle Timezone" step and `Extensions/TimeZone.swift`.
+On handshake, when the radio's `DeviceConfig.tzdef` comes back empty (fresh radio, or a NodeDB
+reset that wiped it), `RadioManager.saveTimeZoneIfEmpty` computes a POSIX TZ string from the
+phone's own `ZoneId` (`radio/PosixTimeZone.kt`, e.g. `EST5EDT,M3.2.0,M11.1.0`) and pushes it
+back as a standalone `setConfig` admin write, no edit transaction, same as `setFavorite` /
+`setIgnored` and matching the Swift original's own lack of a begin/commit bracket. Fired on
+the manager's scope (fire-and-forget) so a slow ack doesn't stall the rest of the handshake,
+mirroring the Swift `Task { ... }`. Faithful port of the DST-rule quirk too: the `Mm.n.d` rule
+is read off whichever occurrence of that weekday the *next* transition happens to land on, so
+a "last Sunday" zone can encode `.4.` instead of POSIX's `.5.` depending on the year, same as
+upstream. Verified against known-good POSIX strings for US Eastern/Pacific, UK, Germany,
+Sydney, Tokyo and UTC (javac smoke test), and on the phone: Ren Hoek's `DeviceConfig.tzdef`
+came back empty on connect, the app logged "Device Config timezone was empty, setting timezone
+to EST5EDT,M3.2.0/2:00:00,M11.1.0/2:00:00" (matching the phone's America/New_York zone), and
+the radio stayed Subscribed through the write with no reboot or disconnect. The Device config
+screen's own "Time Zone" row still read "unset" right after, which is expected: like every
+other LocalConfig form, it shows the locally cached row and only a fresh handshake refreshes it.
+
 ## Signed identity, Connect screen preset + Share Contact, message Copy/paste (2026-10-09 20:00, verified on the phone)
 Upstream catch-ups from the `8425daa6` clone:
 - **Signed identity** (`NodeSecurityIndicator.swift`, cde4b9ed/c4dda22e/0683a436/1c85e3ea/d648308b):

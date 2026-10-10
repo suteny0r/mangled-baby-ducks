@@ -50,7 +50,26 @@ object Intervals {
     val broadcastLong = listOf(10800, 14400, 18000, 21600, 43200, 64800, 86400, 129600, 172800, 259200, NEVER)
     val smartBroadcastMinimum = listOf(15, 30, 45, 60, 300, 600, 900, 1800, 3600)
     val waitBluetooth = listOf(0, 15, 30, 60, 120, 300, 600, 900, 1800)
+    /** IntervalConfiguration.nagTimeout: how long an External Notification alert repeats for. */
+    val nagTimeout = listOf(0, 1, 5, 10, 15, 30, 60)
 }
+
+/** OutputIntervals.allCases: ExternalNotificationConfig.output_ms's picker, in milliseconds. */
+fun outputMsLabel(ms: Int): String = when (ms) {
+    0 -> "Unset"
+    1000 -> "One Second"
+    2000 -> "Two Seconds"
+    3000 -> "Three Seconds"
+    4000 -> "Four Seconds"
+    5000 -> "Five Seconds"
+    10000 -> "Ten Seconds"
+    15000 -> "Fifteen Seconds"
+    30000 -> "Thirty Seconds"
+    60000 -> "One Minute"
+    else -> "Custom: ${ms} ms"
+}
+
+val OUTPUT_MS_INTERVALS: List<Int> = listOf(0, 1000, 2000, 3000, 4000, 5000, 10000, 15000, 30000, 60000)
 
 /** GpsUpdateIntervals. */
 val GPS_UPDATE_INTERVALS: List<Pair<Int, String>> = listOf(

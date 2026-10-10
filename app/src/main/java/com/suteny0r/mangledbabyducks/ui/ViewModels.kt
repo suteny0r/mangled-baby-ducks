@@ -47,6 +47,7 @@ import org.meshtastic.proto.ChannelProtos
 import org.meshtastic.proto.ConfigProtos
 import com.suteny0r.mangledbabyducks.db.MapNode
 import org.meshtastic.proto.MeshProtos
+import org.meshtastic.proto.ModuleConfigProtos
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ConnectViewModel(app: Application) : AndroidViewModel(app) {
@@ -725,6 +726,17 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     val securityConfig: StateFlow<ConfigProtos.Config.SecurityConfig?> =
         configFlow("config.security") { it.security }
 
+    /** Same idea as [configFlow], keyed off the module.<case> rows PacketIngest.moduleConfig writes. */
+    private fun <T> moduleConfigFlow(key: String, extract: (ModuleConfigProtos.ModuleConfig) -> T): StateFlow<T?> =
+        container.database.configDao().config(key)
+            .map { entity ->
+                entity?.let { runCatching { extract(ModuleConfigProtos.ModuleConfig.parseFrom(it.bytes)) }.getOrNull() }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val externalNotificationConfig: StateFlow<ModuleConfigProtos.ModuleConfig.ExternalNotificationConfig?> =
+        moduleConfigFlow("module.external_notification") { it.externalNotification }
+
     val myUser: StateFlow<UserEntity?> = container.radioManager.myNodeNum
         .flatMapLatest { num ->
             if (num == 0L) flowOf(null) else container.database.userDao().userFlow(num)
@@ -886,6 +898,19 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun writeSecurityConfig(security: ConfigProtos.Config.SecurityConfig) =
         writeConfig { setSecurity(security) }
+
+    /**
+     * saveExternalNotificationModuleConfig.swift: a standalone set_module_config admin write
+     * (RadioManager.setModuleConfig), sharing the same writeResult line the LocalConfig forms use.
+     */
+    fun writeExternalNotificationConfig(config: ModuleConfigProtos.ModuleConfig.ExternalNotificationConfig) {
+        viewModelScope.launch {
+            _writeResult.value = null
+            _writeResult.value = container.radioManager.setModuleConfig(
+                ModuleConfigProtos.ModuleConfig.newBuilder().setExternalNotification(config).build()
+            )
+        }
+    }
 
     private val _broadcastResult = MutableStateFlow<Boolean?>(null)
     val broadcastResult: StateFlow<Boolean?> = _broadcastResult.asStateFlow()

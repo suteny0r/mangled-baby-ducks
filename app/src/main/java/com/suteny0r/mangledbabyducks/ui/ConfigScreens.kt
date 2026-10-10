@@ -38,6 +38,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import org.meshtastic.proto.ConfigProtos
+import org.meshtastic.proto.ModuleConfigProtos
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
@@ -47,16 +48,23 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ListAlt
+import androidx.compose.material.icons.automirrored.outlined.Message
+import androidx.compose.material.icons.automirrored.outlined.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.UnfoldMore
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.Equalizer
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.MonitorHeart
+import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Repeat
+import androidx.compose.material.icons.outlined.Speaker
+import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
@@ -105,7 +113,8 @@ import androidx.compose.ui.text.style.TextAlign
 /**
  * The radio config sections this app can read and write, one screen each, mirroring the
  * "Radio Configuration" / "Device Configuration" lists in the iOS app's `Settings.swift`.
- * Module configs (`module.*`) are not here yet.
+ * Module configs (`module.*`) live in [ModuleSection] below; only External Notification is
+ * ported so far.
  */
 enum class ConfigSection(val title: String, val summary: String, val pageTitle: String = title) {
     LORA("LoRa", "Region, modem preset, hop limit, transmit", pageTitle = "LoRa Config"),
@@ -132,6 +141,24 @@ fun ConfigSectionDetail(section: ConfigSection, vm: SettingsViewModel, connected
         ConfigSection.NETWORK -> NetworkSection(vm, connected)
         ConfigSection.POWER -> PowerSection(vm, connected)
         ConfigSection.SECURITY -> SecuritySection(vm, connected)
+    }
+}
+
+/**
+ * Module config sections, mirroring Settings.swift's "Module Configuration" group. Only
+ * External Notification is ported; the rest of that group (MQTT, Canned Messages, Serial,
+ * Store & Forward, Telemetry, ...) stays a known gap.
+ */
+enum class ModuleSection(val title: String, val summary: String, val pageTitle: String = title) {
+    EXTERNAL_NOTIFICATION("External Notification", "Buzzer, LED and vibration alerts", pageTitle = "External Notification Config"),
+}
+
+/** One module config section's form. The caller supplies the header and back affordance. */
+@Composable
+fun ModuleSectionDetail(section: ModuleSection, vm: SettingsViewModel, connected: Boolean) {
+    LaunchedEffect(section) { vm.clearWriteResult() }
+    when (section) {
+        ModuleSection.EXTERNAL_NOTIFICATION -> ExternalNotificationSection(vm, connected)
     }
 }
 
@@ -1157,6 +1184,87 @@ private fun SecuritySection(vm: SettingsViewModel, connected: Boolean) {
                         Icon(Icons.Filled.Warning, contentDescription = null, tint = IosOrange, modifier = Modifier.size(18.dp))
                         Text("An admin key must be set before enabling managed mode.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 8.dp))
                     }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * ExternalNotificationConfig.swift: Options (enabled, alert on bell/message, PWM/I2S buzzer
+ * mode), Primary GPIO (active high/low, output pin, output duration, nag timeout), Optional
+ * GPIO (the same two alerts split out to the vibra and buzzer pins, plus their pins).
+ */
+@Composable
+private fun ExternalNotificationSection(vm: SettingsViewModel, connected: Boolean) {
+    val current by vm.externalNotificationConfig.collectAsState()
+    ConfigForm(current, connected, vm, vm::writeExternalNotificationConfig, header = configHeader(vm, connected), grouped = false) { draft, update ->
+        SectionHeader("Options", Modifier.padding(start = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column {
+                ConfigSwitchRow("External Notification Enabled", "Enable external notifications", draft.enabled, icon = Icons.Outlined.Campaign) {
+                    update(draft.toBuilder().setEnabled(it).build())
+                }
+                ConfigSwitchRow("Alert when receiving a bell", "Alert on bell character", draft.alertBell, icon = Icons.Outlined.NotificationsActive) {
+                    update(draft.toBuilder().setAlertBell(it).build())
+                }
+                ConfigSwitchRow("Alert when receiving a message", "Alert on incoming message", draft.alertMessage, icon = Icons.AutoMirrored.Outlined.Message) {
+                    update(draft.toBuilder().setAlertMessage(it).build())
+                }
+                ConfigSwitchRow(
+                    "Use PWM Buzzer",
+                    "Use a PWM output (like the RAK Buzzer) for tunes instead of an on/off output. This will ignore the output, output duration and active settings and use the device config buzzer GPIO option instead.",
+                    draft.usePwm, icon = Icons.AutoMirrored.Outlined.VolumeUp,
+                ) { update(draft.toBuilder().setUsePwm(it).build()) }
+                ConfigSwitchRow(
+                    "Use I2S As Buzzer",
+                    "Enables devices with native I2S audio output to use the RTTTL over speaker like a buzzer. T-Watch S3 and T-Deck for example have this capability.",
+                    draft.useI2SAsBuzzer, icon = Icons.Outlined.Speaker,
+                ) { update(draft.toBuilder().setUseI2SAsBuzzer(it).build()) }
+            }
+        }
+        SectionHeader("Primary GPIO", Modifier.padding(start = 4.dp, top = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column {
+                ConfigSwitchRow(
+                    "Active",
+                    "If enabled, the 'output' Pin will be pulled active high, disabled means active low.",
+                    draft.active, icon = Icons.Outlined.PowerSettingsNew,
+                ) { update(draft.toBuilder().setActive(it).build()) }
+                GpioPickerRow("Output pin GPIO", draft.output, "GPIO pin driven on notification. Defaults to the board's EXT_NOTIFY_OUT pin.") {
+                    update(draft.toBuilder().setOutput(it).build())
+                }
+                ConfigPickerRow(
+                    "GPIO Output Duration", outputMsLabel(draft.outputMs), OUTPUT_MS_INTERVALS,
+                    description = "In GPIO mode, how long to keep the output on.",
+                    label = ::outputMsLabel, icon = Icons.Outlined.Timer,
+                ) { update(draft.toBuilder().setOutputMs(it).build()) }
+                IntervalPickerRow(
+                    "Nag Timeout", draft.nagTimeout, Intervals.nagTimeout,
+                    description = "How long the notification lasts.", icon = Icons.Outlined.Repeat,
+                ) { update(draft.toBuilder().setNagTimeout(it).build()) }
+            }
+        }
+        SectionHeader("Optional GPIO", Modifier.padding(start = 4.dp, top = 4.dp))
+        GroupCard(Modifier.fillMaxWidth()) {
+            Column {
+                ConfigSwitchRow("Alert GPIO buzzer when receiving a bell", "Buzz on bell character", draft.alertBellBuzzer, icon = Icons.Outlined.NotificationsActive) {
+                    update(draft.toBuilder().setAlertBellBuzzer(it).build())
+                }
+                ConfigSwitchRow("Alert GPIO vibra motor when receiving a bell", "Vibrate on bell character", draft.alertBellVibra, icon = Icons.Outlined.Vibration) {
+                    update(draft.toBuilder().setAlertBellVibra(it).build())
+                }
+                ConfigSwitchRow("Alert GPIO buzzer when receiving a message", "Buzz on incoming message", draft.alertMessageBuzzer, icon = Icons.AutoMirrored.Outlined.Message) {
+                    update(draft.toBuilder().setAlertMessageBuzzer(it).build())
+                }
+                ConfigSwitchRow("Vibra Motor Alert", "Alert GPIO vibra motor when receiving a message", draft.alertMessageVibra, icon = Icons.Outlined.Vibration) {
+                    update(draft.toBuilder().setAlertMessageVibra(it).build())
+                }
+                GpioPickerRow("Output pin buzzer GPIO", draft.outputBuzzer, "Buzzer output pin") {
+                    update(draft.toBuilder().setOutputBuzzer(it).build())
+                }
+                GpioPickerRow("Output pin vibra GPIO", draft.outputVibra, "Vibration motor output pin") {
+                    update(draft.toBuilder().setOutputVibra(it).build())
                 }
             }
         }

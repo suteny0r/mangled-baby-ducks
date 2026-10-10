@@ -82,6 +82,7 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
     // Settings is a tab, not a nav graph, so a config section is a sub-screen held in
     // local state with the system back gesture wired to it.
     var section by rememberSaveable { mutableStateOf<ConfigSection?>(null) }
+    var moduleSection by rememberSaveable { mutableStateOf<ModuleSection?>(null) }
     // Remembered above the sub-screen early returns: state created below them leaves the
     // composition when a section opens, so the list would come back scrolled to the top.
     val listScroll = rememberScrollState()
@@ -133,6 +134,26 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                 Text(open.pageTitle, style = MaterialTheme.typography.headlineSmall)
             }
             ConfigSectionDetail(open, vm, connected)
+        }
+        return
+    }
+
+    moduleSection?.let { open ->
+        BackHandler { moduleSection = null }
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { moduleSection = null }) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                }
+                Text(open.pageTitle, style = MaterialTheme.typography.headlineSmall)
+            }
+            ModuleSectionDetail(open, vm, connected)
         }
         return
     }
@@ -223,6 +244,16 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                 ).forEach { (entry, icon) ->
                     RowDivider()
                     NavRow(entry.title, icon, entry.summary) { section = entry }
+                }
+            }
+
+            // Settings.swift "Module Configuration": only External Notification is ported
+            // so far; the rest of that group (MQTT, Canned Messages, Serial, ...) is a
+            // known gap.
+            SectionHeader("Module Configuration")
+            GroupCard {
+                NavRow(ModuleSection.EXTERNAL_NOTIFICATION.title, Icons.Outlined.Campaign, ModuleSection.EXTERNAL_NOTIFICATION.summary) {
+                    moduleSection = ModuleSection.EXTERNAL_NOTIFICATION
                 }
             }
 

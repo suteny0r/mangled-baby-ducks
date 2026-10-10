@@ -32,6 +32,7 @@ import org.meshtastic.proto.AppOnlyProtos
 import org.meshtastic.proto.ChannelProtos
 import org.meshtastic.proto.ConfigProtos
 import org.meshtastic.proto.MeshProtos
+import org.meshtastic.proto.ModuleConfigProtos
 import org.meshtastic.proto.Portnums
 import org.meshtastic.proto.StoreAndForwardProtos
 import org.meshtastic.proto.TelemetryProtos
@@ -501,8 +502,12 @@ class RadioManager(
             }
             MeshProtos.FromRadio.PayloadVariantCase.CHANNEL ->
                 ingest.channel(fromRadio.channel)
-            MeshProtos.FromRadio.PayloadVariantCase.CONFIG ->
+            MeshProtos.FromRadio.PayloadVariantCase.CONFIG -> {
                 ingest.config(fromRadio.config)
+                if (fromRadio.config.payloadVariantCase == ConfigProtos.Config.PayloadVariantCase.DEVICE) {
+                    saveTimeZoneIfEmpty(fromRadio.config.device)
+                }
+            }
             MeshProtos.FromRadio.PayloadVariantCase.MODULECONFIG ->
                 ingest.moduleConfig(fromRadio.moduleConfig)
             MeshProtos.FromRadio.PayloadVariantCase.METADATA -> {
@@ -757,6 +762,35 @@ class RadioManager(
         if (!sendAdmin { it.setBeginEditSettings(true) }) return false
         if (!sendAdmin { it.setSetConfig(config) }) return false
         return sendAdmin { it.setCommitEditSettings(true) }
+    }
+
+    /**
+     * AccessoryManager+ToRadio.swift's saveXModuleConfig methods (e.g.
+     * saveExternalNotificationModuleConfig): a single standalone set_module_config admin
+     * field, no edit transaction. Unlike the whole-section setConfig above, none of the
+     * Swift per-module config saves wrap begin/commit; the radio still saves and reboots
+     * on this one field, it just is not batched with any other write.
+     */
+    suspend fun setModuleConfig(config: ModuleConfigProtos.ModuleConfig): Boolean =
+        sendAdmin { it.setSetModuleConfig(config) }
+
+    /**
+     * AccessoryManager+FromRadio.swift "Handle Timezone": a DeviceConfig with an empty
+     * tzdef (a fresh radio, or one whose NodeDB reset wiped it) gets the phone's own POSIX
+     * timezone string pushed back as a standalone setConfig, no edit transaction, matching
+     * saveTimeZone in AccessoryManager+ToRadio.swift. Fired on the manager's scope so a slow
+     * ack does not stall the rest of the handshake, same as the Swift `Task { ... }`.
+     */
+    private fun saveTimeZoneIfEmpty(device: ConfigProtos.Config.DeviceConfig) {
+        if (device.tzdef.isNotEmpty()) return
+        val tzdef = runCatching { PosixTimeZone.current() }.getOrNull() ?: return
+        val config = ConfigProtos.Config.newBuilder()
+            .setDevice(device.toBuilder().setTzdef(tzdef).build())
+            .build()
+        scope.launch {
+            Log.i(TAG, "Device Config timezone was empty, setting timezone to $tzdef")
+            sendAdmin { it.setSetConfig(config) }
+        }
     }
 
     /**
