@@ -492,7 +492,7 @@ class RadioManager(
                 _identityReady.value = true
             }
             MeshProtos.FromRadio.PayloadVariantCase.NODE_INFO -> {
-                ingest.nodeInfo(fromRadio.nodeInfo)
+                ingest.nodeInfo(fromRadio.nodeInfo, connectedNodeNum = _myNodeNum.value)
                 nodeCount++
                 lastNodeInfoAt = System.currentTimeMillis()
                 if (_state.value is RadioState.RetrievingDatabase) {

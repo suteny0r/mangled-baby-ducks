@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TracerouteEntity::class,
         WaypointEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = false,
 )
 abstract class MeshDatabase : RoomDatabase() {

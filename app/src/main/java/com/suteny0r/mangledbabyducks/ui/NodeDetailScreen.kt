@@ -375,9 +375,22 @@ fun NodeDetailScreen(
                 }
                 RowDivider()
                 DetailRow(Icons.Outlined.Person, "User Id", userId)
-                if (node?.hasXeddsaSigned == true) {
-                    RowDivider()
-                    DetailRow(Icons.Filled.VerifiedUser, "Signed node", "Verified automatically", iconTint = IosGreen)
+                // NodeDetail trustRow: one row, the strongest that applies, resolved the way
+                // the node list resolves its glyph. Affirmative only: a node that has earned
+                // none of these gets no row.
+                when {
+                    isSelf -> {
+                        RowDivider()
+                        DetailRow(NodeSecurityIndicator.VERIFIED.icon, "Connected node", "This is your radio", iconTint = IosGreen)
+                    }
+                    node?.isKeyManuallyVerified == true -> {
+                        RowDivider()
+                        DetailRow(NodeSecurityIndicator.VERIFIED.icon, "Verified contact", "Verified in person", iconTint = IosGreen)
+                    }
+                    node?.hasXeddsaSigned == true -> {
+                        RowDivider()
+                        DetailRow(NodeSecurityIndicator.SIGNED.icon, "Signed node", "Verified by the radio", iconTint = IosGreen)
+                    }
                 }
                 val publicKey = user?.publicKey
                 if (publicKey != null && user.keyMatch) {
@@ -1114,9 +1127,9 @@ private fun NodeActions(
             if (muted) Icons.Outlined.NotificationsOff else Icons.Outlined.NotificationsNone,
             if (muted) "Unmute notifications" else "Mute notifications",
         ) { vm.setMute(nodeNum, !muted) }
-        if (entry?.user?.unmessagable == false) {
+        if (canShareContact(entry)) {
             RowDivider()
-            ActionRow(Icons.Outlined.QrCode2, "Share Contact QR") { shareQr.value = entry }
+            ActionRow(Icons.Outlined.QrCode2, "Share Contact") { shareQr.value = entry }
         }
         RowDivider()
         ActionRow(
@@ -1215,7 +1228,7 @@ private fun NodeActions(
         )
     }
     shareQr.value?.let { entry ->
-        ShareContactQRDialog(entry = entry, onDismiss = { shareQr.value = null })
+        ShareContactQRDialog(entry = entry, manuallyVerified = isSelf, onDismiss = { shareQr.value = null })
     }
 }
 
@@ -1226,11 +1239,18 @@ private fun NodeActions(
 private fun keyFingerprint(key: ByteArray): String =
     Base64.encodeToString(key, Base64.NO_WRAP).take(8) + "…"
 
+/** ShareContactQR.canShareContact: a public key on file and a channel to message on. */
+fun canShareContact(entry: NodeWithUser?): Boolean {
+    val user = entry?.user ?: return false
+    return !user.unmessagable && user.publicKey?.isNotEmpty() == true
+}
+
 /**
  * Build the meshtastic.org shared-contact URL: prefix + base64url of a
  * serialized SharedContact (admin.proto). Port of ShareContactQR.urlString.
  */
-fun shareContactUrl(entry: NodeWithUser): String {
+fun shareContactUrl(entry: NodeWithUser, manuallyVerified: Boolean): String {
+    if (!canShareContact(entry)) return ""
     val user = entry.user ?: return ""
     val contact = AdminProtos.SharedContact.newBuilder()
         .setNodeNum(entry.node.num.toInt())
@@ -1244,7 +1264,7 @@ fun shareContactUrl(entry: NodeWithUser): String {
                     user.publicKey?.let { setPublicKey(ByteString.copyFrom(it)) }
                 },
         )
-        .setManuallyVerified(false)
+        .setManuallyVerified(manuallyVerified)
         .build()
     val b64 = Base64.encodeToString(contact.toByteArray(), Base64.NO_PADDING)
         .replace('+', '-')
@@ -1257,12 +1277,12 @@ fun shareContactUrl(entry: NodeWithUser): String {
  * import this node as a contact.
  */
 @Composable
-private fun ShareContactQRDialog(entry: NodeWithUser, onDismiss: () -> Unit) {
+fun ShareContactQRDialog(entry: NodeWithUser, manuallyVerified: Boolean, onDismiss: () -> Unit) {
     val context = LocalContext.current
-    val url = remember(entry.node.num) { shareContactUrl(entry) }
+    val url = remember(entry.node.num, manuallyVerified) { shareContactUrl(entry, manuallyVerified) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Share Contact QR") },
+        title = { Text("Share Contact") },
         text = {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(entry.user?.longName ?: nodeNumString(entry.node.num), style = MaterialTheme.typography.titleMedium)

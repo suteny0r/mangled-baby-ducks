@@ -16,6 +16,33 @@ invariants worth not breaking. Read it first; this file is the session log on to
   (the user's Galaxy Note 20 Ultra).
 - There are still no tests of any kind in the repo; verification is on the phone.
 
+## Signed identity, Connect screen preset + Share Contact, message Copy/paste (2026-10-09 20:00, verified on the phone)
+Upstream catch-ups from the `8425daa6` clone:
+- **Signed identity** (`NodeSecurityIndicator.swift`, cde4b9ed/c4dda22e/0683a436/1c85e3ea/d648308b):
+  `ui/NodeSecurityIndicator.kt` picks one glyph per row: KEY_MISMATCH (red key-off) at any
+  version, VERIFIED (green person-in-shield) for the connected radio or
+  `NodeEntity.isKeyManuallyVerified`, SIGNED (green shield-check) when `hasXeddsaSigned` or the
+  stored firmware version is >= 2.8, else the old PUBLIC_KEY / SHARED_KEY locks. The node list
+  row uses it; node detail shows one trust row ("Connected node / This is your radio",
+  "Verified contact / Verified in person", "Signed node / Verified by the radio"). New
+  "Signed" filter chip ahead of Favorites (`NodesViewModel.signedOnly`). `isKeyManuallyVerified`
+  comes from the radio's node DB dump (`NodeInfo.is_key_manually_verified`); Room 8 -> 9.
+  `PacketIngest.nodeInfo(info, connectedNodeNum)` accepts the connected radio's own 32-byte
+  key as ground truth (`UserEntity.acceptOwnRadioPublicKey`), so a 2.8 upgrade or factory reset
+  no longer flags our own radio as a key mismatch forever. Seen: own row person-shield,
+  Spiney Norman (2.8.1) shield-check, pre-2.8 nodes keep locks, filter leaves 2 of 147.
+- **Connect screen** (07cbe18d, 994cb6a9/a854eee7/7a0017af, af890808, 654380cc): device box
+  shows "Preset: <label>" from `config.lora` (`ConnectViewModel.loraPreset`, "Custom" when
+  use_preset is off); long-press menu gained "Share Contact" between the node number and
+  Disconnect, gated by `canShareContact` (key on file + messagable) and re-checked at tap,
+  opening `ShareContactQRDialog(manuallyVerified = true)`. The swipe action was already the
+  red pill, and `ConnectViewModel.startScan` already overwrites a device entry per
+  advertisement, so name refresh needed nothing. Share Contact rows and dialog renamed from
+  "Share Contact QR" to match upstream; `shareContactUrl` now carries `manuallyVerified`
+  (true only for our own radio, as NodeDetail.swift passes it).
+- **Messages Copy/paste** (`046eb2a`): Copy item in the bubble menu between Reply and Message
+  Details; an over-limit edit (a long paste) is trimmed to 200 bytes instead of refused.
+
 ## 0.2.12 shipped (2026-10-09 13:35)
 Shipped as 0.2.12 (versionCode 14): composer toolbar and markdown, the eight config form
 ports, device-id backup keying, LoRa no-reboot, remote metadata fix, plus the composer

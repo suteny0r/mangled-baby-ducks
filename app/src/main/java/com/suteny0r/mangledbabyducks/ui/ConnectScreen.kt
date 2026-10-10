@@ -41,6 +41,8 @@ import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.SettingsInputAntenna
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Tag
+import androidx.compose.material.icons.outlined.QrCode2
+import com.suteny0r.mangledbabyducks.db.NodeWithUser
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
@@ -109,6 +111,8 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
     val lanDevices by vm.lanDevices.collectAsState()
     val bluetoothOff by vm.bluetoothOff.collectAsState()
     val identityReady by vm.identityReady.collectAsState()
+    val loraPreset by vm.loraPreset.collectAsState()
+    val myEntry by vm.myEntry.collectAsState()
 
     // isConnected || isConnecting on iOS: the device box owns the screen and the lists go.
     val idle = state is RadioState.Idle || state is RadioState.Failed
@@ -169,6 +173,8 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
                             rssi = linkRssi,
                             battery = if (live) myBattery else null,
                             firmware = if (live) myInfo?.firmwareVersion else null,
+                            preset = if (live) loraPreset else null,
+                            shareEntry = if (live) myEntry else null,
                             onDisconnect = vm::disconnect,
                             onShutdown = vm::shutdownConnectedRadio,
                         )
@@ -361,11 +367,14 @@ private fun ConnectedDeviceBox(
     rssi: Int?,
     battery: Int?,
     firmware: String?,
+    preset: String?,
+    shareEntry: NodeWithUser?,
     onDisconnect: () -> Unit,
     onShutdown: () -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
     var confirmShutdown by remember { mutableStateOf(false) }
+    var shareQr by remember { mutableStateOf(false) }
 
     Box {
         Row(
@@ -396,6 +405,7 @@ private fun ConnectedDeviceBox(
                     if (!tcp && rssi != null) BleSignalBars(rssi, width = 5.dp, height = 20.dp)
                 }
                 if (firmware != null) CalloutLine("Firmware Version: $firmware")
+                if (preset != null) CalloutLine("Preset: $preset")
                 when (state) {
                     is RadioState.Subscribed -> CalloutLine("Subscribed", IosGreen)
                     is RadioState.RetrievingDatabase ->
@@ -408,7 +418,7 @@ private fun ConnectedDeviceBox(
                 }
             }
         }
-        // Connect.swift .contextMenu: node number, Disconnect, Power Off.
+        // Connect.swift .contextMenu: node number, Share Contact, Disconnect, Power Off.
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(
                 text = { Text(nodeNum.toString()) },
@@ -416,6 +426,16 @@ private fun ConnectedDeviceBox(
                 enabled = false,
                 onClick = {},
             )
+            if (canShareContact(shareEntry)) {
+                DropdownMenuItem(
+                    text = { Text("Share Contact") },
+                    leadingIcon = { Icon(Icons.Outlined.QrCode2, contentDescription = null) },
+                    // Eligibility is re-checked at tap time: the menu condition ran when the
+                    // menu was built, and a node that loses its key in between would produce
+                    // a QR of an empty string.
+                    onClick = { menu = false; if (canShareContact(shareEntry)) shareQr = true },
+                )
+            }
             DropdownMenuItem(
                 text = { Text("Disconnect", color = IosRed) },
                 leadingIcon = { Icon(Icons.Default.LinkOff, contentDescription = null, tint = IosRed) },
@@ -442,6 +462,10 @@ private fun ConnectedDeviceBox(
                 TextButton(onClick = { confirmShutdown = false }) { Text("Cancel") }
             },
         )
+    }
+    // This menu only ever shows on the connected radio, which is verified by definition.
+    if (shareQr) {
+        shareEntry?.let { ShareContactQRDialog(entry = it, manuallyVerified = true, onDismiss = { shareQr = false }) }
     }
 }
 

@@ -110,7 +110,12 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
         db.myInfoDao().upsert(existing.copy(firmwareVersion = metadata.firmwareVersion))
     }
 
-    suspend fun nodeInfo(info: MeshProtos.NodeInfo) {
+    /**
+     * FromRadio.nodeInfo: one row of the connected radio's node DB dump. [connectedNodeNum]
+     * marks the radio's own row (MeshPackets.nodeInfoPacket's connectedNodeNum), whose key
+     * is accepted as ground truth rather than first-wins.
+     */
+    suspend fun nodeInfo(info: MeshProtos.NodeInfo, connectedNodeNum: Long? = null) {
         val num = info.num.uint()
         if (num == 0L) return
         val now = System.currentTimeMillis()
@@ -128,18 +133,19 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
                 favorite = info.isFavorite || (existing?.favorite ?: false),
                 ignored = existing?.ignored ?: false,
                 hasXeddsaSigned = (existing?.hasXeddsaSigned ?: false) || info.hasXeddsaSigned,
+                isKeyManuallyVerified = info.isKeyManuallyVerified,
                 nodeStatus = existing?.nodeStatus,
                 firmwareVersion = existing?.firmwareVersion,
             )
         )
-        if (info.hasUser()) upsertUser(num, info.user)
+        if (info.hasUser()) upsertUser(num, info.user, ownRadio = num == connectedNodeNum)
         if (info.hasPosition()) position(num, info.position, rxTime = info.lastHeard)
         if (info.hasDeviceMetrics()) {
             deviceMetrics(num, info.deviceMetrics, timeSec = info.lastHeard)
         }
     }
 
-    private suspend fun upsertUser(num: Long, user: MeshProtos.User) {
+    private suspend fun upsertUser(num: Long, user: MeshProtos.User, ownRadio: Boolean = false) {
         // A user must never exist without its node (see NodeDao.orphanUserNums): a bare
         // User broadcast on NODEINFO_APP is upsertNodeInfoPacket's "Mesh broadcast sends a
         // User protobuf" branch, which on iOS runs against a node row it created first.
@@ -150,6 +156,12 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
         val inboundKey = user.publicKey.toByteArray().takeIf { it.isNotEmpty() }
         val storedKey = existing?.publicKey
         val (key, keyMatch, newKey) = when {
+            // UserEntity.acceptOwnRadioPublicKey: the connected radio reporting its own user
+            // over the direct link is ground truth; there is no mesh hop to spoof. A 2.8
+            // upgrade or factory reset regenerates its keypair, and first-wins would flag the
+            // radio's own new key as a mismatch forever. Only a well-formed 32-byte key
+            // replaces the stored one and clears a recorded mismatch.
+            ownRadio && inboundKey != null && inboundKey.size == 32 -> Triple(inboundKey, true, null)
             inboundKey == null -> Triple(storedKey, existing?.keyMatch ?: true, existing?.newPublicKey)
             storedKey == null || storedKey.isEmpty() -> Triple(inboundKey, true, existing?.newPublicKey)
             storedKey.contentEquals(inboundKey) -> Triple(storedKey, true, existing?.newPublicKey)

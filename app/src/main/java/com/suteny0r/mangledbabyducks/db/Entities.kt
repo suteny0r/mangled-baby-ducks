@@ -25,6 +25,8 @@ data class NodeEntity(
     val ignored: Boolean = false,
     /** Latched true once any packet from this node arrived xeddsaSigned (never cleared). */
     val hasXeddsaSigned: Boolean = false,
+    /** NodeInfo.is_key_manually_verified from the radio's node DB: the key was verified in person. */
+    val isKeyManuallyVerified: Boolean = false,
     /** Last NODE_STATUS_APP message text, if any. */
     val nodeStatus: String? = null,
     val firmwareVersion: String? = null,

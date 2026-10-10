@@ -27,9 +27,6 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Hub
-import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Pets
@@ -127,6 +124,7 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
 
     val showIgnored by vm.showIgnored.collectAsState()
     val favoritesOnly by vm.favoritesOnly.collectAsState()
+    val signedOnly by vm.signedOnly.collectAsState()
     val search by vm.searchText.collectAsState()
     val batteryByNode by vm.batteryByNode.collectAsState()
     val positionByNode by vm.positionByNode.collectAsState()
@@ -143,6 +141,15 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
             placeholder = "Find a node",
         )
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            // NodeListFilter "Signed" toggle, ahead of Favorites as on iOS.
+            FilterChip(
+                selected = signedOnly,
+                onClick = { vm.signedOnly.value = !signedOnly },
+                label = { Text("Signed") },
+                leadingIcon = { Icon(NodeSecurityIndicator.SIGNED.icon, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+            Spacer(Modifier.width(8.dp))
             FilterChip(
                 selected = favoritesOnly,
                 onClick = { vm.favoritesOnly.value = !favoritesOnly },
@@ -160,7 +167,7 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
         if (nodes.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    if (search.isNotEmpty() || favoritesOnly || showIgnored) "No matching nodes"
+                    if (search.isNotEmpty() || favoritesOnly || signedOnly || showIgnored) "No matching nodes"
                     else "No nodes yet. Connect a radio.",
                     style = MaterialTheme.typography.bodyLarge,
                 )
@@ -242,17 +249,20 @@ private fun NodeRow(
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // PKI state (NodeListRowSummary.keyStatus): green lock when the key
-                    // matches, red when it doesn't, yellow open lock when unencrypted.
-                    val (keyIcon, keyTint) = when {
-                        user?.pkiEncrypted == true && user.keyMatch -> Icons.Filled.Lock to IosGreen
-                        user?.pkiEncrypted == true -> Icons.Filled.Key to IosRed
-                        else -> Icons.Filled.LockOpen to IosOrange
-                    }
+                    // NodeListRowSummary.keyStatus -> NodeSecurityIndicator: signing state on
+                    // 2.8 nodes, the PKI locks below that, a key mismatch at any version.
+                    val indicator = NodeSecurityIndicator.status(
+                        firmwareVersion = node.firmwareVersion,
+                        pkiEncrypted = user?.pkiEncrypted == true,
+                        keyMatch = user?.keyMatch != false,
+                        signed = node.hasXeddsaSigned,
+                        verified = node.isKeyManuallyVerified,
+                        isOwnNode = isSelf,
+                    )
                     IconAndText(
-                        icon = keyIcon,
+                        icon = indicator.icon,
                         text = user?.longName ?: "Node ${node.num}",
-                        iconTint = keyTint,
+                        iconTint = indicator.tint,
                         textColor = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.weight(1f),
                     )

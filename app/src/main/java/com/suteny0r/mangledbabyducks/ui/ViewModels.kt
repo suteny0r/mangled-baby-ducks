@@ -73,6 +73,19 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
         .map { it?.batteryLevel }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    /** Connect.swift presetName: the radio's LoRa preset, or "Custom" when use_preset is off. */
+    val loraPreset: StateFlow<String?> = container.database.configDao().config("config.lora")
+        .map { entity ->
+            entity?.let { runCatching { ConfigProtos.Config.parseFrom(it.bytes).lora }.getOrNull() }
+                ?.let { if (!it.usePreset) "Custom" else presetLabel(it.modemPreset) }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    /** Our own node row, for the device box's Share Contact menu item. */
+    val myEntry: StateFlow<NodeWithUser?> = radio.myNodeNum
+        .flatMapLatest { container.database.nodeDao().nodeWithUserFlow(it) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     private val _devices = MutableStateFlow<Map<String, DiscoveredDevice>>(emptyMap())
     val devices: StateFlow<Map<String, DiscoveredDevice>> = _devices.asStateFlow()
 
@@ -283,17 +296,21 @@ class NodesViewModel(app: Application) : AndroidViewModel(app) {
     /** Mirrors the iOS node list: ignored nodes are hidden unless shown, favorites can be isolated. */
     val showIgnored = MutableStateFlow(false)
     val favoritesOnly = MutableStateFlow(false)
+    /** NodeFilterParameters.isSigned: only nodes whose NodeInfo signature the radio verified. */
+    val signedOnly = MutableStateFlow(false)
     val searchText = MutableStateFlow("")
 
     // iOS NodeList display order: connected node first, then favorites,
     // then most-recently-heard.
     val nodes: StateFlow<List<NodeWithUser>> = combine(
-        showIgnored, favoritesOnly, searchText, container.radioManager.myNodeNum,
+        combine(showIgnored, favoritesOnly, signedOnly) { a, b, c -> Triple(a, b, c) },
+        searchText, container.radioManager.myNodeNum,
         container.database.nodeDao().nodesWithUsers()
-    ) { showIgnored, favoritesOnly, search, myNum, list ->
+    ) { (showIgnored, favoritesOnly, signedOnly), search, myNum, list ->
         val needle = search.trim().lowercase()
         list.asSequence()
             .filter { (showIgnored || !it.node.ignored) && (!favoritesOnly || it.node.favorite) }
+            .filter { !signedOnly || it.node.hasXeddsaSigned }
             .filter {
                 needle.isEmpty() || nodeMatches(it, needle)
             }
