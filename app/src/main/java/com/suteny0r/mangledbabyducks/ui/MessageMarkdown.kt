@@ -225,12 +225,16 @@ fun renderMessageMarkdown(
     linkColor: Color,
     codeBackground: Color,
     listener: LinkInteractionListener?,
-    /** MessagePreviewText: the list preview keeps the formatting but drops link styling. */
+    /**
+     * MessagePreviewText: the list preview keeps the formatting but drops link styling
+     * *and* tap targets, since a thread row's own tap (to open the conversation) would
+     * otherwise lose to a link span underneath it.
+     */
     linksAsText: Boolean = false,
 ): AnnotatedString {
     val text = MentionParser.resolveMentions(payload.filter { it.code >= 0x20 || it == '\n' }, nameFor)
     val linkStyle = if (linksAsText) TextLinkStyles(SpanStyle()) else TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))
-    return buildAnnotatedString { appendInline(text, linkStyle, codeBackground, listener) }
+    return buildAnnotatedString { appendInline(text, linkStyle, codeBackground, if (linksAsText) null else listener, linksActive = !linksAsText) }
 }
 
 private class Match(val start: Int, val end: Int, val kind: Char, val inner: String, val url: String = "")
@@ -256,29 +260,38 @@ private fun AnnotatedString.Builder.appendInline(
     linkStyle: TextLinkStyles,
     codeBackground: Color,
     listener: LinkInteractionListener?,
+    linksActive: Boolean = true,
 ) {
     var pos = 0
     while (pos < text.length) {
         val m = earliest(text, pos)
         if (m == null) {
-            appendPlain(text.substring(pos), linkStyle, listener)
+            appendPlain(text.substring(pos), linkStyle, listener, linksActive)
             break
         }
-        appendPlain(text.substring(pos, m.start), linkStyle, listener)
+        appendPlain(text.substring(pos, m.start), linkStyle, listener, linksActive)
         when (m.kind) {
             'c' -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = codeBackground)) { append(m.inner) }
-            'l' -> withLink(LinkAnnotation.Url(m.url, linkStyle, listener)) { appendInline(unescape(m.inner), linkStyle, codeBackground, null) }
-            'b' -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { appendInline(m.inner, linkStyle, codeBackground, listener) }
-            's' -> withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) { appendInline(m.inner, linkStyle, codeBackground, listener) }
-            'i' -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { appendInline(m.inner, linkStyle, codeBackground, listener) }
+            'l' -> if (linksActive) {
+                withLink(LinkAnnotation.Url(m.url, linkStyle, listener)) { appendInline(unescape(m.inner), linkStyle, codeBackground, null, linksActive) }
+            } else {
+                appendInline(unescape(m.inner), linkStyle, codeBackground, null, linksActive)
+            }
+            'b' -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { appendInline(m.inner, linkStyle, codeBackground, listener, linksActive) }
+            's' -> withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) { appendInline(m.inner, linkStyle, codeBackground, listener, linksActive) }
+            'i' -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { appendInline(m.inner, linkStyle, codeBackground, listener, linksActive) }
         }
         pos = m.end
     }
 }
 
 /** Plain text with backslash escapes removed and bare URLs (scheme or www.) made links. */
-private fun AnnotatedString.Builder.appendPlain(raw: String, linkStyle: TextLinkStyles, listener: LinkInteractionListener?) {
+private fun AnnotatedString.Builder.appendPlain(raw: String, linkStyle: TextLinkStyles, listener: LinkInteractionListener?, linksActive: Boolean = true) {
     val text = unescape(raw)
+    if (!linksActive) {
+        append(text)
+        return
+    }
     val matcher = Patterns.WEB_URL.matcher(text)
     var last = 0
     while (matcher.find()) {

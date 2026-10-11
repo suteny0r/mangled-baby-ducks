@@ -237,6 +237,14 @@ private fun ThreadList(
     val names by vm.namesByNum.collectAsState()
     val unreadChannels by vm.unreadChannels.collectAsState()
     val unreadDirect by vm.unreadDirect.collectAsState()
+    val positions by vm.positionByNode.collectAsState()
+    val here by vm.myLocation.collectAsState()
+    // UserList row caption: distance to the contact, when both sides have a position.
+    val distanceTo: (Long) -> String? = { num ->
+        val there = positions[num]
+        val from = here
+        if (there != null && from != null) formatDistance(haversineMeters(from.first, from.second, there.latitude, there.longitude)) else null
+    }
     // Messages.swift: the sidebar is two rows, Channels and Direct Messages, and each
     // opens its own list (ChannelList / UserList). The open section is hoisted to
     // MessagesScreen so a thread opened from it can come back to it.
@@ -325,6 +333,7 @@ private fun ThreadList(
                             preview = dmPreviews[user.num],
                             names = names,
                             muted = user.mute,
+                            distance = distanceTo(user.num),
                             onClick = { onOpen(ThreadTarget.Direct(user.num, name)) },
                             onDelete = if (dmPreviews[user.num] != null) {
                                 { pendingDelete = ThreadTarget.Direct(user.num, name) }
@@ -424,6 +433,8 @@ private fun ConversationRow(
     onClick: () -> Unit,
     onDelete: (() -> Unit)? = null,
     names: Map<Long, String> = emptyMap(),
+    /** UserList row caption: distance to the contact, under the avatar, when known. */
+    distance: String? = null,
 ) {
     // iOS row contextMenu: Delete Messages (destructive) when the thread has any.
     var menu by remember { mutableStateOf(false) }
@@ -454,7 +465,16 @@ private fun ConversationRow(
                 .background(if (unread) MaterialTheme.colorScheme.primary else Color.Transparent, CircleShape),
         )
         Spacer(Modifier.width(12.dp))
-        avatar()
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            avatar()
+            distance?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
