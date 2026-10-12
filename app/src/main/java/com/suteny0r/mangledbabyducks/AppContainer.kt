@@ -220,35 +220,34 @@ class AppContainer(context: Context) {
             ?: radioManager.deviceName.value
 
     /**
-     * `backupCurrentDatabase`: snapshot the current radio unless the target IS the current
-     * radio, in which case there is nothing to protect.
+     * `backupCurrentDatabase`: snapshot the current radio ahead of a store clear. Null
+     * when there is nothing to protect (no store owner, or the target IS the current
+     * radio); [BackupResult.Skipped] means the store holds data that could NOT be
+     * snapshotted, and the caller decides whether clearing is still acceptable.
      */
-    private suspend fun backupCurrentDatabase(targetNodeNum: Long?) {
+    private suspend fun backupCurrentDatabase(targetNodeNum: Long?): BackupResult? {
         val current = currentNodeNum()
-        when {
-            current == null -> Log.w(TAG, "No current node num, skipping backup")
-            current == targetNodeNum -> Log.i(TAG, "Skipping backup because the target is the active node")
+        return when {
+            current == null -> { Log.w(TAG, "No current node num, skipping backup"); null }
+            current == targetNodeNum -> { Log.i(TAG, "Skipping backup because the target is the active node"); null }
             else -> {
-                when (val result = backups.createBackup(current, currentDeviceId(current), currentNodeName(current))) {
+                val result = backups.createBackup(current, currentDeviceId(current), currentNodeName(current))
+                when (result) {
                     is BackupResult.Success -> Log.i(TAG, "Backup created: ${result.entry.fileSize} bytes for node $current")
                     is BackupResult.Skipped -> Log.w(TAG, "Backup skipped: ${result.reason}")
                     BackupResult.NoBackupFound -> Unit
                 }
+                result
             }
         }
     }
 
-    /**
-     * `backupCurrentAndRestoreDatabase`: back the current radio up, optionally drop the
-     * link, clear the whole store (always, so one radio's nodes never land on another's),
-     * and import the target's snapshot when there is one. The caller connects afterwards.
-     */
-    suspend fun backupCurrentAndRestore(
+    /** The clear-and-import tail of a switch or restore, run only once the backup gate passed. */
+    private suspend fun clearAndRestore(
         context: Context,
         targetNodeNum: Long?,
-        disconnectCurrentDevice: Boolean = false,
+        disconnectCurrentDevice: Boolean,
     ): BackupResult {
-        backupCurrentDatabase(targetNodeNum)
         if (disconnectCurrentDevice) {
             // A restore from Settings is a deliberate disconnect: the auto-connect target
             // goes too, or the next resume would reconnect the old radio and the foreign
@@ -262,21 +261,51 @@ class AppContainer(context: Context) {
     }
 
     /**
-     * `switchToDevice`: the user picked a radio other than the one the store belongs to.
-     * Records the choice as the auto-connect target at initiation (a failed switch must
-     * retry the radio the user asked for, not bounce back), disconnects, backs up, clears,
-     * restores, then hands control back to connect.
+     * `backupCurrentAndRestoreDatabase`: back the current radio up, optionally drop the
+     * link, clear the whole store (always, so one radio's nodes never land on another's),
+     * and import the target's snapshot when there is one. The caller connects afterwards.
+     * A failed backup of the current store aborts before anything is touched unless
+     * [force]; the Skipped it returns then describes the backup, not the restore.
      */
-    suspend fun switchRadio(context: Context, type: String, address: String, name: String?) {
+    suspend fun backupCurrentAndRestore(
+        context: Context,
+        targetNodeNum: Long?,
+        disconnectCurrentDevice: Boolean = false,
+        force: Boolean = false,
+    ): BackupResult {
+        val backup = backupCurrentDatabase(targetNodeNum)
+        if (!force && backup is BackupResult.Skipped) {
+            return BackupResult.Skipped("The current radio could not be backed up, so its data was left in place. ${backup.reason}")
+        }
+        return clearAndRestore(context, targetNodeNum, disconnectCurrentDevice)
+    }
+
+    /**
+     * `switchToDevice`: the user picked a radio other than the one the store belongs to.
+     * The backup gate runs before anything changes: a store that cannot be snapshotted is
+     * not cleared, the link and the auto-connect target stay as they were (remembering the
+     * target first would let the next resume finish the switch without the snapshot), and
+     * the reason is returned for the caller to surface, with [force] as the explicit
+     * override. On a null return the switch completed: the choice is recorded as the
+     * auto-connect target (a failed connect must retry the radio the user asked for, not
+     * bounce back), the link dropped, the store cleared and the target's snapshot restored.
+     */
+    suspend fun switchRadio(context: Context, type: String, address: String, name: String?, force: Boolean = false): String? {
         val targetNodeNum = backups.resolveNodeNum(address)
         Log.i(TAG, "Node switch: current ${currentNodeNum()} (${currentRadioAddress()}), target ${targetNodeNum ?: "unknown"} ($address)")
+        val backup = backupCurrentDatabase(targetNodeNum)
+        if (!force && backup is BackupResult.Skipped) {
+            Log.w(TAG, "Switch to $address refused: ${backup.reason}")
+            return backup.reason
+        }
         rememberRadio(type, address, name)
         if (radioManager.isConnected) radioManager.disconnect()
-        when (val result = backupCurrentAndRestore(context, targetNodeNum)) {
+        when (val result = clearAndRestore(context, targetNodeNum, disconnectCurrentDevice = false)) {
             is BackupResult.Success -> Log.i(TAG, "Backup restored for target node $targetNodeNum")
             is BackupResult.Skipped -> Log.w(TAG, "Restore skipped: ${result.reason}")
             BackupResult.NoBackupFound -> Log.i(TAG, "No backup for target node ${targetNodeNum ?: "unknown"}; radio will populate fresh data")
         }
+        return null
     }
 
     /**
@@ -297,14 +326,20 @@ class AppContainer(context: Context) {
 
     /**
      * Explicit reconnect to a saved radio (the car's Reconnect button and the phone's
-     * failed-state retry): bypasses the one-attempt auto-connect budget.
+     * failed-state retry): bypasses the one-attempt auto-connect budget. Returns the
+     * backup gate's refusal reason when a required switch was aborted, null otherwise;
+     * connecting anyway would just trip the foreign-store guard into the clear the gate
+     * refused, so the connect is skipped too.
      */
-    suspend fun connectKnown(context: Context, target: RememberedRadio) {
-        val factory = connectionFactory(target) ?: return
-        if (isSwitch(target.address)) switchRadio(context, target.type, target.address, target.name)
+    suspend fun connectKnown(context: Context, target: RememberedRadio, force: Boolean = false): String? {
+        val factory = connectionFactory(target) ?: return null
+        if (isSwitch(target.address)) {
+            switchRadio(context, target.type, target.address, target.name, force)?.let { return it }
+        }
         runCatching { RadioService.start(context, target.label) }
         runCatching { radioManager.connect(target.label, presenceProbe(target), target.address, factory) }
         if (radioManager.isConnected) rememberRadio(target.type, target.address, target.name)
+        return null
     }
 
     /**

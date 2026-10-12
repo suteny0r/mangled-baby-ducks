@@ -114,6 +114,29 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
     val loraPreset by vm.loraPreset.collectAsState()
     val nodeDbCount by vm.nodeDbCount.collectAsState()
     val myEntry by vm.myEntry.collectAsState()
+    val blockedSwitch by vm.blockedSwitch.collectAsState()
+
+    // The backup gate refused a switch: the current radio's store could not be
+    // snapshotted, so nothing was touched. Switching anyway is an explicit choice.
+    blockedSwitch?.let { blocked ->
+        AlertDialog(
+            onDismissRequest = vm::dismissBlockedSwitch,
+            title = { Text("Switch without backup?") },
+            text = {
+                Text(
+                    "The current radio could not be backed up: ${blocked.reason}\n\n" +
+                        "Switching to ${blocked.label} now will clear this radio's " +
+                        "messages and nodes, and they will not come back when you switch back."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = vm::forceBlockedSwitch) { Text("Switch anyway") }
+            },
+            dismissButton = {
+                TextButton(onClick = vm::dismissBlockedSwitch) { Text("Cancel") }
+            },
+        )
+    }
 
     // isConnected || isConnecting on iOS: the device box owns the screen and the lists go.
     val idle = state is RadioState.Idle || state is RadioState.Failed

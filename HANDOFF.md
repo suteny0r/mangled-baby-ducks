@@ -9,6 +9,24 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## Switch backup gate: a failed snapshot aborts the radio switch (2026-10-12, refusal path untested on hardware)
+`backupCurrentAndRestore` used to log a failed snapshot of the current radio and clear the
+store anyway, destroying the data the round trip (switch away, later switch back) exists to
+preserve. Now `AppContainer.backupCurrentDatabase` returns the result, and a `Skipped` gates
+everything: `switchRadio` returns the refusal reason BEFORE `rememberRadio`/disconnect (an
+aborted switch must leave the auto-connect target alone or the next resume finishes the
+switch without the snapshot), `connectKnown` skips the connect too (connecting would trip the
+PacketIngest foreign-store guard into the same clear), and `backupCurrentAndRestore` returns
+the refusal as a `Skipped` that BackupManagementScreen's existing "Restore Failed" dialog
+shows. The three ConnectViewModel paths (connectBle/connectTcp/connectKnown) surface a
+refusal as `blockedSwitch`, an AlertDialog on the Connect tab with "Switch anyway" that
+re-runs the same connect with `force = true`. The car's connectKnown ignores the returned
+reason: a blocked switch from the head unit silently stays on the current radio (logged).
+Verified: build + normal reconnect/reconcile regression on the phone. The refusal path has
+not been exercised on hardware (needs an induced backup failure, e.g. storage under the
+50 MB floor); the pass-through path ran live. The PacketIngest myInfo foreign-store guard
+stays ungated as the last-resort correctness fallback for connects that bypass switchRadio.
+
 ## NodeDB mirror: store follows the radio's node cap (2026-10-12, NOT yet verified on the phone)
 Diagnosis first: the firmware NodeDB is a fixed-size cache (~80-100 slots by platform) over a
 mesh of 180-250+ nodes, and the app implemented its insert path but never its evict path

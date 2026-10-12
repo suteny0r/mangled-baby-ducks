@@ -199,14 +199,40 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { runCatching { radio.sendNodeShutdown(num) } }
     }
 
-    fun connectBle(device: DiscoveredDevice) {
+    /**
+     * A switch the backup gate refused: the current store could not be snapshotted, so
+     * nothing was cleared or connected. The Connect tab shows it as a dialog whose
+     * "Switch anyway" re-runs [retry] with the gate forced.
+     */
+    data class BlockedSwitch(val label: String, val reason: String, val retry: () -> Unit)
+
+    private val _blockedSwitch = MutableStateFlow<BlockedSwitch?>(null)
+    val blockedSwitch: StateFlow<BlockedSwitch?> = _blockedSwitch.asStateFlow()
+
+    fun dismissBlockedSwitch() {
+        _blockedSwitch.value = null
+    }
+
+    fun forceBlockedSwitch() {
+        val blocked = _blockedSwitch.value ?: return
+        _blockedSwitch.value = null
+        blocked.retry()
+    }
+
+    fun connectBle(device: DiscoveredDevice, force: Boolean = false) {
         scanJob?.cancel()
         _scanning.value = false
         viewModelScope.launch {
             // Connect.swift performRadioSwitch: a different radio than the store holds is
-            // backed up, cleared and restored before the link is made.
+            // backed up, cleared and restored before the link is made. A refused backup
+            // aborts the whole connect: proceeding would just trip the foreign-store
+            // guard into the clear the gate refused.
             if (container.isSwitch(device.id)) {
-                container.switchRadio(getApplication(), "ble", device.id, device.name)
+                val refused = container.switchRadio(getApplication(), "ble", device.id, device.name, force)
+                if (refused != null) {
+                    _blockedSwitch.value = BlockedSwitch(device.name, refused) { connectBle(device, force = true) }
+                    return@launch
+                }
             }
             RadioService.start(getApplication(), device.name)
             runCatching {
@@ -216,11 +242,15 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun connectTcp(host: String, port: Int) {
+    fun connectTcp(host: String, port: Int, force: Boolean = false) {
         viewModelScope.launch {
             val address = "$host:$port"
             if (container.isSwitch(address)) {
-                container.switchRadio(getApplication(), "tcp", address, host)
+                val refused = container.switchRadio(getApplication(), "tcp", address, host, force)
+                if (refused != null) {
+                    _blockedSwitch.value = BlockedSwitch(host, refused) { connectTcp(host, port, force = true) }
+                    return@launch
+                }
             }
             RadioService.start(getApplication(), host)
             runCatching {
@@ -253,7 +283,7 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
         Log.w("ConnectViewModel", "connect requested for unknown radio $key")
     }
 
-    fun connectKnown(saved: RememberedRadio) {
+    fun connectKnown(saved: RememberedRadio, force: Boolean = false) {
         scanJob?.cancel()
         _scanning.value = false
         // A radio seen by the scan advertises its current name; the saved entry keeps the
@@ -263,7 +293,11 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val factory = container.connectionFactory(target) ?: return@launch
             if (container.isSwitch(target.address)) {
-                container.switchRadio(getApplication(), target.type, target.address, target.name)
+                val refused = container.switchRadio(getApplication(), target.type, target.address, target.name, force)
+                if (refused != null) {
+                    _blockedSwitch.value = BlockedSwitch(target.label, refused) { connectKnown(saved, force = true) }
+                    return@launch
+                }
             }
             RadioService.start(getApplication(), target.label)
             runCatching {
