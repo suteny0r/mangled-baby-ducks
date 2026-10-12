@@ -71,6 +71,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.suteny0r.mangledbabyducks.container
 import com.suteny0r.mangledbabyducks.db.NodeWithUser
+import com.suteny0r.mangledbabyducks.db.nodeNumString
 import com.suteny0r.mangledbabyducks.ui.theme.IosGreen
 import com.suteny0r.mangledbabyducks.ui.theme.IosOrange
 import com.suteny0r.mangledbabyducks.ui.theme.IosRed
@@ -115,7 +116,7 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
             onMessage = {
                 val entry = nodes.find { it.node.num == num }
                 router.openThread(
-                    ThreadTarget.Direct(num, entry?.user?.longName ?: "Node $num")
+                    ThreadTarget.Direct(num, entry?.user?.longName ?: nodeNumString(num))
                 )
             },
         )
@@ -194,7 +195,7 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
                             router.openThread(
                                 ThreadTarget.Direct(
                                     entry.node.num,
-                                    entry.user?.longName ?: "Node ${entry.node.num}",
+                                    entry.user?.longName ?: nodeNumString(entry.node.num),
                                 )
                             )
                         },
@@ -261,7 +262,7 @@ private fun NodeRow(
                     )
                     IconAndText(
                         icon = indicator.icon,
-                        text = user?.longName ?: "Node ${node.num}",
+                        text = user?.longName ?: nodeNumString(node.num),
                         iconTint = indicator.tint,
                         textColor = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.weight(1f),

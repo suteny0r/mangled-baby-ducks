@@ -82,6 +82,9 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    /** The radio's NodeDB occupancy, its effective node cap once the mesh outgrows it. */
+    val nodeDbCount: StateFlow<Int> = radio.nodeDbCount
+
     /** Our own node row, for the device box's Share Contact menu item. */
     val myEntry: StateFlow<NodeWithUser?> = radio.myNodeNum
         .flatMapLatest { container.database.nodeDao().nodeWithUserFlow(it) }

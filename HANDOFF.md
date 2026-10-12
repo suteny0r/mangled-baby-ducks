@@ -9,6 +9,43 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## NodeDB mirror: store follows the radio's node cap (2026-10-12, NOT yet verified on the phone)
+Diagnosis first: the firmware NodeDB is a fixed-size cache (~80-100 slots by platform) over a
+mesh of 180-250+ nodes, and the app implemented its insert path but never its evict path
+(`updateFromAnyPacket` mints a `NodeEntity` for every packet sender; nothing ever deleted one).
+The store diverged into a superset of the radio: on the phone's own GAT562 store, 182 node rows
+vs 135 user rows, 47 nameless "Unknown" nodes the radio had evicted (`Ren Hoek !919f9b44` and
+`DayZ !561dffb6` among them, both named in the other radios' snapshots). Rows the radio evicted
+are also functionally dead for DMs: the radio holds no key for them (that is what the error-39
+`healPkiFailure` path repairs).
+
+The fix mirrors firmware eviction (no Swift counterpart; iOS does not do this):
+- **Connect-time reconcile** (`PacketIngest.reconcileNodeDb`): the wantConfig node-DB dump is the
+  radio's complete NodeDB, so `RadioManager` collects the dump's node nums (`dumpNodeNums`,
+  armed in establish step 5 and in `refreshAfterLoRaChange`) and the `CONFIG_COMPLETE_ID`
+  handler launches a reconcile: node+user rows absent from the dump are deleted together
+  (deleting only nodes would let the connect-time orphan-user healer resurrect them).
+- **Protected classes** (`NodeDao.protectedNums`) that ride above the mirror: favorites, ignored,
+  manually verified keys, any node with message history (deleting one renames its thread to a
+  hex id), and anything heard since the dump started. A kept user row doubles as key escrow for
+  `add_contact` re-teaching.
+- **Between-dump cap** (`PacketIngest.enforceNodeCapacity`): minting a new row past
+  `nodeDbCapacity` evicts the oldest-heard unprotected rows, firmware's own policy.
+- **Capacity source**: `MyNodeInfo.nodedb_count` (proto field 15, 2.6+ firmware), else the dump
+  row count; the platform cap itself is not on the wire, but a saturated NodeDB sits pinned at
+  it. Exposed as `RadioManager.nodeDbCount` and shown on the Connect card ("Node DB: N nodes").
+  Kept out of the Room schema deliberately: a version bump + `fallbackToDestructiveMigration`
+  would destroy old-schema backups in the restore staging path.
+- Nameless fallbacks now render the mesh-convention hex id (`nodeNumString`) instead of
+  "Node <decimal>"/"Unknown" in NodesScreen and the Messages contact rows.
+Still to do when the phone is back on USB: install the build, reconnect, confirm the reconcile
+log line (`NodeDB reconcile: dropped ...`) and that the node list settles near the radio's
+count. The user's practical remedy for keeping distant friends named: favorite them, which
+`setFavorite` pushes to the radio and firmware then exempts from eviction.
+Lint note: `:app:lintDebug` fails on 9 pre-existing errors (xeddsa `BigInteger.TWO` NewApi x2,
+`notifyObserversByTableNames` RestrictedApi, six old `produceState` patterns), none from this
+change.
+
 ## Build / run
 - PowerShell: `& .\gradlew.bat :app:assembleDebug` (JDK: Android Studio JBR via
   `org.gradle.java.home` in gradle.properties; SDK path in local.properties).

@@ -112,6 +112,7 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
     val bluetoothOff by vm.bluetoothOff.collectAsState()
     val identityReady by vm.identityReady.collectAsState()
     val loraPreset by vm.loraPreset.collectAsState()
+    val nodeDbCount by vm.nodeDbCount.collectAsState()
     val myEntry by vm.myEntry.collectAsState()
 
     // isConnected || isConnecting on iOS: the device box owns the screen and the lists go.
@@ -174,6 +175,7 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
                             battery = if (live) myBattery else null,
                             firmware = if (live) myInfo?.firmwareVersion else null,
                             preset = if (live) loraPreset else null,
+                            nodeDbCount = if (live) nodeDbCount else 0,
                             shareEntry = if (live) myEntry else null,
                             onDisconnect = vm::disconnect,
                             onShutdown = vm::shutdownConnectedRadio,
@@ -368,6 +370,7 @@ private fun ConnectedDeviceBox(
     battery: Int?,
     firmware: String?,
     preset: String?,
+    nodeDbCount: Int,
     shareEntry: NodeWithUser?,
     onDisconnect: () -> Unit,
     onShutdown: () -> Unit,
@@ -406,6 +409,9 @@ private fun ConnectedDeviceBox(
                 }
                 if (firmware != null) CalloutLine("Firmware Version: $firmware")
                 if (preset != null) CalloutLine("Preset: $preset")
+                // MyNodeInfo.nodedb_count: on a mesh bigger than the platform's node cap
+                // the radio's NodeDB sits pinned at the cap, so this is the effective limit.
+                if (nodeDbCount > 0) CalloutLine("Node DB: $nodeDbCount nodes")
                 when (state) {
                     is RadioState.Subscribed -> CalloutLine("Subscribed", IosGreen)
                     is RadioState.RetrievingDatabase ->

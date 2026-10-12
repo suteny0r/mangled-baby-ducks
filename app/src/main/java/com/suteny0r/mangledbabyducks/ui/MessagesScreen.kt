@@ -324,7 +324,7 @@ private fun ThreadList(
                         }
                     }
                     items(contacts, key = { "u${it.num}" }) { user ->
-                        val name = user.longName ?: "Node ${user.num}"
+                        val name = user.longName ?: user.userId ?: nodeNumString(user.num)
                         ConversationRow(
                             unread = user.num in unreadDmSet,
                             avatar = { NodeAvatar(user.shortName, user.num, 46.dp) },
@@ -1347,7 +1347,7 @@ private fun Composer(
                         ) {
                             NodeAvatar(user.shortName, user.num, 36.dp)
                             Column {
-                                Text(user.longName ?: "Unknown", style = MaterialTheme.typography.bodyLarge)
+                                Text(user.longName ?: user.userId ?: nodeNumString(user.num), style = MaterialTheme.typography.bodyLarge)
                                 user.userId?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                             }
                         }

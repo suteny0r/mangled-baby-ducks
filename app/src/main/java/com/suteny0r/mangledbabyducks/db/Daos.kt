@@ -42,6 +42,42 @@ interface NodeDao {
     @Query("DELETE FROM nodes WHERE num = :num")
     suspend fun delete(num: Long)
 
+    @Query("SELECT num FROM nodes")
+    suspend fun allNums(): List<Long>
+
+    /**
+     * Nodes the NodeDB mirror (PacketIngest.reconcileNodeDb) must never remove: rows
+     * carrying user-set state (favorite, ignored, a manually verified key), rows with
+     * message history (removal would strip the thread's name down to a hex id), and rows
+     * heard since [heardSinceMs] (a node heard mid-handshake is on the radio even when
+     * the dump streamed past it before it was added).
+     */
+    @Query(
+        "SELECT num FROM nodes WHERE favorite = 1 OR ignored = 1 OR isKeyManuallyVerified = 1 " +
+            "OR COALESCE(lastHeard, 0) >= :heardSinceMs " +
+            "OR EXISTS(SELECT 1 FROM messages m WHERE m.fromNum = nodes.num OR m.toNum = nodes.num)"
+    )
+    suspend fun protectedNums(heardSinceMs: Long): List<Long>
+
+    /** How many rows the between-dump eviction may count against the radio's capacity. */
+    @Query(
+        "SELECT COUNT(*) FROM nodes WHERE favorite = 0 AND ignored = 0 AND isKeyManuallyVerified = 0 " +
+            "AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.fromNum = nodes.num OR m.toNum = nodes.num)"
+    )
+    suspend fun evictableCount(): Int
+
+    /** Eviction order between dumps: oldest-heard first, firmware NodeDB's own policy. */
+    @Query(
+        "SELECT num FROM nodes WHERE favorite = 0 AND ignored = 0 AND isKeyManuallyVerified = 0 " +
+            "AND num != :selfNum " +
+            "AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.fromNum = nodes.num OR m.toNum = nodes.num) " +
+            "ORDER BY COALESCE(lastHeard, firstHeard, 0) ASC LIMIT :limit"
+    )
+    suspend fun oldestEvictableNums(selfNum: Long, limit: Int): List<Long>
+
+    @Query("DELETE FROM nodes WHERE num IN (:nums)")
+    suspend fun deleteIn(nums: List<Long>)
+
     @Query("UPDATE nodes SET favorite = :favorite WHERE num = :num")
     suspend fun setFavorite(num: Long, favorite: Boolean)
 
@@ -96,6 +132,9 @@ interface UserDao {
 
     @Query("DELETE FROM users WHERE num = :num")
     suspend fun delete(num: Long)
+
+    @Query("DELETE FROM users WHERE num IN (:nums)")
+    suspend fun deleteIn(nums: List<Long>)
 
     @Query("DELETE FROM users")
     suspend fun clear()

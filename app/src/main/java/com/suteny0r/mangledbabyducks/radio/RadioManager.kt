@@ -36,6 +36,7 @@ import org.meshtastic.proto.ModuleConfigProtos
 import org.meshtastic.proto.Portnums
 import org.meshtastic.proto.StoreAndForwardProtos
 import org.meshtastic.proto.TelemetryProtos
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.random.Random
 
@@ -141,6 +142,10 @@ class RadioManager(
             runCatching { send { it.setWantConfigId(MeshProtocol.NONCE_ONLY_CONFIG) } }
             kotlinx.coroutines.delay(2_000)
             if (_state.value is RadioState.Subscribed) {
+                // A full dump follows, so arm the same reconcile collector as step 5 of
+                // the handshake; the new modem settings change who the radio hears.
+                dumpStartedMs = System.currentTimeMillis()
+                dumpNodeNums = ConcurrentHashMap.newKeySet()
                 runCatching { send { it.setWantConfigId(MeshProtocol.NONCE_ONLY_DB) } }
             }
         }
@@ -159,12 +164,27 @@ class RadioManager(
     private val _linkRssi = MutableStateFlow<Int?>(null)
     val linkRssi: StateFlow<Int?> = _linkRssi.asStateFlow()
 
+    /**
+     * MyNodeInfo.nodedb_count: how many nodes the radio's NodeDB holds, reported at each
+     * handshake. The platform's node cap itself is not on the wire, but on a mesh larger
+     * than the cap the NodeDB sits pinned at it, so this is the effective limit the
+     * store mirrors. 0 until a handshake reports one (pre-2.6 firmware never does).
+     */
+    private val _nodeDbCount = MutableStateFlow(0)
+    val nodeDbCount: StateFlow<Int> = _nodeDbCount.asStateFlow()
+
     /** Inbound messages worth notifying about (already stored). */
     val incomingMessages = MutableSharedFlow<MessageEntity>(extraBufferCapacity = 64)
 
     private val configCompleteIds = MutableSharedFlow<Long>(extraBufferCapacity = 16)
     /** When the last NodeInfo of the dump landed, to time the radio's trailing CONFIG_COMPLETE. */
     private var lastNodeInfoAt = 0L
+    /**
+     * Node nums streamed by an in-flight node DB dump, collected for the store reconcile
+     * (PacketIngest.reconcileNodeDb) that its CONFIG_COMPLETE triggers; null outside a dump.
+     */
+    @Volatile private var dumpNodeNums: MutableSet<Long>? = null
+    @Volatile private var dumpStartedMs = 0L
 
     private var connection: RadioConnection? = null
     private var eventJob: Job? = null
@@ -361,6 +381,11 @@ class RadioManager(
             if (gen != requestGeneration) throw RadioException("Superseded by a newer request")
             _state.value = RadioState.Communicating
 
+            // A new session's node cap comes from its own MyNodeInfo; the previous
+            // radio's must not evict against a store just restored for this one.
+            ingest.nodeDbCapacity = 0
+            _nodeDbCount.value = 0
+
             // Step 3: wantConfig handshake — the radio streams config then echoes the nonce.
             sendHeartbeat()
             // The drain is a loop that reads FROMRADIO until a zero-length read, and it is
@@ -373,9 +398,13 @@ class RadioManager(
                 scope.launch { conn.startDrainPendingPackets() }
             }
 
-            // Step 5: node DB dump under the second nonce.
+            // Step 5: node DB dump under the second nonce. The dump is the radio's whole
+            // NodeDB, so its node nums are collected and the completion handler reconciles
+            // the store against them (see CONFIG_COMPLETE_ID in processFromRadio).
             nodeCount = 0
             lastNodeInfoAt = 0L
+            dumpStartedMs = System.currentTimeMillis()
+            dumpNodeNums = ConcurrentHashMap.newKeySet()
             _state.value = RadioState.RetrievingDatabase(0)
             awaitConfigComplete(MeshProtocol.NONCE_ONLY_DB.toLong(), timeoutMs = 120_000, lost = lost) {
                 send { it.setWantConfigId(MeshProtocol.NONCE_ONLY_DB) }
@@ -408,6 +437,7 @@ class RadioManager(
             if (conn.requiresPeriodicHeartbeat) startPeriodicHeartbeat()
         } catch (e: Exception) {
             Log.w(TAG, "Establish failed: ${e.message}")
+            dumpNodeNums = null
             eventJob?.cancel()
             runCatching { conn.disconnect() }
             if (connection === conn) connection = null
@@ -490,10 +520,12 @@ class RadioManager(
                 val idBytes = fromRadio.myInfo.deviceId.toByteArray()
                 _deviceId.value = if (idBytes.isEmpty()) null else idBytes.joinToString("") { "%02x".format(it) }
                 _myNodeNum.value = ingest.myInfo(fromRadio.myInfo, _deviceName.value, lastAddress, _deviceId.value)
+                if (fromRadio.myInfo.nodedbCount > 0) _nodeDbCount.value = fromRadio.myInfo.nodedbCount
                 _identityReady.value = true
             }
             MeshProtos.FromRadio.PayloadVariantCase.NODE_INFO -> {
                 ingest.nodeInfo(fromRadio.nodeInfo, connectedNodeNum = _myNodeNum.value)
+                dumpNodeNums?.add(fromRadio.nodeInfo.num.uint())
                 nodeCount++
                 lastNodeInfoAt = System.currentTimeMillis()
                 if (_state.value is RadioState.RetrievingDatabase) {
@@ -524,8 +556,24 @@ class RadioManager(
             }
             MeshProtos.FromRadio.PayloadVariantCase.CONFIG_COMPLETE_ID -> {
                 val id = fromRadio.configCompleteId.uint()
-                if (id == MeshProtocol.NONCE_ONLY_DB.toLong() && lastNodeInfoAt != 0L) {
-                    Log.d(TAG, "Node DB complete: $nodeCount nodes, ${System.currentTimeMillis() - lastNodeInfoAt} ms after the last NodeInfo")
+                if (id == MeshProtocol.NONCE_ONLY_DB.toLong()) {
+                    if (lastNodeInfoAt != 0L) {
+                        Log.d(TAG, "Node DB complete: $nodeCount nodes, ${System.currentTimeMillis() - lastNodeInfoAt} ms after the last NodeInfo")
+                    }
+                    // The dump just delivered the radio's complete NodeDB: anything the
+                    // store still holds beyond it (and the protected rows) was evicted by
+                    // the radio. Launched so a slow delete never stalls the handshake
+                    // waiter below, and runCatching so it can never kill the event loop.
+                    val dump = dumpNodeNums
+                    dumpNodeNums = null
+                    if (dump != null) {
+                        ingest.nodeDbCapacity = maxOf(_nodeDbCount.value, dump.size)
+                        val started = dumpStartedMs
+                        scope.launch {
+                            runCatching { ingest.reconcileNodeDb(dump, _myNodeNum.value, started) }
+                                .onFailure { Log.w(TAG, "NodeDB reconcile failed", it) }
+                        }
+                    }
                 }
                 configCompleteIds.emit(id)
             }

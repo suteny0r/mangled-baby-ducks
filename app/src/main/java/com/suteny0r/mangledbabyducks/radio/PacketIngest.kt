@@ -31,6 +31,15 @@ private const val HISTORICAL_MS = 10 * 60 * 1000L
 
 class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackupManager? = null) {
 
+    /**
+     * The radio's NodeDB occupancy from the last handshake (MyNodeInfo.nodedb_count, or
+     * the dump's row count on firmware too old to report one). Between dumps
+     * [updateFromAnyPacket] holds the store's evictable rows at this size, mirroring the
+     * firmware's own eviction. 0 means no handshake has reported yet and disables the cap.
+     */
+    @Volatile
+    var nodeDbCapacity: Int = 0
+
     /** Called when this radio's MyNodeInfo arrives; returns the local node num. */
     suspend fun myInfo(myInfo: MeshProtos.MyNodeInfo, bleName: String?, radioAddress: String?, deviceId: String? = null): Long {
         val num = myInfo.myNodeNum.uint()
@@ -192,6 +201,48 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
         )
     }
 
+    /**
+     * Mirror of firmware NodeDB eviction, run when a connect's node DB dump completes.
+     * The dump is the radio's complete NodeDB, so a stored node the dump no longer
+     * carries is one the radio evicted to stay inside its platform node cap. Without
+     * this the store only grows ([updateFromAnyPacket] mints a row for every packet
+     * sender) and diverges from the radio: rows the radio holds no key for look
+     * messageable and render nameless. Node and user rows are deleted together, or the
+     * orphan-user healer on the next connect would resurrect the node row. Protected
+     * rows (NodeDao.protectedNums) stay as app-side memory; a kept user row doubles as
+     * the key escrow that healPkiFailure's add_contact re-teaches the radio from.
+     */
+    suspend fun reconcileNodeDb(dumpNums: Set<Long>, myNum: Long, dumpStartedMs: Long): Int {
+        val keep = db.nodeDao().protectedNums(dumpStartedMs).toHashSet()
+        val victims = db.nodeDao().allNums()
+            .filter { it !in dumpNums && it !in keep && it != myNum && it != 0L }
+        if (victims.isEmpty()) return 0
+        victims.chunked(500).forEach { chunk ->
+            db.userDao().deleteIn(chunk)
+            db.nodeDao().deleteIn(chunk)
+        }
+        Log.i(TAG, "NodeDB reconcile: dropped ${victims.size} radio-evicted nodes (dump ${dumpNums.size}, protected ${keep.size})")
+        return victims.size
+    }
+
+    /**
+     * Firmware evicts its oldest non-favorite node the moment an insert passes the cap;
+     * do the same between dumps so the store tracks the radio instead of only growing.
+     * Favorites, ignored, verified and messaged nodes ride above the cap, the same rows
+     * [reconcileNodeDb] protects.
+     */
+    private suspend fun enforceNodeCapacity(myNum: Long) {
+        val cap = nodeDbCapacity
+        if (cap <= 0) return
+        val over = db.nodeDao().evictableCount() - cap
+        if (over <= 0) return
+        val victims = db.nodeDao().oldestEvictableNums(myNum, over)
+        if (victims.isEmpty()) return
+        db.userDao().deleteIn(victims)
+        db.nodeDao().deleteIn(victims)
+        Log.i(TAG, "NodeDB cap $cap: evicted ${victims.size} oldest-heard")
+    }
+
     suspend fun channel(channel: ChannelProtos.Channel) {
         db.channelDao().upsert(
             ChannelEntity(
@@ -236,6 +287,9 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
                 hasXeddsaSigned = (existing?.hasXeddsaSigned ?: false) || packet.xeddsaSigned,
             )
         )
+        // A brand-new row is the app-side counterpart of a firmware NodeDB insert, which
+        // is exactly when the firmware would evict; keep step with it.
+        if (existing == null) enforceNodeCapacity(myNum)
     }
 
     /** TEXT_MESSAGE_APP inbound. Returns the stored message, or null when deduped/skipped. */
