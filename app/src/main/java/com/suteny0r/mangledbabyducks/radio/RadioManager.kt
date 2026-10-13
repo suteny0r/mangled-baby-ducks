@@ -165,13 +165,14 @@ class RadioManager(
     val linkRssi: StateFlow<Int?> = _linkRssi.asStateFlow()
 
     /**
-     * MyNodeInfo.nodedb_count: how many nodes the radio's NodeDB holds, reported at each
-     * handshake. The platform's node cap itself is not on the wire, but on a mesh larger
-     * than the cap the NodeDB sits pinned at it, so this is the effective limit the
-     * store mirrors. 0 until a handshake reports one (pre-2.6 firmware never does).
+     * How many nodes the radio's NodeDB holds: MyNodeInfo.nodedb_count at each handshake,
+     * then LocalStats.num_total_nodes from the radio's own telemetry. The platform's node
+     * cap itself is not on the wire, but on a mesh larger than the cap the NodeDB sits
+     * pinned at it, so this is the effective limit the store mirrors. 0 until something
+     * reports one (pre-2.6 firmware never does). Owned by PacketIngest, which both
+     * enforces the cap and sees the telemetry.
      */
-    private val _nodeDbCount = MutableStateFlow(0)
-    val nodeDbCount: StateFlow<Int> = _nodeDbCount.asStateFlow()
+    val nodeDbCount: StateFlow<Int> get() = ingest.nodeDbCount
 
     /** Inbound messages worth notifying about (already stored). */
     val incomingMessages = MutableSharedFlow<MessageEntity>(extraBufferCapacity = 64)
@@ -383,8 +384,7 @@ class RadioManager(
 
             // A new session's node cap comes from its own MyNodeInfo; the previous
             // radio's must not evict against a store just restored for this one.
-            ingest.nodeDbCapacity = 0
-            _nodeDbCount.value = 0
+            ingest.resetNodeDbMirror()
 
             // Step 3: wantConfig handshake — the radio streams config then echoes the nonce.
             sendHeartbeat()
@@ -520,7 +520,7 @@ class RadioManager(
                 val idBytes = fromRadio.myInfo.deviceId.toByteArray()
                 _deviceId.value = if (idBytes.isEmpty()) null else idBytes.joinToString("") { "%02x".format(it) }
                 _myNodeNum.value = ingest.myInfo(fromRadio.myInfo, _deviceName.value, lastAddress, _deviceId.value)
-                if (fromRadio.myInfo.nodedbCount > 0) _nodeDbCount.value = fromRadio.myInfo.nodedbCount
+                ingest.setRadioNodeCount(fromRadio.myInfo.nodedbCount)
                 _identityReady.value = true
             }
             MeshProtos.FromRadio.PayloadVariantCase.NODE_INFO -> {
@@ -567,7 +567,9 @@ class RadioManager(
                     val dump = dumpNodeNums
                     dumpNodeNums = null
                     if (dump != null) {
-                        ingest.nodeDbCapacity = maxOf(_nodeDbCount.value, dump.size)
+                        // Firmware too old to report nodedb_count still tells us the size
+                        // of its NodeDB by streaming it.
+                        ingest.setRadioNodeCount(dump.size)
                         val started = dumpStartedMs
                         scope.launch {
                             runCatching { ingest.reconcileNodeDb(dump, _myNodeNum.value, started) }
@@ -601,7 +603,7 @@ class RadioManager(
             Portnums.PortNum.NODEINFO_APP -> ingest.userPacket(packet)
             Portnums.PortNum.NODE_STATUS_APP -> ingest.nodeStatusPacket(packet)
             Portnums.PortNum.POSITION_APP -> ingest.positionPacket(packet)
-            Portnums.PortNum.TELEMETRY_APP -> ingest.telemetryPacket(packet)
+            Portnums.PortNum.TELEMETRY_APP -> ingest.telemetryPacket(packet, myNum)
             Portnums.PortNum.ADMIN_APP -> ingest.adminResponse(packet)
             Portnums.PortNum.ROUTING_APP -> ingest.routing(packet, myNum)?.let { healPkiFailure(it) }
             Portnums.PortNum.TRACEROUTE_APP -> ingest.traceroute(packet)

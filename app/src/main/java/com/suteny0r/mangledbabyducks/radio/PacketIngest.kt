@@ -13,6 +13,9 @@ import com.suteny0r.mangledbabyducks.db.TelemetryEntity
 import com.suteny0r.mangledbabyducks.db.UserEntity
 import com.suteny0r.mangledbabyducks.db.WaypointEntity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import org.meshtastic.proto.AdminProtos
 import org.meshtastic.proto.ChannelProtos
@@ -31,14 +34,37 @@ private const val HISTORICAL_MS = 10 * 60 * 1000L
 
 class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackupManager? = null) {
 
+    private val _nodeDbCount = MutableStateFlow(0)
+
     /**
-     * The radio's NodeDB occupancy from the last handshake (MyNodeInfo.nodedb_count, or
-     * the dump's row count on firmware too old to report one). Between dumps
-     * [updateFromAnyPacket] holds the store's evictable rows at this size, mirroring the
-     * firmware's own eviction. 0 means no handshake has reported yet and disables the cap.
+     * How many nodes the radio itself holds: MyNodeInfo.nodedb_count at the handshake,
+     * then LocalStats.num_total_nodes as the radio's own telemetry reports it. Shown on
+     * the Connect card.
+     */
+    val nodeDbCount: StateFlow<Int> = _nodeDbCount.asStateFlow()
+
+    /**
+     * The size the store is held to, so the node list mirrors the radio instead of only
+     * growing. It is the high-water mark of [nodeDbCount] for this connection: the radio
+     * fills toward its platform cap while connected, and the store has to be allowed to
+     * follow it up. 0 means nothing has reported yet and disables the cap.
      */
     @Volatile
     var nodeDbCapacity: Int = 0
+        private set
+
+    /** The radio reported its node count; ratchet the mirror's capacity up to it. */
+    fun setRadioNodeCount(count: Int) {
+        if (count <= 0) return
+        _nodeDbCount.value = count
+        if (count > nodeDbCapacity) nodeDbCapacity = count
+    }
+
+    /** Forget the previous radio's node count before a new handshake reports its own. */
+    fun resetNodeDbMirror() {
+        _nodeDbCount.value = 0
+        nodeDbCapacity = 0
+    }
 
     /** Called when this radio's MyNodeInfo arrives; returns the local node num. */
     suspend fun myInfo(myInfo: MeshProtos.MyNodeInfo, bleName: String?, radioAddress: String?, deviceId: String? = null): Long {
@@ -216,27 +242,37 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
         val keep = db.nodeDao().protectedNums(dumpStartedMs).toHashSet()
         val victims = db.nodeDao().allNums()
             .filter { it !in dumpNums && it !in keep && it != myNum && it != 0L }
-        if (victims.isEmpty()) return 0
         victims.chunked(500).forEach { chunk ->
             db.userDao().deleteIn(chunk)
             db.nodeDao().deleteIn(chunk)
         }
         Log.i(TAG, "NodeDB reconcile: dropped ${victims.size} radio-evicted nodes (dump ${dumpNums.size}, protected ${keep.size})")
+        // The protected rows the reconcile just kept are rows the radio no longer has, so
+        // the store lands above the radio's count unless the cap is applied here too.
+        enforceNodeCapacity(myNum)
         return victims.size
     }
 
     /**
      * Firmware evicts its oldest non-favorite node the moment an insert passes the cap;
      * do the same between dumps so the store tracks the radio instead of only growing.
-     * Favorites, ignored, verified and messaged nodes ride above the cap, the same rows
-     * [reconcileNodeDb] protects.
+     *
+     * The cap is on the whole store, not on the evictable rows alone. Counting only the
+     * evictable ones let the store settle at cap + however many protected rows existed,
+     * which is the 140-rows-against-a-120-node-radio divergence this is here to prevent.
+     * Protected rows (favorite, ignored, verified, messaged) are still never the victim,
+     * so they spend a slot each: the store matches the radio's size, holding slightly
+     * fewer live mesh nodes plus that much app-side memory.
      */
-    private suspend fun enforceNodeCapacity(myNum: Long) {
+    private suspend fun enforceNodeCapacity(myNum: Long, justInserted: Long = 0L) {
         val cap = nodeDbCapacity
         if (cap <= 0) return
-        val over = db.nodeDao().evictableCount() - cap
+        val over = db.nodeDao().totalCount() - cap
         if (over <= 0) return
-        val victims = db.nodeDao().oldestEvictableNums(myNum, over)
+        // The row the triggering packet just created is spared: the radio certainly holds
+        // a node it is hearing right now, and deleting it here only to have the node's
+        // next NodeInfo put it straight back is churn that hides a live neighbour.
+        val victims = db.nodeDao().oldestEvictableNums(myNum, justInserted, over)
         if (victims.isEmpty()) return
         db.userDao().deleteIn(victims)
         db.nodeDao().deleteIn(victims)
@@ -289,7 +325,7 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
         )
         // A brand-new row is the app-side counterpart of a firmware NodeDB insert, which
         // is exactly when the firmware would evict; keep step with it.
-        if (existing == null) enforceNodeCapacity(myNum)
+        if (existing == null) enforceNodeCapacity(myNum, justInserted = from)
     }
 
     /** TEXT_MESSAGE_APP inbound. Returns the stored message, or null when deduped/skipped. */
@@ -495,7 +531,7 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
     }
 
     /** TELEMETRY_APP; handles device, environment, power, air-quality, and local-stats variants. */
-    suspend fun telemetryPacket(packet: MeshProtos.MeshPacket) {
+    suspend fun telemetryPacket(packet: MeshProtos.MeshPacket, myNum: Long) {
         val telemetry = runCatching {
             TelemetryProtos.Telemetry.parseFrom(packet.decoded.payload)
         }.getOrNull() ?: return
@@ -600,6 +636,11 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
                         noiseFloor = m.noiseFloor,
                     )
                 )
+                // Our own radio's local stats are the only live report of its NodeDB
+                // occupancy; without them the mirror's capacity stays frozen at whatever
+                // the handshake found and the store evicts against a stale number while
+                // the radio fills toward its platform cap.
+                if (nodeNum == myNum) setRadioNodeCount(m.numTotalNodes)
             }
             else -> Log.d(TAG, "Unhandled telemetry variant ${telemetry.variantCase}")
         }

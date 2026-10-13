@@ -59,21 +59,28 @@ interface NodeDao {
     )
     suspend fun protectedNums(heardSinceMs: Long): List<Long>
 
-    /** How many rows the between-dump eviction may count against the radio's capacity. */
-    @Query(
-        "SELECT COUNT(*) FROM nodes WHERE favorite = 0 AND ignored = 0 AND isKeyManuallyVerified = 0 " +
-            "AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.fromNum = nodes.num OR m.toNum = nodes.num)"
-    )
-    suspend fun evictableCount(): Int
+    /**
+     * The whole store, which is what the radio's node count is mirrored against. Counting
+     * only the evictable rows let the store settle at the cap plus every protected row.
+     */
+    @Query("SELECT COUNT(*) FROM nodes")
+    suspend fun totalCount(): Int
 
-    /** Eviction order between dumps: oldest-heard first, firmware NodeDB's own policy. */
+    /**
+     * Eviction order between dumps. Rows with no user row go first: they are
+     * packet-sender stubs that render as a bare hex id and carry nothing the list can
+     * show, so they must not push out a named node. Then oldest-heard, firmware NodeDB's
+     * own policy. The stub minted by the insert that triggered the eviction is the
+     * newest-heard one, so it is the last stub to go rather than the first.
+     */
     @Query(
         "SELECT num FROM nodes WHERE favorite = 0 AND ignored = 0 AND isKeyManuallyVerified = 0 " +
-            "AND num != :selfNum " +
+            "AND num != :selfNum AND num != :sparedNum " +
             "AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.fromNum = nodes.num OR m.toNum = nodes.num) " +
-            "ORDER BY COALESCE(lastHeard, firstHeard, 0) ASC LIMIT :limit"
+            "ORDER BY EXISTS(SELECT 1 FROM users u WHERE u.num = nodes.num) ASC, " +
+            "COALESCE(lastHeard, firstHeard, 0) ASC LIMIT :limit"
     )
-    suspend fun oldestEvictableNums(selfNum: Long, limit: Int): List<Long>
+    suspend fun oldestEvictableNums(selfNum: Long, sparedNum: Long, limit: Int): List<Long>
 
     @Query("DELETE FROM nodes WHERE num IN (:nums)")
     suspend fun deleteIn(nums: List<Long>)
