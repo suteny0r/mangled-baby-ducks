@@ -343,7 +343,7 @@ class NodesViewModel(app: Application) : AndroidViewModel(app) {
     val nodes: StateFlow<List<NodeWithUser>> = combine(
         combine(showIgnored, favoritesOnly, signedOnly) { a, b, c -> Triple(a, b, c) },
         searchText, container.radioManager.myNodeNum,
-        container.database.nodeDao().nodesWithUsers()
+        container.nodesWithUsers
     ) { (showIgnored, favoritesOnly, signedOnly), search, myNum, list ->
         val needle = search.trim().lowercase()
         list.asSequence()
@@ -375,7 +375,7 @@ class NodesViewModel(app: Application) : AndroidViewModel(app) {
     val myNodeNum: StateFlow<Long> = container.radioManager.myNodeNum
 
     /** Latest position per node (NodeListItem's latestNodeCoordinate). */
-    val positionByNode: StateFlow<Map<Long, MapNode>> = container.database.positionDao().mapNodes()
+    val positionByNode: StateFlow<Map<Long, MapNode>> = container.mapNodes
         .map { list -> list.associateBy { it.nodeNum } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
@@ -463,7 +463,7 @@ class MessagesViewModel(app: Application) : AndroidViewModel(app) {
     val myNodeNum: StateFlow<Long> = container.radioManager.myNodeNum
 
     /** Latest position per node, for the distance under each sender's avatar. */
-    val positionByNode: StateFlow<Map<Long, MapNode>> = container.database.positionDao().mapNodes()
+    val positionByNode: StateFlow<Map<Long, MapNode>> = container.mapNodes
         .map { list -> list.associateBy { it.nodeNum } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
@@ -544,7 +544,7 @@ class MessagesViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Long name per node for resolving `@!hex` mentions and the position-share sentence. */
-    val namesByNum: StateFlow<Map<Long, String>> = db.nodeDao().nodesWithUsers()
+    val namesByNum: StateFlow<Map<Long, String>> = container.nodesWithUsers
         .map { list ->
             list.mapNotNull { e ->
                 val name = e.user?.longName?.takeIf { it.isNotBlank() } ?: e.user?.shortName?.takeIf { it.isNotBlank() }

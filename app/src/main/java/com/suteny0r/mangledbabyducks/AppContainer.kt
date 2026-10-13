@@ -12,8 +12,10 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import android.util.Log
 import com.suteny0r.mangledbabyducks.db.BackupResult
+import com.suteny0r.mangledbabyducks.db.MapNode
 import com.suteny0r.mangledbabyducks.db.MeshDatabase
 import com.suteny0r.mangledbabyducks.db.NodeBackupManager
+import com.suteny0r.mangledbabyducks.db.NodeWithUser
 import com.suteny0r.mangledbabyducks.radio.BleScanner
 import com.suteny0r.mangledbabyducks.radio.HardwareCatalog
 import com.suteny0r.mangledbabyducks.radio.LanScanner
@@ -30,7 +32,10 @@ import com.suteny0r.mangledbabyducks.ui.Router
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -140,11 +145,34 @@ class AppContainer(context: Context) {
     /** Device catalog for the node detail hardware card; refreshes at most every 48 h. */
     val hardwareCatalog = HardwareCatalog(context).also { it.refresh() }
 
+    /** Process-lifetime scope for the shared hot flows below and the launch-time prune. */
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * The two lists every surface reads, kept hot for the whole process so a screen can
+     * paint from `.value` on its very first frame.
+     *
+     * This exists for Android Auto. A car Screen is constructed fresh on each push and the
+     * host asks for its template immediately, before any cold Room flow it subscribes to
+     * has emitted, so the node list rendered "No nodes yet" for as long as the first
+     * emission and the host's follow-up template request took. The phone never showed it
+     * because its ViewModel StateFlows were already hot and cached. Eagerly, not
+     * WhileSubscribed: a car session that starts with no phone UI up must still find a
+     * populated value, and these two queries are small.
+     */
+    val nodesWithUsers: StateFlow<List<NodeWithUser>> =
+        database.nodeDao().nodesWithUsers()
+            .stateIn(appScope, SharingStarted.Eagerly, emptyList())
+
+    val mapNodes: StateFlow<List<MapNode>> =
+        database.positionDao().mapNodes()
+            .stateIn(appScope, SharingStarted.Eagerly, emptyList())
+
     init {
         // Positions and telemetry whose node row is gone (radio switch, removed node)
         // are dropped at every launch as well as at connect, so an install that already
         // carries them is clean before the first session.
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+        appScope.launch {
             runCatching {
                 database.positionDao().pruneOrphans()
                 database.telemetryDao().pruneOrphans()

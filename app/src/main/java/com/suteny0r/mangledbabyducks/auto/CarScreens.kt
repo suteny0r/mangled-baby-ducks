@@ -2,6 +2,8 @@ package com.suteny0r.mangledbabyducks.auto
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.SystemClock
+import android.util.Log
 import android.text.SpannableString
 import android.text.SpannableStringBuilder
 import android.text.Spanned
@@ -57,6 +59,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -84,6 +87,9 @@ private val carWorkScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 private const val MAP_ROW_CAP = 24
 private const val LIST_ROW_CAP = 50
 
+/** Temporary: see MeshCarScreen.trace. `adb logcat -s CarTrace:D`. */
+private const val TRACE_TAG = "CarTrace"
+
 private val QUICK_REPLIES = listOf(
     "OK",
     "Yes",
@@ -102,17 +108,56 @@ abstract class MeshCarScreen(carContext: CarContext) : Screen(carContext) {
 
     protected val container: AppContainer get() = carContext.container
 
-    /** Collect while the screen is at least started; every distinct value redraws the template. */
+    /**
+     * Temporary instrumentation for the head unit's slow first paint: a screen renders its
+     * first template before any flow has emitted, so where the delay sits (lifecycle,
+     * first Room emission, or the host's template refresh) is not otherwise observable.
+     * Filter with `adb logcat -s CarTrace:D`.
+     */
+    private val traceName: String = javaClass.simpleName
+    private val traceStart: Long = SystemClock.elapsedRealtime()
+    protected fun trace(message: String) {
+        Log.d(TRACE_TAG, "$traceName +${SystemClock.elapsedRealtime() - traceStart}ms $message")
+    }
+
+    init {
+        trace("constructed")
+    }
+
+    /**
+     * Collect while the screen is at least started; every distinct value redraws the
+     * template.
+     *
+     * A StateFlow is also read synchronously here, at construction, so the screen's fields
+     * are already populated when the host asks for the first template. Without that seed a
+     * freshly pushed screen always renders its empty state first and only fills in after
+     * the first emission plus a host template round trip, which is what made the car's node
+     * list sit on "No nodes yet" while the phone showed the same list instantly. No
+     * invalidate() for the seed: there is no template yet to invalidate.
+     */
     protected fun <T> observe(flow: Flow<T>, onValue: (T) -> Unit) {
+        val label = "observe#${observeSeq++}"
+        if (flow is StateFlow<T>) {
+            onValue(flow.value)
+            trace("$label seeded from StateFlow")
+        }
         lifecycleScope.launch {
+            trace("$label launched")
             repeatOnLifecycle(Lifecycle.State.STARTED) {
+                trace("$label STARTED, collecting")
+                var emissions = 0
                 flow.distinctUntilChanged().collect { value ->
+                    emissions++
+                    if (emissions <= 2) trace("$label emit #$emissions")
                     onValue(value)
                     invalidate()
+                    if (emissions <= 2) trace("$label invalidate() returned")
                 }
             }
         }
     }
+
+    private var observeSeq = 0
 
     /**
      * How many rows this template may hold: the host's ConstraintManager limit, capped by
@@ -228,8 +273,10 @@ class CarHomeScreen(carContext: CarContext) : MeshCarScreen(carContext) {
         observe(container.radioManager.state) { state = it }
         observe(container.radioManager.deviceName) { deviceName = it }
         observe(container.database.messageDao().unreadCount()) { unread = it }
-        observe(container.database.nodeDao().count()) { nodeCount = it }
-        observe(container.database.positionDao().mapNodes().map { it.size }) { positioned = it }
+        // Counted off the shared hot lists rather than their own cold queries, so these
+        // two seed synchronously like the rest (a .map would drop the StateFlow type).
+        observe(container.nodesWithUsers) { nodeCount = it.size }
+        observe(container.mapNodes) { positioned = it.size }
     }
 
     private fun menuRow(title: String, text: String, iconRes: Int, open: () -> Screen): Row =
@@ -286,7 +333,7 @@ class CarMapScreen(carContext: CarContext) : MeshCarScreen(carContext) {
     private var myNum = 0L
 
     init {
-        observe(container.database.positionDao().mapNodes()) { list ->
+        observe(container.mapNodes) { list ->
             nodes = list.sortedByDescending { it.time }
         }
         observe(container.radioManager.state) { state = it }
@@ -483,13 +530,16 @@ class CarNodesScreen(carContext: CarContext) : MeshCarScreen(carContext) {
     private var myNum = 0L
 
     init {
-        observe(container.database.nodeDao().nodesWithUsers()) { nodes = it }
-        observe(container.database.positionDao().mapNodes()) { list -> positions = list.associateBy { it.nodeNum } }
+        observe(container.nodesWithUsers) { nodes = it }
+        observe(container.mapNodes) { list -> positions = list.associateBy { it.nodeNum } }
         observe(container.radioManager.myNodeNum) { myNum = it }
     }
 
     override fun onGetTemplate(): Template {
+        val limitStart = SystemClock.elapsedRealtime()
         val limit = contentLimit(ConstraintManager.CONTENT_LIMIT_TYPE_LIST, LIST_ROW_CAP)
+        trace("onGetTemplate: nodes=${nodes.size} positions=${positions.size} myNum=$myNum " +
+            "contentLimit took ${SystemClock.elapsedRealtime() - limitStart}ms")
         val here = carLocation(myNum, positions.values.toList())
         val list = ItemList.Builder().setNoItemsMessage("No nodes yet")
         nodes.asSequence()
@@ -547,7 +597,7 @@ class CarNodeDetailScreen(carContext: CarContext, private val num: Long) : MeshC
         observe(container.database.nodeDao().nodeWithUserFlow(num)) { entry = it }
         observe(container.database.positionDao().latestFlow(num)) { position = it }
         observe(container.database.telemetryDao().latestDeviceMetrics(num)) { metrics = it }
-        observe(container.database.positionDao().mapNodes()) { mapNodes = it }
+        observe(container.mapNodes) { mapNodes = it }
         observe(container.radioManager.myNodeNum) { myNum = it }
     }
 
@@ -905,7 +955,7 @@ class CarThreadScreen(carContext: CarContext, private val target: ThreadTarget) 
     private var myNum = 0L
 
     init {
-        observe(container.database.positionDao().mapNodes()) { list -> positions = list.associateBy { it.nodeNum } }
+        observe(container.mapNodes) { list -> positions = list.associateBy { it.nodeNum } }
         val dao = container.database.messageDao()
         val flow = when (target) {
             is ThreadTarget.Channel -> dao.channelMessages(target.index)
@@ -917,7 +967,7 @@ class CarThreadScreen(carContext: CarContext, private val target: ThreadTarget) 
             messages = list.sortedByDescending { it.timestamp }
             markRead()
         }
-        observe(container.database.nodeDao().nodesWithUsers()) { list ->
+        observe(container.nodesWithUsers) { list ->
             names = list.associate { it.node.num to displayName(it.user, it.node.num) }
         }
         observe(container.radioManager.myNodeNum) { myNum = it }

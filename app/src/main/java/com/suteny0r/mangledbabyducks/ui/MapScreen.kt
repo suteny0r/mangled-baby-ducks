@@ -173,7 +173,7 @@ class MapViewModel(app: Application) : AndroidViewModel(app) {
     private val container = app.container
     private val router = container.router
 
-    val nodes: StateFlow<List<MapNode>> = container.database.positionDao().mapNodes()
+    val nodes: StateFlow<List<MapNode>> = container.mapNodes
         .onEach { android.util.Log.d("MapScreen", "mapNodes emitted ${it.size}") }
         .catch { android.util.Log.e("MapScreen", "mapNodes flow failed", it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())

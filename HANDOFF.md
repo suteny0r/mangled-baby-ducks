@@ -9,6 +9,38 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## Android Auto: seeded car screens, opens on the node list (2026-10-13, NOT yet verified on a head unit)
+Symptom: tapping Nodes on the head unit showed "No nodes yet" for up to ~15 s while the phone
+showed the same list instantly. Cause is structural, not a slow query: `CarNodesScreen` is
+constructed fresh on every push (`CarScreens.kt`), its fields start empty, and `observe()` only
+begins collecting once the screen's lifecycle reaches STARTED, so the host's first
+`onGetTemplate()` necessarily renders the empty state. Filling it needs a first Room emission
+plus a host template round trip. The phone never showed it because `NodesViewModel.nodes` is a
+`stateIn(WhileSubscribed)` StateFlow already hot and cached from the open UI.
+
+- `AppContainer` now owns the two lists every surface reads, `nodesWithUsers` and `mapNodes`,
+  as `stateIn(appScope, SharingStarted.Eagerly)` StateFlows (plus `appScope`, which also runs
+  the launch-time prune). Eagerly, not WhileSubscribed: a car session starting with no phone UI
+  up must still find a populated `.value`. Both phone ViewModels and car screens read these, so
+  there is now one query per list instead of one per observer.
+- `MeshCarScreen.observe` reads a StateFlow synchronously at construction before launching the
+  collector, so a pushed screen's first template already has data. No `invalidate()` on the
+  seed: there is no template yet. Cold flows (prefs, message queries) are unchanged.
+- CarHomeScreen's node/positioned counts come off the shared lists rather than their own cold
+  `count()`/`.map{size}` queries, since a `.map` would drop the StateFlow type and the seed.
+- The session now opens on `CarNodesScreen` with `CarHomeScreen` underneath, so the list's BACK
+  reaches the menu instead of ending the session. The push is deferred to the session's
+  ON_START: the root returned from `onCreateScreen` is only stacked once that call returns, and
+  `lifecycleScope` is Main.immediate, so an inline push would land first.
+- Temporary instrumentation kept in `MeshCarScreen`: `trace()` logs construction, each
+  observe's seed/launch/STARTED/first two emissions, and `CarNodesScreen.onGetTemplate` logs
+  its node count and how long the `ConstraintManager` IPC took. `adb logcat -s CarTrace:D`.
+  Remove once the head unit confirms the fix.
+Verification still owed: the phone was running the Play-signed 0.2.14 (Play App Signing means
+no local build matches its signature), so testing meant uninstalling it; backups were pulled
+and pushed back as before. The DHU needs "Start head unit server" toggled on the phone, which
+is not persistent, so nothing has been driven through a head unit yet.
+
 ## Switch backup gate: a failed snapshot aborts the radio switch (2026-10-12, refusal path untested on hardware)
 `backupCurrentAndRestore` used to log a failed snapshot of the current radio and clear the
 store anyway, destroying the data the round trip (switch away, later switch back) exists to
