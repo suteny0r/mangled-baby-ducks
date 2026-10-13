@@ -32,10 +32,13 @@ plus a host template round trip. The phone never showed it because `NodesViewMod
   reaches the menu instead of ending the session. The push is deferred to the session's
   ON_START: the root returned from `onCreateScreen` is only stacked once that call returns, and
   `lifecycleScope` is Main.immediate, so an inline push would land first.
-- Temporary instrumentation kept in `MeshCarScreen`: `trace()` logs construction, each
-  observe's seed/launch/STARTED/first two emissions, and `CarNodesScreen.onGetTemplate` logs
-  its node count and how long the `ConstraintManager` IPC took. `adb logcat -s CarTrace:D`.
-  Remove once the head unit confirms the fix.
+- Permanent instrumentation in `MeshCarScreen`: `trace()` logs construction, each observe's
+  seed/launch/STARTED/first two emissions, and `CarNodesScreen.onGetTemplate` logs its node
+  count and how long the `ConstraintManager` IPC took. `adb logcat -s CarTrace:D`. Keep it:
+  car screens are only reachable from a head unit, their problems are intermittent and
+  invisible from the phone, and reproducing this one cost uninstalling a Play-signed build,
+  a backup pull/restore round trip and a DHU session. The cost is a few string builds per
+  template render, on a host that throttles renders anyway.
 Verification still owed: the phone was running the Play-signed 0.2.14 (Play App Signing means
 no local build matches its signature), so testing meant uninstalling it; backups were pulled
 and pushed back as before. The DHU needs "Start head unit server" toggled on the phone, which
