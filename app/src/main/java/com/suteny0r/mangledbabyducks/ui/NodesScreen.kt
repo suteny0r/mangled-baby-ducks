@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Message
@@ -126,6 +128,7 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
     val showIgnored by vm.showIgnored.collectAsState()
     val favoritesOnly by vm.favoritesOnly.collectAsState()
     val signedOnly by vm.signedOnly.collectAsState()
+    val pinFavorites by vm.pinFavorites.collectAsState()
     val search by vm.searchText.collectAsState()
     val batteryByNode by vm.batteryByNode.collectAsState()
     val positionByNode by vm.positionByNode.collectAsState()
@@ -141,7 +144,12 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
             onValueChange = { vm.searchText.value = it },
             placeholder = "Find a node",
         )
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+        // Four chips no longer fit a phone width, so the row scrolls.
+        Row(
+            Modifier.fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+        ) {
             // NodeListFilter "Signed" toggle, ahead of Favorites as on iOS.
             FilterChip(
                 selected = signedOnly,
@@ -162,6 +170,15 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
                 selected = showIgnored,
                 onClick = { vm.showIgnored.value = !showIgnored },
                 label = { Text("Show ignored") },
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            // Ordering, not filtering: off leaves the list in plain most-recently-heard
+            // order. Android Auto's node list follows this too.
+            FilterChip(
+                selected = pinFavorites,
+                onClick = { vm.setPinFavorites(!pinFavorites) },
+                label = { Text("Favorites on top") },
                 modifier = Modifier.padding(vertical = 4.dp),
             )
         }

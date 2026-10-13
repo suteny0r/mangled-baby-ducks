@@ -35,6 +35,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -54,6 +55,13 @@ object PrefKeys {
     val KNOWN_RADIOS = stringPreferencesKey("known_radios")
 
     val SHARE_LOCATION = booleanPreferencesKey("share_location")
+
+    /**
+     * Whether favorites are lifted to the top of the node list. Off leaves the list in
+     * plain most-recently-heard order (the connected radio still leads). Shared by the
+     * phone list and the Android Auto one, which has no toggle of its own.
+     */
+    val PIN_FAVORITES = booleanPreferencesKey("pin_favorites")
 }
 
 /** How many radios to keep before the least recently used one is dropped. */
@@ -167,6 +175,18 @@ class AppContainer(context: Context) {
     val mapNodes: StateFlow<List<MapNode>> =
         database.positionDao().mapNodes()
             .stateIn(appScope, SharingStarted.Eagerly, emptyList())
+
+    /**
+     * [PrefKeys.PIN_FAVORITES], hot for the same reason as the lists above: the car node
+     * list reads it from `.value` while building its first template.
+     */
+    val pinFavorites: StateFlow<Boolean> =
+        prefs.data.map { it[PrefKeys.PIN_FAVORITES] ?: true }
+            .stateIn(appScope, SharingStarted.Eagerly, true)
+
+    suspend fun setPinFavorites(pin: Boolean) {
+        prefs.edit { it[PrefKeys.PIN_FAVORITES] = pin }
+    }
 
     init {
         // Positions and telemetry whose node row is gone (radio switch, removed node)

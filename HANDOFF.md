@@ -91,10 +91,42 @@ The fix mirrors firmware eviction (no Swift counterpart; iOS does not do this):
   would destroy old-schema backups in the restore staging path.
 - Nameless fallbacks now render the mesh-convention hex id (`nodeNumString`) instead of
   "Node <decimal>"/"Unknown" in NodesScreen and the Messages contact rows.
-Still to do when the phone is back on USB: install the build, reconnect, confirm the reconcile
-log line (`NodeDB reconcile: dropped ...`) and that the node list settles near the radio's
-count. The user's practical remedy for keeping distant friends named: favorite them, which
+The user's practical remedy for keeping distant friends named: favorite them, which
 `setFavorite` pushes to the radio and firmware then exempts from eviction.
+
+### Cap correction (0.2.16, not yet verified on hardware)
+Shipped 0.2.15 ran the cap but against the wrong population, and the user caught it: Connect
+card showed "Node DB: 120" while the Nodes tab showed 140, with several hex-only rows.
+Logcat confirmed the machinery was alive (`NodeDB cap 120: evicted 1 oldest-heard`) and the
+arithmetic was wrong. Four defects, all in `enforceNodeCapacity` / `NodeDao`:
+- **Wrong denominator.** `evictableCount()` excludes the protected rows, so the store settled
+  at `cap + protectedCount` (120 + 20). Now `totalCount()`: the cap is on the whole store, and
+  a protected row spends a slot rather than riding above it. Consequence worth remembering:
+  the store matches the radio's *size* while holding fewer live mesh nodes plus that much
+  app-side memory. That is the parity the user asked for, and it is a deliberate trade.
+- **Victim order rewarded stubs.** Pure oldest-heard meant a freshly minted nameless row
+  (`updateFromAnyPacket`'s stub) outlived a long-known named node. `oldestEvictableNums` now
+  orders `EXISTS(user) ASC, COALESCE(lastHeard, firstHeard, 0) ASC`: userless stubs go first.
+  The stub the triggering packet just inserted is spared (`sparedNum`), or it would be deleted
+  and immediately recreated by that node's next NodeInfo.
+- **Reconcile never applied the cap.** It kept protected rows the radio had evicted and
+  stopped, landing above the radio's count before a single packet arrived. It now ends with
+  `enforceNodeCapacity`.
+- **Capacity was frozen at handshake time.** Connect while the radio holds 40 and the app
+  evicted against 40 while the radio filled to its platform cap. `LocalStats.num_total_nodes`
+  from our own radio (`telemetryPacket` now takes `myNum`) feeds `setRadioNodeCount`, which
+  ratchets the capacity up. `nodeDbCount` moved into `PacketIngest` (it both enforces the cap
+  and sees the telemetry) and `RadioManager.nodeDbCount` delegates, so the Connect card is
+  unchanged and now updates between connects. `resetNodeDbMirror()` clears both on establish.
+
+## Node list order: "Favorites on top" toggle (0.2.16, not yet verified on hardware)
+`PrefKeys.PIN_FAVORITES` (default on), exposed as the hot `AppContainer.pinFavorites` for the
+same reason as `nodesWithUsers`: `CarNodesScreen` reads it from `.value` while building its
+first template. One comparator, `ui.nodeOrder(myNum, pinFavorites)`, is used by both the phone
+list and the car list so they cannot drift; off leaves plain most-recently-heard order with the
+connected radio still leading. The chip lives in the NodesScreen filter row, which is now
+`horizontalScroll` because four chips no longer fit a phone width. No car-side toggle by
+request: the car follows whatever the phone is set to.
 Lint note: `:app:lintDebug` fails on 9 pre-existing errors (xeddsa `BigInteger.TWO` NewApi x2,
 `notifyObserversByTableNames` RestrictedApi, six old `produceState` patterns), none from this
 change.

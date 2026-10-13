@@ -327,6 +327,16 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
     }
 }
 
+/**
+ * The one node-list order, shared by the phone list and the Android Auto one: the
+ * connected radio first, then favorites when [pinFavorites] is on, then most-recently
+ * heard. Both surfaces read the same persisted setting, so they cannot drift apart.
+ */
+fun nodeOrder(myNum: Long, pinFavorites: Boolean): Comparator<NodeWithUser> =
+    compareByDescending<NodeWithUser> { it.node.num == myNum }
+        .thenByDescending { pinFavorites && it.node.favorite }
+        .thenByDescending { it.node.lastHeard ?: 0L }
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class NodesViewModel(app: Application) : AndroidViewModel(app) {
     private val container = app.container
@@ -338,25 +348,35 @@ class NodesViewModel(app: Application) : AndroidViewModel(app) {
     val signedOnly = MutableStateFlow(false)
     val searchText = MutableStateFlow("")
 
+    /** Persisted, because Android Auto's node list follows it and has no toggle of its own. */
+    val pinFavorites: StateFlow<Boolean> = container.pinFavorites
+
+    fun setPinFavorites(pin: Boolean) {
+        viewModelScope.launch { container.setPinFavorites(pin) }
+    }
+
+    private data class NodeFilters(
+        val showIgnored: Boolean,
+        val favoritesOnly: Boolean,
+        val signedOnly: Boolean,
+        val pinFavorites: Boolean,
+    )
+
     // iOS NodeList display order: connected node first, then favorites,
-    // then most-recently-heard.
+    // then most-recently-heard. The favorites step is the one [pinFavorites] drops.
     val nodes: StateFlow<List<NodeWithUser>> = combine(
-        combine(showIgnored, favoritesOnly, signedOnly) { a, b, c -> Triple(a, b, c) },
+        combine(showIgnored, favoritesOnly, signedOnly, pinFavorites, ::NodeFilters),
         searchText, container.radioManager.myNodeNum,
         container.nodesWithUsers
-    ) { (showIgnored, favoritesOnly, signedOnly), search, myNum, list ->
+    ) { filters, search, myNum, list ->
         val needle = search.trim().lowercase()
         list.asSequence()
-            .filter { (showIgnored || !it.node.ignored) && (!favoritesOnly || it.node.favorite) }
-            .filter { !signedOnly || it.node.hasXeddsaSigned }
+            .filter { (filters.showIgnored || !it.node.ignored) && (!filters.favoritesOnly || it.node.favorite) }
+            .filter { !filters.signedOnly || it.node.hasXeddsaSigned }
             .filter {
                 needle.isEmpty() || nodeMatches(it, needle)
             }
-            .sortedWith(
-                compareByDescending<NodeWithUser> { it.node.num == myNum }
-                    .thenByDescending { it.node.favorite }
-                    .thenByDescending { it.node.lastHeard ?: 0L }
-            )
+            .sortedWith(nodeOrder(myNum, filters.pinFavorites))
             .toList()
     }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())

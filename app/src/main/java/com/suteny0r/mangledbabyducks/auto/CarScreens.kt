@@ -65,6 +65,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
 import com.suteny0r.mangledbabyducks.ui.bearingDegrees
+import com.suteny0r.mangledbabyducks.ui.nodeOrder
 import com.suteny0r.mangledbabyducks.ui.haversineMeters
 
 /*
@@ -528,11 +529,14 @@ class CarNodesScreen(carContext: CarContext) : MeshCarScreen(carContext) {
     private var nodes: List<NodeWithUser> = emptyList()
     private var positions: Map<Long, MapNode> = emptyMap()
     private var myNum = 0L
+    /** Set on the phone's node list; there is no car-side toggle for it. */
+    private var pinFavorites = true
 
     init {
         observe(container.nodesWithUsers) { nodes = it }
         observe(container.mapNodes) { list -> positions = list.associateBy { it.nodeNum } }
         observe(container.radioManager.myNodeNum) { myNum = it }
+        observe(container.pinFavorites) { pinFavorites = it }
     }
 
     override fun onGetTemplate(): Template {
@@ -544,11 +548,7 @@ class CarNodesScreen(carContext: CarContext) : MeshCarScreen(carContext) {
         val list = ItemList.Builder().setNoItemsMessage("No nodes yet")
         nodes.asSequence()
             .filter { !it.node.ignored }
-            .sortedWith(
-                compareByDescending<NodeWithUser> { it.node.num == myNum }
-                    .thenByDescending { it.node.favorite }
-                    .thenByDescending { it.node.lastHeard ?: 0L }
-            )
+            .sortedWith(nodeOrder(myNum, pinFavorites))
             .take(limit)
             .forEach { entry ->
                 val num = entry.node.num
