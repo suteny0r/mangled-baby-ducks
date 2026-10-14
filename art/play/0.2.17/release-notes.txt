@@ -1,0 +1,3 @@
+<en-US>
+Bluetooth reliability: the app now cancels and waits for a connection to fully close before releasing it. Closing it too early could leave stale connection attempts behind in the Android Bluetooth stack, and after enough failed attempts a device could stop connecting to the radio entirely until it was rebooted. Turning Bluetooth off and on did not clear it. Connection logs now record how many Bluetooth clients the app holds, so this kind of fault can be diagnosed from a bug report.
+</en-US>
