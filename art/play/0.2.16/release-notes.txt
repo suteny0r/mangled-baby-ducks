@@ -1,0 +1,3 @@
+<en-US>
+Node list size now actually matches the connected radio's node database. The previous release capped the wrong set of rows, so the list kept growing past the radio's limit and filled up with nameless !hex entries. Nameless nodes are now the first to be dropped, so a known node is never pushed out by one the radio cannot name, and the limit follows the radio as its database fills. New "Favorites on top" toggle in the node list: turn it off for plain most-recently-heard order. Android Auto's node list follows the same setting.
+</en-US>
