@@ -9,6 +9,51 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## BLE: await the disconnect before closing the GATT client (2026-10-14, NOT reproduced, NOT verified)
+Report, from a second Android device the user cannot reach directly: connect/disconnect works for
+a while, then every connect fails ("unable to connect, retrying, retrying"). Bluetooth off/on did
+not recover it. Airplane mode off/on did not recover it. Rebooting the device did. The user's own
+Note 20 has shown milder versions that recover on their own.
+
+Measured on the Note 20 while healthy: `dumpsys bluetooth_manager` shows exactly one registered
+GATT client for the package, so the app is not leaking client registrations in steady state. That
+rules out the usual "max apps reached" cause and points one level down.
+
+Defect found by inspection: `BleConnection.disconnect()` called `gatt.disconnect()` and
+`gatt.close()` back to back. `close()` releases the client immediately while the stack still holds
+an in-flight disconnect, or a direct connect that never resolved, for that address; those sit in
+the controller's connect list, a small fixed-size table. The retry policy supplies the volume (3
+initial attempts + up to 10 reconnects, each failed attempt doing connectGatt then this teardown),
+and the 20 s app-side connect timeout is shorter than the stack's own direct-connect timeout, so a
+timed-out attempt is one the stack is still working on when the next one starts. That predicts all
+three observations, including why an adapter toggle does not help: a soft Bluetooth restart does
+not reload the controller, a reboot does.
+
+Fix: `disconnect()` cancels and awaits `STATE_DISCONNECTED` before `close()` (2 s for a link that
+was up, 400 ms for one that never connected, which usually reports nothing at all). The whole
+teardown is `withContext(NonCancellable)`: the usual caller is `establish()`'s catch block, which
+can already be running in a cancelled coroutine, and without the guard the first suspension point
+would throw and skip `close()`, leaking the client this is meant to protect. Also in the same
+file: the adapter-off handler never set `closed`, so the 5 s RSSI poll loop on that dead
+connection spun for the life of the process.
+
+Instrumentation, which is the point of shipping this: `connectGatt` and every `close()` log a
+process-wide live-client count (`liveClients`). It must read 1 during a session and 0 when idle;
+a number that climbs across reconnects is a leaked client and the device is on its way to
+refusing all LE connections.
+
+Open, and the reason this is not confirmed:
+- Swiping the app away and relaunching did NOT recover the failing device, but that test is
+  inconclusive: `RadioService` is a foreground service with no `android:stopWithTask`, so the
+  process survives the swipe (verified on the Note 20, service `isForeground=true`). The
+  discriminating test is Settings > Apps > Force stop. Recovers on force stop = app-side, so the
+  live-client count is the thing to read. Recovers only on reboot = controller, which is what this
+  change addresses.
+- Worth asking: do other Bluetooth devices also fail on that phone while it is stuck (device-wide
+  points below the app), and does the radio notification stay up (service alive and retrying).
+- Not yet examined: `autoConnect` spends one automatic attempt per *process*, and the foreground
+  service means a process can live for days. No defect found there, but the assumption is stale.
+
 ## Android Auto: seeded car screens, opens on the node list (2026-10-13, NOT yet verified on a head unit)
 Symptom: tapping Nodes on the head unit showed "No nodes yet" for up to ~15 s while the phone
 showed the same list instantly. Cause is structural, not a slow query: `CarNodesScreen` is

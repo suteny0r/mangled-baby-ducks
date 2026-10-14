@@ -26,7 +26,11 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicInteger
 import org.meshtastic.proto.MeshProtos
 
 /**
@@ -63,6 +67,8 @@ class BleConnection(
     // One GATT operation at a time; each completes via its deferred.
     private val opMutex = Mutex()
     private var pendingConnect: CompletableDeferred<Unit>? = null
+    /** Completed by onConnectionStateChange(STATE_DISCONNECTED); see [disconnect]. */
+    private var pendingDisconnect: CompletableDeferred<Unit>? = null
     private var pendingMtu: CompletableDeferred<Int>? = null
     private var pendingDiscovery: CompletableDeferred<Unit>? = null
     private var pendingRead: CompletableDeferred<ByteArray>? = null
@@ -73,6 +79,8 @@ class BleConnection(
     @Volatile private var closed = false
     @Volatile private var needsDrain = false
     @Volatile private var isDraining = false
+    /** Whether the stack ever reported STATE_CONNECTED, which decides how [disconnect] tears down. */
+    @Volatile private var everConnected = false
 
     // Android invalidates GATT handles silently when the adapter turns off — no
     // onConnectionStateChange ever fires — so adapter state must be watched directly.
@@ -84,8 +92,15 @@ class BleConnection(
                 if (!closed) {
                     Log.w(TAG, "Bluetooth adapter turned off; dropping link")
                     failAllPending("Bluetooth turned off")
-                    gatt?.let { runCatching { it.close() } }
+                    gatt?.let {
+                        runCatching { it.close() }
+                        Log.i(TAG, "GATT client closed (live clients: ${liveClients.decrementAndGet()})")
+                    }
                     gatt = null
+                    // The handles are already void, so there is nothing left to tear down
+                    // and no disconnect to await; marking it closed is what stops the RSSI
+                    // poll loop, which otherwise spins for the life of the process.
+                    closed = true
                     eventFlow.tryEmit(
                         ConnectionEvent.Disconnected(shouldReconnect = true, error = "Bluetooth turned off")
                     )
@@ -111,10 +126,14 @@ class BleConnection(
     private val callback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             when {
-                newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS ->
+                newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS -> {
+                    everConnected = true
                     pendingConnect?.complete(Unit)
+                }
                 newState == BluetoothProfile.STATE_DISCONNECTED -> {
                     val err = if (status != BluetoothGatt.GATT_SUCCESS) "GATT status $status" else null
+                    // Releases disconnect()'s wait before it calls close().
+                    pendingDisconnect?.complete(Unit)
                     pendingConnect?.completeExceptionally(RadioException(err ?: "Disconnected"))
                     failAllPending(err ?: "Disconnected")
                     if (!closed) {
@@ -200,7 +219,15 @@ class BleConnection(
         val connectDeferred = CompletableDeferred<Unit>()
         pendingConnect = connectDeferred
         gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
-        withTimeout(20_000) { connectDeferred.await() }
+        // Instrumentation for the connect-then-fail-forever reports: this must sit at 1
+        // for a live session and 0 when idle. A number that climbs across reconnects is a
+        // leaked GATT client, and the device is on its way to refusing all LE connections.
+        Log.i(TAG, "connectGatt ${device.address} (live clients: ${liveClients.incrementAndGet()})")
+        // This window is shorter than the stack's own direct-connect timeout, so a timed
+        // out attempt is one the stack is still working on. That is only safe because
+        // disconnect() now cancels it explicitly before releasing the client; without that
+        // the next attempt stacks a second connect to the same address on top of it.
+        withTimeout(CONNECT_TIMEOUT_MS) { connectDeferred.await() }
 
         val g = gatt ?: throw RadioException("GATT gone")
 
@@ -346,16 +373,42 @@ class BleConnection(
         }
     }
 
-    override suspend fun disconnect() {
+    /**
+     * Tear the link down and, above all, release the GATT client.
+     *
+     * `close()` fired straight after `disconnect()` is the classic Android BLE defect: it
+     * unregisters the app's client while the stack still has an in-flight disconnect, or
+     * a direct connect that never resolved, pending for this address. Those entries sit in
+     * the controller's connect list, which is a small fixed-size table, and the app's retry
+     * policy can stack up to thirteen of them against one radio in a single session. Once
+     * the table is full every new LE connection fails, which no adapter toggle clears
+     * because a soft Bluetooth restart does not reload the controller; only a reboot does.
+     * So the disconnect is awaited before the close.
+     *
+     * NonCancellable because the usual caller is establish()'s catch block, which may
+     * already be running in a cancelled coroutine: without it the first suspension point
+     * would throw and skip close() entirely, leaking the very client this protects.
+     */
+    override suspend fun disconnect() = withContext(NonCancellable) {
         closed = true
         runCatching { context.unregisterReceiver(bondReceiver) }
         runCatching { context.unregisterReceiver(adapterReceiver) }
         failAllPending("Disconnected by app")
-        gatt?.let {
-            runCatching { it.disconnect() }
-            runCatching { it.close() }
+        gatt?.let { g ->
+            val done = CompletableDeferred<Unit>()
+            pendingDisconnect = done
+            runCatching { g.disconnect() }
+            // A link that came up always reports STATE_DISCONNECTED. One that never
+            // connected often reports nothing at all, so that case only gives the stack a
+            // moment to drop the pending connect rather than waiting out the full window.
+            val wait = if (everConnected) DISCONNECT_WAIT_MS else ABORT_WAIT_MS
+            val acked = withTimeoutOrNull(wait) { done.await() } != null
+            if (!acked) Log.w(TAG, "No STATE_DISCONNECTED within ${wait}ms; closing anyway")
+            runCatching { g.close() }
+            Log.i(TAG, "GATT client closed (live clients: ${liveClients.decrementAndGet()})")
         }
         gatt = null
+        pendingDisconnect = null
         scope.cancel()
     }
 
@@ -371,7 +424,20 @@ class BleConnection(
 
     companion object {
         private const val RSSI_POLL_MS = 5_000L
+        private const val CONNECT_TIMEOUT_MS = 20_000L
+        /** How long a link that was up may take to report STATE_DISCONNECTED. */
+        private const val DISCONNECT_WAIT_MS = 2_000L
+        /** A connect that never came up usually reports nothing; just let the stack drop it. */
+        private const val ABORT_WAIT_MS = 400L
         private const val TAG = "BleConnection"
+
+        /**
+         * GATT clients this process has registered and not yet closed. Android allows a
+         * small fixed number per device; exhausting them makes every later connect fail
+         * until reboot, so the count is logged on both edges to make a leak visible in a
+         * bug report rather than something only reproducible on the user's own phone.
+         */
+        private val liveClients = AtomicInteger(0)
     }
 }
 
