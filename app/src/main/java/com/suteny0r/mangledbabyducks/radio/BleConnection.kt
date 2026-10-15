@@ -26,7 +26,9 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
@@ -261,19 +263,54 @@ class BleConnection(
         service.getCharacteristic(MeshProtocol.LOGRADIO_UUID)?.let {
             runCatching { enableNotify(it) }
         }
-        // The drain loop runs until the radio returns a zero-length read, and a radio that
-        // keeps streaming has no obligation to stop. Awaiting it unbounded was the one path
-        // through connect() with no ceiling on it; the handshake re-triggers the drain
-        // anyway, so a long first pass just hands control back to RadioManager.
-        withTimeoutOrNull(INITIAL_DRAIN_MS) { startDrainPendingPackets() }
+        // Launched, not awaited: the loop runs until the radio returns a zero-length read
+        // and a radio that keeps streaming has no obligation to stop, so awaiting it was
+        // the one path through connect() with no ceiling on it. Launching also keeps the
+        // only CancellationException the drain can see a real one, which is what lets it
+        // read a timed-out read as a dead link. Same reasoning as the handshake's drains.
+        scope.launch { startDrainPendingPackets() }
         // Link quality for the Connect box's signal bars; the result arrives as an
-        // RssiUpdate event from onReadRemoteRssi.
+        // RssiUpdate event from onReadRemoteRssi. It doubles as the link's dead-man
+        // switch, because it is the only thing that keeps running on an idle link.
         scope.launch {
+            var rejects = 0
             while (!closed) {
-                runCatching { gatt?.readRemoteRssi() }
+                val outcome = runCatching { gatt?.readRemoteRssi() }
+                when {
+                    // DeadObjectException: the Bluetooth process itself is gone. Samsung's
+                    // airplane-mode path calls the private disableRadio(), which kills it
+                    // without an ACTION_STATE_CHANGED we ever receive, so neither
+                    // onConnectionStateChange nor adapterReceiver fires. Observed on the
+                    // Note 20 Ultra: the card sat on "Subscribed" with full signal bars
+                    // while every GATT call had been throwing for minutes.
+                    outcome.isFailure -> {
+                        declareLinkLost("Bluetooth went away (${outcome.exceptionOrNull()?.javaClass?.simpleName})")
+                        return@launch
+                    }
+                    outcome.getOrNull() == true -> rejects = 0
+                    // A single false is ordinary: the stack rejects an RSSI read while
+                    // another GATT operation is in flight. A run of them is not.
+                    else -> if (++rejects >= RSSI_REJECT_LIMIT) {
+                        declareLinkLost("Link unresponsive")
+                        return@launch
+                    }
+                }
                 delay(RSSI_POLL_MS)
             }
         }
+    }
+
+    /**
+     * Report a link that died without the stack telling us. Everything else that notices
+     * a dead link routes through here so there is one place that decides, and the `closed`
+     * flag makes a second caller a no-op.
+     */
+    private fun declareLinkLost(reason: String) {
+        if (closed) return
+        closed = true
+        Log.w(TAG, "$reason; treating the link as lost")
+        failAllPending(reason)
+        eventFlow.tryEmit(ConnectionEvent.Disconnected(shouldReconnect = true, error = reason))
     }
 
     private suspend fun enableNotifyWithBonding(ch: BluetoothGattCharacteristic) {
@@ -349,10 +386,17 @@ class BleConnection(
                 needsDrain = false
                 drainPendingPackets()
             }
-        } catch (e: Exception) {
-            // A read that fails mid-drain means the link just died; the disconnect
-            // path reports that separately — don't let it propagate.
+        } catch (e: TimeoutCancellationException) {
+            // A GATT read that gets no answer in 10 s is a dead link, not a slow one.
+            // This is the fastest detector of an adapter that vanished without a state
+            // broadcast; declareLinkLost is idempotent, so racing the RSSI poll is fine.
             Log.w(TAG, "Drain aborted: ${e.message}")
+            declareLinkLost("Radio stopped responding")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Drain aborted: ${e.message}")
+            declareLinkLost("Radio stopped responding")
         } finally {
             isDraining = false
         }
@@ -437,8 +481,8 @@ class BleConnection(
         private const val DISCONNECT_WAIT_MS = 2_000L
         /** A connect that never came up usually reports nothing; just let the stack drop it. */
         private const val ABORT_WAIT_MS = 400L
-        /** Ceiling on the first drain so connect() always returns to the attempt loop. */
-        private const val INITIAL_DRAIN_MS = 30_000L
+        /** Consecutive rejected RSSI reads before the link counts as dead (~15 s). */
+        private const val RSSI_REJECT_LIMIT = 3
         private const val TAG = "BleConnection"
 
         /**

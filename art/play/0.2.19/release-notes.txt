@@ -1,0 +1,3 @@
+<en-US>
+Fixes a connection that dies silently. On some phones, turning on airplane mode shuts the Bluetooth service down in a way that notifies no one, so the app went on showing "Subscribed" with full signal bars while nothing was getting through, and turning Bluetooth back on did not help. The app now watches its own link and reports it lost as soon as the radio stops answering, which lets it reconnect by itself. Changed in the previous release and worth repeating: a connection attempt that times out no longer stops the app from trying again.
+</en-US>

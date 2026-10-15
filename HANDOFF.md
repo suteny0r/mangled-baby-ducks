@@ -9,7 +9,42 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
-## The retry loop killed itself on the first timeout (2026-10-15, reproduced and diagnosed on the phone)
+## A link can die with no notification at all (0.2.19, 2026-10-15, reproduced on the phone, fix NOT yet verified)
+
+Found by running the discriminating test for the fix below, on 0.2.18, on the attached phone.
+
+`adb shell cmd connectivity airplane-mode enable` on a live session produced **one** app log
+line, `Drain aborted: Timed out waiting for 10000 ms`, and then nothing. No
+`onConnectionStateChange`, no `ACTION_STATE_CHANGED` reaching `adapterReceiver`, no
+`Link lost`, no reconnect. Four minutes later the Connect card still read **Subscribed** in
+green with full signal bars while the RSSI poll threw `DeadObjectException` every 5 s against
+a dead binder. Turning Bluetooth back on changed nothing; only restarting the app recovered it.
+
+The system log says why: `BluetoothAdapter: disableRadio() state: OFF at
+com.samsung.android.mcfserver`. Samsung's airplane-mode path uses the private `disableRadio()`,
+which tears the Bluetooth process down without driving the ordinary enable/disable state
+machine, so the broadcast `adapterReceiver` exists to catch never arrives. `svc bluetooth
+disable` does fire it, which is why the earlier adapter-off test passed and this one did not.
+Do not treat `svc bluetooth disable` as equivalent to airplane mode when testing this.
+
+Fix: the app now decides for itself that a link is dead instead of waiting to be told.
+`declareLinkLost(reason)` is the single idempotent entry point (guarded by `closed`), and two
+callers reach it:
+
+- The RSSI poll, which is the only thing that runs on an idle link. Any thrown exception
+  (`DeadObjectException`) is immediate death; `RSSI_REJECT_LIMIT` consecutive `false` returns
+  (~15 s) is the slower signal. A single `false` is ordinary — the stack rejects an RSSI read
+  while another GATT operation is in flight — so one is not enough.
+- The drain, where a `TimeoutCancellationException` from `readOnce`'s 10 s window is a dead
+  link, not a slow one. This is the faster detector of the two.
+
+That forced a related change: the first `startDrainPendingPackets()` in `connect()` is now
+launched rather than awaited. Awaiting it under a `withTimeoutOrNull` made the drain's own
+cancellation indistinguishable by type from a dead-link read timeout, and awaiting it unbounded
+was the only path through `connect()` with no ceiling. Launching is what `RadioManager`'s
+handshake already does, for its own documented reasons.
+
+## The retry loop killed itself on the first timeout (0.2.18, 2026-10-15, reproduced and diagnosed on the phone)
 
 This is the actual cause of the "connect, unable to connect, retrying, retrying, only a reboot
 fixes it" reports. The GATT-client section below it is a real hardening change but it was not
