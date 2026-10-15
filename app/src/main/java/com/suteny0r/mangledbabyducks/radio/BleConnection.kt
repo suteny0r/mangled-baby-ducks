@@ -83,6 +83,8 @@ class BleConnection(
     @Volatile private var isDraining = false
     /** Whether the stack ever reported STATE_CONNECTED, which decides how [disconnect] tears down. */
     @Volatile private var everConnected = false
+    /** Whether STATE_DISCONNECTED has already arrived, so [disconnect] need not wait for it. */
+    @Volatile private var disconnectReported = false
 
     // Android invalidates GATT handles silently when the adapter turns off — no
     // onConnectionStateChange ever fires — so adapter state must be watched directly.
@@ -134,6 +136,9 @@ class BleConnection(
                 }
                 newState == BluetoothProfile.STATE_DISCONNECTED -> {
                     val err = if (status != BluetoothGatt.GATT_SUCCESS) "GATT status $status" else null
+                    // Latched before anything else: this usually arrives well before
+                    // disconnect() runs, and the flag is what lets it skip the wait.
+                    disconnectReported = true
                     // Releases disconnect()'s wait before it calls close().
                     pendingDisconnect?.complete(Unit)
                     pendingConnect?.completeExceptionally(RadioException(err ?: "Disconnected"))
@@ -464,12 +469,22 @@ class BleConnection(
             val done = CompletableDeferred<Unit>()
             pendingDisconnect = done
             runCatching { g.disconnect() }
-            // A link that came up always reports STATE_DISCONNECTED. One that never
-            // connected often reports nothing at all, so that case only gives the stack a
-            // moment to drop the pending connect rather than waiting out the full window.
-            val wait = if (everConnected) DISCONNECT_WAIT_MS else ABORT_WAIT_MS
-            val acked = withTimeoutOrNull(wait) { done.await() } != null
-            if (!acked) Log.w(TAG, "No STATE_DISCONNECTED within ${wait}ms; closing anyway")
+            // The common case is that the stack already reported the drop and that is why
+            // we are tearing down at all. Waiting again for an event that has been and
+            // gone just burned the whole window, which added two seconds to every
+            // reconnect after a clean drop. The deferred is still armed above so a report
+            // that lands during this call releases the wait normally.
+            if (disconnectReported) {
+                Log.i(TAG, "STATE_DISCONNECTED already seen; closing without waiting")
+            } else {
+                // A link that came up always reports STATE_DISCONNECTED. One that never
+                // connected often reports nothing at all, so that case only gives the stack
+                // a moment to drop the pending connect rather than waiting out the full
+                // window.
+                val wait = if (everConnected) DISCONNECT_WAIT_MS else ABORT_WAIT_MS
+                val acked = withTimeoutOrNull(wait) { done.await() } != null
+                if (!acked) Log.w(TAG, "No STATE_DISCONNECTED within ${wait}ms; closing anyway")
+            }
             runCatching { g.close() }
             Log.i(TAG, "GATT client closed (live clients: ${liveClients.decrementAndGet()})")
         }

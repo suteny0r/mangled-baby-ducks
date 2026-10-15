@@ -1,0 +1,3 @@
+<en-US>
+Reconnects faster after a dropped connection. When a radio went out of range or lost power, the app spent a further two seconds waiting for Android to confirm a disconnection it had already reported. That wait is now skipped when the confirmation has already arrived, which also removes a shorter delay after each failed connection attempt.
+</en-US>

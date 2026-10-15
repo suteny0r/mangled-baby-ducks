@@ -9,6 +9,29 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## disconnect() waited for an event that had already happened (0.2.22, 2026-10-15, NOT yet verified)
+
+Seen in the radio power-cycle log on 0.2.20:
+
+```
+11:07:09.459  Link lost (reconnect=true): null
+11:07:11.462  No STATE_DISCONNECTED within 2000ms; closing anyway
+```
+
+`onConnectionStateChange` had reported the drop at :09.459 — that is *why* the teardown was
+running at all — and then `disconnect()` armed a fresh `pendingDisconnect` and waited the
+full `DISCONNECT_WAIT_MS` for a report that had been and gone. Two seconds added to every
+reconnect after a clean drop, which is the common case.
+
+Fix: `disconnectReported` is latched in the STATE_DISCONNECTED branch, and `disconnect()`
+skips the wait when it is already set. The deferred is still armed before `g.disconnect()`,
+so a report that lands *during* the call still releases the wait normally and there is no
+race between the check and the await.
+
+This also removes the `ABORT_WAIT_MS` 400 ms wait after a failed connect whenever the stack
+did report the failure, which it does for status 133 — visible seven times in the tester's
+log. The waits only run now when the stack really has said nothing.
+
 ## A refused MTU negotiation killed the connection (0.2.21, 2026-10-15, diagnosed from a tester's log)
 
 **The first fault diagnosed entirely from a remote diagnostic log**, which is what the export
