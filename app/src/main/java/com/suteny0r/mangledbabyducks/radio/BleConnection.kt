@@ -150,8 +150,16 @@ class BleConnection(
         }
 
         override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
-            if (status == BluetoothGatt.GATT_SUCCESS) pendingMtu?.complete(mtu)
-            else pendingMtu?.completeExceptionally(RadioException("MTU change failed: $status"))
+            // Completed normally whatever the status: a refused MTU negotiation is not a
+            // reason to drop a link that is already up. ESP32 radios (Heltec) answer the
+            // central's request with 6 (GATT_REQUEST_NOT_SUPPORTED) when the peripheral
+            // got its own MTU exchange in first, which is a race, so the same radio fails
+            // only sometimes. nRF52 radios (RAK) never do it, which is why one of the
+            // tester's two radios worked and the other did not.
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                Log.w(TAG, "MTU request refused (status $status); continuing at $mtu")
+            }
+            pendingMtu?.complete(mtu)
         }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
@@ -240,8 +248,14 @@ class BleConnection(
         val mtuDeferred = CompletableDeferred<Int>()
         pendingMtu = mtuDeferred
         g.requestMtu(512)
-        val mtu = withTimeout(10_000) { mtuDeferred.await() }
-        Log.i(TAG, "Negotiated MTU $mtu")
+        // A radio that never answers the request is not a radio we have to give up on
+        // either; Android does long reads and writes on its own, so a smaller MTU costs
+        // round trips and nothing else. A genuine link drop still aborts here, because
+        // failAllPending completes this deferred exceptionally.
+        val mtu = withTimeoutOrNull(MTU_TIMEOUT_MS) { mtuDeferred.await() }
+        pendingMtu = null
+        if (mtu == null) Log.w(TAG, "No MTU response in ${MTU_TIMEOUT_MS}ms; continuing at the default")
+        else Log.i(TAG, "MTU $mtu")
 
         val discovery = CompletableDeferred<Unit>()
         pendingDiscovery = discovery
@@ -483,6 +497,8 @@ class BleConnection(
         private const val ABORT_WAIT_MS = 400L
         /** Consecutive rejected RSSI reads before the link counts as dead (~15 s). */
         private const val RSSI_REJECT_LIMIT = 3
+        /** How long to wait for an answer to the MTU request before carrying on without one. */
+        private const val MTU_TIMEOUT_MS = 10_000L
         private const val TAG = "BleConnection"
 
         /**

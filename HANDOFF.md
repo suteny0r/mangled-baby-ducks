@@ -9,6 +9,38 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## A refused MTU negotiation killed the connection (0.2.21, 2026-10-15, diagnosed from a tester's log)
+
+**The first fault diagnosed entirely from a remote diagnostic log**, which is what the export
+feature below was built for. Tester's report: a RAK nRF radio works reliably, a Heltec v4 on
+firmware 2.8.1 fails *sometimes*. Their log (`SM-G781U`, Android 13, 0.2.20) settled it in one
+pass:
+
+| | |
+|---|---|
+| `connectGatt` calls | 8 |
+| GATT closes | 9 |
+| max live clients | **1** (no leak) |
+| `Establish failed: MTU change failed: 6` | **7 of 8** |
+| `Establish failed: GATT status 133` | 1 |
+| successful connections | 0 |
+
+`onMtuChanged` completed `pendingMtu` **exceptionally** on any non-success status, and that
+exception propagated out of `establish` and aborted the whole attempt — on a link that was
+already up and perfectly usable. Status 6 is `GATT_REQUEST_NOT_SUPPORTED`: an ESP32 answers
+the central's MTU request that way when the peripheral won the race to start its own MTU
+exchange. It is a race, hence "sometimes". nRF52 radios never do it, hence one radio working
+and the other not.
+
+Fix: the MTU step is best-effort. `onMtuChanged` always completes normally and logs a warning
+on a non-success status; the wait is `withTimeoutOrNull`, so a radio that never answers is
+also survivable. Android performs long reads and writes by itself, so a smaller MTU costs
+round trips and nothing else. A genuine link drop still aborts, because `failAllPending`
+completes the same deferred exceptionally.
+
+Do not "harden" this back into a throw. An MTU request is an optimisation, not a
+precondition.
+
 ## Send Diagnostic Log (0.2.20, 2026-10-15, VERIFIED end to end on the phone)
 
 Settings > Developers > Send Diagnostic Log. `diagnostics/LogExport.kt` shells out to

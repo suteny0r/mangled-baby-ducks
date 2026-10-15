@@ -1,0 +1,3 @@
+<en-US>
+Fixes connection failures with Heltec and other ESP32 radios. The app asked the radio to raise the Bluetooth packet size, and if the radio turned that request down the app gave up on the connection entirely, even though the connection was already working. Whether the radio turned it down came down to timing, so the same radio would connect sometimes and not others, while nRF52 radios such as RAK were never affected. The request is now optional: if the radio declines it, the app carries on and connects.
+</en-US>
