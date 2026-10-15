@@ -1,0 +1,3 @@
+<en-US>
+Fixes the connection failure that only a reboot could clear. When a connection attempt timed out, the app stopped retrying and left the Connect screen stuck on "Retrying", with no way back except force-stopping the app. Android's own Bluetooth service restarting was enough to trigger it. The app now treats a timed-out attempt as one failed attempt, works through the rest, and always ends on a state that offers Reconnect and Forget. Connecting while Bluetooth is off or restarting now fails straight away instead of waiting out the full timeout.
+</en-US>
