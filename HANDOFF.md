@@ -9,7 +9,42 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
-## A link can die with no notification at all (0.2.19, 2026-10-15, reproduced on the phone, fix NOT yet verified)
+## Send Diagnostic Log (0.2.20, 2026-10-15, compiles, NOT yet verified on the phone)
+
+Settings > Developers > Send Diagnostic Log. `diagnostics/LogExport.kt` shells out to
+logcat, writes `device.txt` / `logcat.txt` / `crash.txt` into a zip in
+`cacheDir/logs`, and hands it to the share sheet through a `FileProvider`
+(`${applicationId}.fileprovider`, `res/xml/file_paths.xml`, scoped to that one cache
+subdirectory). Motivated directly by the two BLE faults below: both were diagnosed from
+`adb logcat` on the phone plugged into this machine, and the second Android device that
+reported the same symptom could not be reached at all.
+
+Facts worth not relearning:
+
+- **Scope is this app's own log.** Android has restricted logcat to the caller's UID since
+  4.1, so no system log and no other app's, and no `READ_LOGS` is requested. The dialog says
+  so; do not let the copy drift into promising a full device log.
+- The warning dialog is a gate, not a footnote, and nothing is generated until Continue.
+  It names what is actually in there. That list was checked against the code, not guessed:
+  our own `Log` calls never carry message text, but `RadioManager.kt:523` writes the radio's
+  **firmware** debug output (`radio: ...`) into our log, and that can contain anything the
+  firmware prints. The dialog says that.
+- `-t 20000` bounds the main buffer and the process output is streamed straight into the
+  `ZipOutputStream`. Reading it into a String first is what turns a long log into an OOM.
+- The URI grant is set three ways (`ClipData`, the send Intent's flag, and the chooser's)
+  because OEM share sheets have been known to forward the extras without the permission,
+  which the receiving app sees as a file it cannot open.
+- Only one zip is kept; each export deletes the previous.
+
+Also fixed here, found by `lintDebug` and unrelated to the feature: `BigInteger.TWO` in
+`ConfigEnums.kt` (X25519) is API 33 while `minSdk` is 26, so generating a key pair threw
+`NoSuchFieldError` on Android 8 through 12. Two sites, both now `BigInteger.valueOf(2)`.
+
+`lintDebug` still fails on one pre-existing error that is deliberate code, not a bug:
+`NodeBackupManager.kt:360` calls Room's restricted `notifyObserversByTableNames`. Left
+alone. `lintVitalRelease` does not treat it as fatal, so release builds are unaffected.
+
+## A link can die with no notification at all (0.2.19, 2026-10-15, reproduced on the phone, fix VERIFIED)
 
 Found by running the discriminating test for the fix below, on 0.2.18, on the attached phone.
 
@@ -44,7 +79,14 @@ cancellation indistinguishable by type from a dead-link read timeout, and awaiti
 was the only path through `connect()` with no ceiling. Launching is what `RadioManager`'s
 handshake already does, for its own documented reasons.
 
-## The retry loop killed itself on the first timeout (0.2.18, 2026-10-15, reproduced and diagnosed on the phone)
+Verified on the phone on 0.2.19: airplane mode on a live session produced
+`Radio stopped responding; treating the link as lost` and `Link lost (reconnect=true)` in the
+same millisecond as the drain timeout, and `GATT client closed (live clients: 0)`. Note that
+on that run the adapter broadcast *did* arrive as well, so the Samsung `disableRadio()` path
+drops it intermittently rather than always; `declareLinkLost` being idempotent meant both
+detectors firing caused no double handling.
+
+## The retry loop killed itself on the first timeout (0.2.18, 2026-10-15, VERIFIED on the phone)
 
 This is the actual cause of the "connect, unable to connect, retrying, retrying, only a reboot
 fixes it" reports. The GATT-client section below it is a real hardening change but it was not
@@ -91,9 +133,12 @@ Fixes:
    remaining path with no ceiling, since the loop runs until the radio returns a zero-length
    read. Now `withTimeoutOrNull(INITIAL_DRAIN_MS)` (30 s).
 
-Verified: builds clean; the diagnosis was confirmed on hardware. The *fix* is not yet running on
-a phone — the Note 20 Ultra carries the Play-signed build and Play App Signing means no local
-artifact matches it, so installing would need an uninstall that wipes the node store.
+Verified end to end on the phone on 0.2.19, via internal testing (which is how to get a build
+onto it without an uninstall: Play App Signing re-signs the AAB so the update lands over the
+top and the node store survives). With the adapter held down by airplane mode the loop walked
+`attempt 2/10` at 10:00:16 through `attempt 10/10` at 10:02:00, backoff widening correctly,
+and landed on a terminal card reading "Radio stopped responding / No device connected" with
+the Available Radios list restored. On 0.2.17 the same path froze at "Retrying (attempt 1)".
 
 ## BLE: await the disconnect before closing the GATT client (2026-10-14, NOT reproduced, NOT verified)
 Report, from a second Android device the user cannot reach directly: connect/disconnect works for

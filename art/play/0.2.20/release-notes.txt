@@ -1,0 +1,3 @@
+<en-US>
+New: Settings > Developers > Send Diagnostic Log. This collects the app's log, zips it and hands it to the share sheet, so a connection problem can be reported without plugging the phone into a computer. The app warns you first about what the log contains and reminds you to send it only to someone you trust. Also fixes a crash when generating a key pair on Android 8 through 12.
+</en-US>

@@ -292,7 +292,9 @@ object SecurityKey {
  * speed does not matter and no crypto library is needed; the firmware uses the same curve.
  */
 object X25519 {
-    private val P: BigInteger = BigInteger.TWO.pow(255).subtract(BigInteger.valueOf(19))
+    // valueOf(2), not BigInteger.TWO: that constant is API 33 and minSdk is 26, so it
+    // throws NoSuchFieldError on Android 8 through 12 the first time a key is generated.
+    private val P: BigInteger = BigInteger.valueOf(2).pow(255).subtract(BigInteger.valueOf(19))
     private val A24: BigInteger = BigInteger.valueOf(121665)
 
     fun clamp(k: ByteArray): ByteArray {
@@ -352,7 +354,7 @@ object X25519 {
             z2 = e.multiply(aa.add(A24.multiply(e)).mod(P)).mod(P)
         }
         if (swap == 1) { val tx = x2; x2 = x3; x3 = tx; val tz = z2; z2 = z3; z3 = tz }
-        val result = x2.multiply(z2.modPow(P.subtract(BigInteger.TWO), P)).mod(P)
+        val result = x2.multiply(z2.modPow(P.subtract(BigInteger.valueOf(2)), P)).mod(P)
         return encodeLittleEndian(result)
     }
 }

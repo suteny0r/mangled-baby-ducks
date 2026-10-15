@@ -20,6 +20,7 @@ import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Badge
 import androidx.compose.material.icons.outlined.Bluetooth
 import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.HelpOutline
@@ -51,6 +52,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -62,8 +64,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import com.suteny0r.mangledbabyducks.container
+import com.suteny0r.mangledbabyducks.diagnostics.LogExport
 import com.suteny0r.mangledbabyducks.radio.RadioState
 import com.suteny0r.mangledbabyducks.ui.theme.IosGreen
+import kotlinx.coroutines.launch
 import org.meshtastic.proto.AppOnlyProtos
 
 @Composable
@@ -78,6 +82,10 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
     var editingOwner by remember { mutableStateOf(false) }
     var showExport by remember { mutableStateOf(false) }
     var showImport by remember { mutableStateOf(false) }
+    var showLogWarning by remember { mutableStateOf(false) }
+    var exportingLog by remember { mutableStateOf(false) }
+    var logExportError by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
 
     // Settings is a tab, not a nav graph, so a config section is a sub-screen held in
     // local state with the system back gesture wired to it.
@@ -272,6 +280,13 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
             SectionHeader("Developers")
             GroupCard {
                 NavRow("Backup Management", Icons.Outlined.Storage) { showBackups = true }
+                HorizontalDivider()
+                NavRow(
+                    "Send Diagnostic Log",
+                    Icons.Outlined.BugReport,
+                    subtitle = "Zip this app's log and share it",
+                    enabled = !exportingLog,
+                ) { showLogWarning = true }
             }
 
             // The full trademark notice lives in About; this is the one-line minimum.
@@ -293,6 +308,68 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                 vm.setOwner(longName, shortName)
                 editingOwner = false
             },
+        )
+    }
+    // The log is readable plain text and goes to whoever the user picks out of the share
+    // sheet, so the warning is a gate rather than a footnote: it names what is actually in
+    // there, and nothing is generated until Continue is pressed.
+    if (showLogWarning) {
+        AlertDialog(
+            onDismissRequest = { if (!exportingLog) showLogWarning = false },
+            title = { Text("Send Diagnostic Log") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "This collects this app's own log. Android does not let an app read " +
+                            "the system log or any other app's, so that is all it can gather."
+                    )
+                    Text("Expect the log to contain:")
+                    Text(
+                        "• Your radio's Bluetooth address and name\n" +
+                            "• Node names and numbers from your mesh\n" +
+                            "• Your radio's own debug output, which can include anything " +
+                            "its firmware prints\n" +
+                            "• Details about this phone, and when messages arrived",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(
+                        "It is readable text, and whoever you send it to can read all of it. " +
+                            "Only send it to someone you trust.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !exportingLog,
+                    onClick = {
+                        exportingLog = true
+                        scope.launch {
+                            runCatching { LogExport.writeZip(context) }
+                                .onSuccess {
+                                    context.startActivity(LogExport.shareIntent(context, it))
+                                    showLogWarning = false
+                                }
+                                .onFailure { logExportError = it.message ?: it.javaClass.simpleName }
+                            exportingLog = false
+                        }
+                    },
+                ) { Text(if (exportingLog) "Collecting…" else "Continue") }
+            },
+            dismissButton = {
+                TextButton(enabled = !exportingLog, onClick = { showLogWarning = false }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
+    logExportError?.let { message ->
+        AlertDialog(
+            onDismissRequest = { logExportError = null },
+            title = { Text("Could Not Collect the Log") },
+            text = { Text(message) },
+            confirmButton = { TextButton(onClick = { logExportError = null }) { Text("OK") } },
         )
     }
     if (showExport) {
