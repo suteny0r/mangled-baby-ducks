@@ -9,7 +9,7 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
-## Send Diagnostic Log (0.2.20, 2026-10-15, compiles, NOT yet verified on the phone)
+## Send Diagnostic Log (0.2.20, 2026-10-15, VERIFIED end to end on the phone)
 
 Settings > Developers > Send Diagnostic Log. `diagnostics/LogExport.kt` shells out to
 logcat, writes `device.txt` / `logcat.txt` / `crash.txt` into a zip in
@@ -35,6 +35,15 @@ Facts worth not relearning:
   because OEM share sheets have been known to forward the extras without the permission,
   which the receiving app sees as a file it cannot open.
 - Only one zip is kept; each export deletes the previous.
+
+Verified on the Note 20 Ultra (Android 13) by driving the UI over adb and sending the result
+to Signal's Note to Self: the row renders, the dialog gates it, nothing is written until
+Continue, `logcat` execs fine from the app (`Wrote ...103642.zip (6363 bytes)`), the second
+export replaced the first, and **Signal displayed the attachment at 6 KB**, matching those
+6363 bytes, which is what proves the URI grant actually resolved rather than the extras just
+riding along. Delivered, opened, three files inside. The grant was the part most likely to
+break on a Samsung build, so keep all three of `ClipData`, the send Intent's flag and the
+chooser's.
 
 Also fixed here, found by `lintDebug` and unrelated to the feature: `BigInteger.TWO` in
 `ConfigEnums.kt` (X25519) is API 33 while `minSdk` is 26, so generating a key pair threw
