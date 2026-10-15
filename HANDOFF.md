@@ -9,6 +9,57 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## Out of range meant disconnected for good (0.2.22, 2026-10-15, NOT yet verified)
+
+Reported against 0.2.21: went out of range, came back, no automatic reconnect.
+
+Root cause is policy, not a broken path. `autoConnectSpent` is an `AtomicBoolean` set **once
+per process and never reset**, so once the reconnect loop exhausts its ten attempts (two to
+three minutes) and lands on `Failed`:
+
+- no link means no further `Disconnected` event, so `scheduleReconnect` can never run again;
+- `MainActivity.onResume` calls `autoConnect`, which returns false immediately, already spent;
+- the car session calls the same thing with the same result.
+
+Nothing is left alive to notice the radio return, and `RadioService` keeps the process up for
+days, so "restart the app" never happens by itself either. The attempt loop was built for a
+radio rebooting after a config write, which is a two-minute event. A radio carried out of
+range is an hours-long one.
+
+Fix: when the attempts run out, `watchForReturn` starts a low-power BLE scan filtered to the
+radio's MAC and reconnects when it advertises again. Deliberately **not** a retry timer:
+nothing is attempted until the radio is actually visible, so a radio that is switched off
+costs a duty-cycled scan and no GATT traffic. `BleScanner.scan` gained a `lowPower` flag for
+this; `SCAN_MODE_LOW_LATENCY` is right for the six-second pre-connect probe and wrong for a
+watch that may run for hours. `PresenceProbe` is now a two-method interface rather than a
+`fun interface`.
+
+The one-attempt-loop invariant still holds: the watch takes `attemptLock` like every other
+caller and abandons everything if a newer generation has superseded it. `beginRequest` and
+`scheduleReconnect` both cancel it. It is a **loop, not recursion** — re-entering
+`watchForReturn` from inside its own job would cancel the job it is running on, since
+`presenceWatchJob` still points at it.
+
+## The diagnostic log had no history in it (0.2.22, 2026-10-15, NOT yet verified)
+
+The first real out-of-range report came back with **no `BleConnection` or `RadioManager`
+lines at all**: the export covered 17:03:35 to 17:05:28, the two minutes spent opening the
+app and exporting. The device ring buffer is 5 MiB shared across every app, and on the Note
+20 Ultra it held about twenty minutes one morning and barely two that afternoon. A user
+notices a fault, opens Settings, exports, and the evidence has already gone.
+
+`LogStore` now captures continuously into two rotating 2 MB files under `filesDir/diag`, and
+the export carries them as `history.txt` ahead of the live `logcat.txt` dump. Two things keep
+it useful rather than merely large:
+
+- **Filtered at the source**: the app's own tags at `:V` plus `*:W`. Unfiltered, 125 of 229
+  lines in one two-minute sample were `ViewRootImpl` and `BLASTBufferQueue` chatter.
+- **Flushed every 20 lines**, because the process can be killed without warning and the lines
+  worth having are the last ones before the fault.
+
+If a new tag is added to the app, add it to `LogStore.TAGS` or it will only appear at warning
+and above.
+
 ## disconnect() waited for an event that had already happened (0.2.22, 2026-10-15, NOT yet verified)
 
 Seen in the radio power-cycle log on 0.2.20:

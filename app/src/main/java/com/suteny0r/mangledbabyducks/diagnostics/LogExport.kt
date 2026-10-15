@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Build
 import android.util.Log
 import androidx.core.content.FileProvider
+import com.suteny0r.mangledbabyducks.container
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
@@ -52,6 +53,19 @@ object LogExport {
         ZipOutputStream(zip.outputStream().buffered()).use { out ->
             out.putNextEntry(ZipEntry("device.txt"))
             out.write(deviceReport(context).toByteArray())
+            out.closeEntry()
+
+            // The rolling capture first, because it is the part with history in it. The
+            // live dump below only reaches as far back as the device ring buffer happens
+            // to hold, which on a busy phone has been as little as two minutes.
+            out.putNextEntry(ZipEntry("history.txt"))
+            var wroteHistory = false
+            context.container.logStore.files().forEach { file ->
+                runCatching { file.inputStream().use { it.copyTo(out) } }
+                    .onSuccess { wroteHistory = true }
+                    .onFailure { Log.w(TAG, "Could not read ${file.name}", it) }
+            }
+            if (!wroteHistory) out.write("No rolling log history on disk yet.\n".toByteArray())
             out.closeEntry()
 
             out.putNextEntry(ZipEntry("logcat.txt"))
@@ -135,8 +149,11 @@ object LogExport {
         appendLine("Build:         ${Build.DISPLAY}")
         appendLine("ABIs:          ${Build.SUPPORTED_ABIS.joinToString()}")
         appendLine()
-        appendLine("logcat.txt holds this app's own log only; Android does not let an app")
-        appendLine("read the system log or another app's.")
+        appendLine("history.txt is the app's own rolling capture, which is the part with")
+        appendLine("history in it. logcat.txt is a live dump of whatever the device ring")
+        appendLine("buffer still held, which on a busy phone can be only a few minutes.")
+        appendLine("Both are this app's own log: Android does not let an app read the")
+        appendLine("system log or another app's.")
     }
 
     private fun versionName(context: Context): String = runCatching {

@@ -61,8 +61,16 @@ sealed interface RadioState {
  * made. Supplied by the BLE transport (a scan for the radio's advertisement); null for
  * transports where a blind attempt costs nothing, such as TCP.
  */
-fun interface PresenceProbe {
+interface PresenceProbe {
     suspend fun isVisible(timeoutMs: Long): Boolean
+
+    /**
+     * Suspends until the radio is reachable again, however long that takes. Called once the
+     * attempt loop has given up, so that a radio which simply went out of range is picked
+     * up when it returns instead of staying disconnected until the user intervenes.
+     * Implementations must be cheap enough to leave running indefinitely.
+     */
+    suspend fun awaitReturn()
 }
 
 /**
@@ -192,6 +200,8 @@ class RadioManager(
     private var eventJob: Job? = null
     private var heartbeatJob: Job? = null
     private var reconnectJob: Job? = null
+    /** Low-power watch for a radio that went out of range; see [watchForReturn]. */
+    private var presenceWatchJob: Job? = null
     private var nodeCount = 0
     @Volatile private var lastRxMs = 0L
 
@@ -304,6 +314,7 @@ class RadioManager(
     private suspend fun beginRequest(): Int {
         val gen = ++requestGeneration
         reconnectJob?.cancel()
+        presenceWatchJob?.cancel()
         heartbeatJob?.cancel()
         eventJob?.cancel()
         sessionWentLive = false
@@ -1380,6 +1391,8 @@ class RadioManager(
         if (reconnectJob?.isActive == true || attemptLock.isLocked) return
         val factory = connectionFactory ?: return
         val name = lastName
+        // A live drop supersedes any watch left over from an earlier one.
+        presenceWatchJob?.cancel()
         // Adopt the current generation rather than bumping it: a user-initiated
         // connect() supersedes this loop, never the other way round.
         val gen = requestGeneration
@@ -1404,6 +1417,62 @@ class RadioManager(
                     absentIsTerminal = false,
                     exhaustedReason = reason ?: "Connection lost",
                 )
+            }
+            // The attempts cover a radio rebooting, not a radio carried out of range. Once
+            // they run out, keep a cheap watch on the advertisement so returning to range
+            // reconnects on its own. Without this the session was over for good: no link
+            // means no further Disconnected event to schedule from, and autoConnect has
+            // already spent its one attempt for the life of the process, which the
+            // foreground service can keep alive for days.
+            watchForReturn(gen)
+        }
+    }
+
+    /**
+     * Wait for a radio that went out of range to advertise again, then reconnect.
+     *
+     * Deliberately not a retry timer: nothing is attempted until the radio is actually
+     * visible, so a radio that is switched off costs a duty-cycled scan and no GATT
+     * traffic at all. The attempt-loop invariant still holds, because this takes
+     * [attemptLock] like every other caller and abandons the whole thing if a newer
+     * request has bumped the generation.
+     */
+    private fun watchForReturn(gen: Int) {
+        val probe = lastPresence ?: return
+        val factory = connectionFactory ?: return
+        val name = lastName
+        presenceWatchJob?.cancel()
+        presenceWatchJob = scope.launch {
+            // A loop, not a recursive call: re-entering this function from inside the job
+            // would cancel the very job it is running on, because presenceWatchJob still
+            // points at it.
+            while (gen == requestGeneration && !isConnected) {
+                Log.i(TAG, "Watching for ${name ?: "the radio"} to come back into range")
+                val seen = runCatching { probe.awaitReturn() }
+                    .onFailure { Log.w(TAG, "Presence watch ended: ${it.message}") }
+                    .isSuccess
+                if (!seen) return@launch
+                if (gen != requestGeneration || isConnected || isAttempting) return@launch
+                Log.i(TAG, "${name ?: "The radio"} is advertising again; reconnecting")
+                attemptLock.withLock {
+                    runAttempts(
+                        gen = gen,
+                        factory = factory,
+                        name = name,
+                        attempts = MAX_RECONNECT_ATTEMPTS,
+                        delayFor = { attempt -> if (attempt == 0) 0L else RECONNECT_DELAY_MS * (attempt + 1) },
+                        progressFor = { attempt -> RadioState.Reconnecting(attempt + 1) },
+                        searchingFor = { attempt -> RadioState.Searching(attempt + 1, MAX_RECONNECT_ATTEMPTS) },
+                        // It was advertising a moment ago, so go straight at it on the first try.
+                        presenceFor = { attempt -> if (attempt == 0) null else lastPresence },
+                        absentIsTerminal = false,
+                        exhaustedReason = "Connection lost",
+                    )
+                }
+                // It advertised but would not complete a connect. Back to watching rather
+                // than leaving the session dead, after a pause so a radio that advertises
+                // and then refuses every connect cannot spin this loop.
+                if (gen == requestGeneration && !isConnected) delay(WATCH_RETRY_GAP_MS)
             }
         }
     }
@@ -1442,6 +1511,8 @@ class RadioManager(
         private const val CONNECT_ATTEMPTS = 3
         private const val MAX_RECONNECT_ATTEMPTS = 10
         private const val RECONNECT_DELAY_MS = 2_000L
+        /** Pause before re-watching a radio that advertised but would not finish a connect. */
+        private const val WATCH_RETRY_GAP_MS = 30_000L
         /** How long to wait for a known radio's advertisement before giving up on it. */
         private const val PRESENCE_TIMEOUT_MS = 6_000L
         private const val HEARTBEAT_TIMEOUT_MS = 3 * MeshProtocol.HEARTBEAT_INTERVAL_MS

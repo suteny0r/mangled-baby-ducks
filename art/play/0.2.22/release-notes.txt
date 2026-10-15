@@ -1,3 +1,7 @@
 <en-US>
-Reconnects faster after a dropped connection. When a radio went out of range or lost power, the app spent a further two seconds waiting for Android to confirm a disconnection it had already reported. That wait is now skipped when the confirmation has already arrived, which also removes a shorter delay after each failed connection attempt.
+Reconnects on its own after the radio comes back into range. Previously the app tried for a couple of minutes and then stopped for good, so a radio that was out of range for longer stayed disconnected until you reconnected it by hand. The app now watches quietly for the radio and reconnects the moment it reappears, without repeatedly trying to connect to a radio that is not there.
+
+Reconnects faster after a dropped connection, by no longer waiting for a disconnection Android had already reported.
+
+Diagnostic logs now include the app's own saved history rather than only the few minutes the phone happened to keep, so a problem can be reported after it happens instead of while it is happening.
 </en-US>

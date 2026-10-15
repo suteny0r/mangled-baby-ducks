@@ -28,7 +28,7 @@ class BleScanner(private val context: Context) {
      * from one specific [address] when given (a known radio is matched by MAC, since its
      * advertisement is the thing being waited for, not its service list).
      */
-    fun scan(address: String? = null): Flow<DiscoveredDevice> = callbackFlow {
+    fun scan(address: String? = null, lowPower: Boolean = false): Flow<DiscoveredDevice> = callbackFlow {
         val scanner = adapter?.bluetoothLeScanner
             ?: run { close(RadioException("Bluetooth unavailable")); return@callbackFlow }
 
@@ -56,7 +56,13 @@ class BleScanner(private val context: Context) {
             }
             .build()
         val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            // Low latency is right for the few-second probe before a connect attempt. It is
+            // wrong for [awaitReturn], which may run for hours waiting on a radio to come
+            // back, so that one asks for the duty-cycled mode instead.
+            .setScanMode(
+                if (lowPower) ScanSettings.SCAN_MODE_LOW_POWER
+                else ScanSettings.SCAN_MODE_LOW_LATENCY
+            )
             .build()
         scanner.startScan(listOf(filter), settings, callback)
 
@@ -72,6 +78,18 @@ class BleScanner(private val context: Context) {
         withTimeoutOrNull(timeoutMs) {
             runCatching { scan(address).first() }.isSuccess
         } ?: false
+
+    /**
+     * Suspends until the radio at [address] advertises, however long that takes. This is
+     * how a radio that went out of range gets reconnected: the attempt loop gives up after
+     * a couple of minutes, and without this nothing is left alive to notice it come back.
+     *
+     * Scanning is cheaper than it looks here. The filter is on the MAC, so the match is
+     * made in the controller, and the mode is duty-cycled rather than low latency.
+     */
+    suspend fun awaitReturn(address: String) {
+        scan(address, lowPower = true).first()
+    }
 
     fun connection(address: String): BleConnection =
         BleConnection(context, adapter.getRemoteDevice(address))

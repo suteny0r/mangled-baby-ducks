@@ -23,6 +23,7 @@ import com.suteny0r.mangledbabyducks.radio.LocationSharer
 import com.suteny0r.mangledbabyducks.radio.MeshProtocol
 import com.suteny0r.mangledbabyducks.radio.MessageNotifier
 import com.suteny0r.mangledbabyducks.radio.PacketIngest
+import com.suteny0r.mangledbabyducks.diagnostics.LogStore
 import com.suteny0r.mangledbabyducks.radio.PresenceProbe
 import com.suteny0r.mangledbabyducks.radio.RadioConnection
 import com.suteny0r.mangledbabyducks.radio.RadioManager
@@ -152,6 +153,12 @@ class AppContainer(context: Context) {
     val locationSharer = LocationSharer(context, radioManager, prefs)
     /** Device catalog for the node detail hardware card; refreshes at most every 48 h. */
     val hardwareCatalog = HardwareCatalog(context).also { it.refresh() }
+
+    /**
+     * Started as early as the container is built, because the whole point is to have the
+     * history already on disk by the time someone notices a fault and exports it.
+     */
+    val logStore = LogStore(context).also { it.start() }
 
     /** Process-lifetime scope for the shared hot flows below and the launch-time prune. */
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -411,7 +418,12 @@ class AppContainer(context: Context) {
      * the GATT stack, TCP has nothing to scan for.
      */
     fun presenceProbe(radio: RememberedRadio): PresenceProbe? = when (radio.type) {
-        "ble" -> PresenceProbe { timeoutMs -> bleScanner.isAdvertising(radio.address, timeoutMs) }
+        "ble" -> object : PresenceProbe {
+            override suspend fun isVisible(timeoutMs: Long) =
+                bleScanner.isAdvertising(radio.address, timeoutMs)
+
+            override suspend fun awaitReturn() = bleScanner.awaitReturn(radio.address)
+        }
         else -> null
     }
 
