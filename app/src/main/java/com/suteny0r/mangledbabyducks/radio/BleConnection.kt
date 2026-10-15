@@ -219,6 +219,10 @@ class BleConnection(
         val connectDeferred = CompletableDeferred<Unit>()
         pendingConnect = connectDeferred
         gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
+            // Null when the adapter is off or still restarting, which is exactly the state
+            // right after a Bluetooth stack crash. No client was registered and no callback
+            // will ever fire, so failing now beats burning the whole connect window below.
+            ?: throw RadioException("Bluetooth is unavailable")
         // Instrumentation for the connect-then-fail-forever reports: this must sit at 1
         // for a live session and 0 when idle. A number that climbs across reconnects is a
         // leaked GATT client, and the device is on its way to refusing all LE connections.
@@ -257,7 +261,11 @@ class BleConnection(
         service.getCharacteristic(MeshProtocol.LOGRADIO_UUID)?.let {
             runCatching { enableNotify(it) }
         }
-        startDrainPendingPackets()
+        // The drain loop runs until the radio returns a zero-length read, and a radio that
+        // keeps streaming has no obligation to stop. Awaiting it unbounded was the one path
+        // through connect() with no ceiling on it; the handshake re-triggers the drain
+        // anyway, so a long first pass just hands control back to RadioManager.
+        withTimeoutOrNull(INITIAL_DRAIN_MS) { startDrainPendingPackets() }
         // Link quality for the Connect box's signal bars; the result arrives as an
         // RssiUpdate event from onReadRemoteRssi.
         scope.launch {
@@ -429,6 +437,8 @@ class BleConnection(
         private const val DISCONNECT_WAIT_MS = 2_000L
         /** A connect that never came up usually reports nothing; just let the stack drop it. */
         private const val ABORT_WAIT_MS = 400L
+        /** Ceiling on the first drain so connect() always returns to the attempt loop. */
+        private const val INITIAL_DRAIN_MS = 30_000L
         private const val TAG = "BleConnection"
 
         /**

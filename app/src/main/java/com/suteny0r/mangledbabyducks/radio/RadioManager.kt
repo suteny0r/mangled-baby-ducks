@@ -8,6 +8,7 @@ import com.suteny0r.mangledbabyducks.db.NodeEntity
 import com.suteny0r.mangledbabyducks.db.TracerouteEntity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -316,6 +317,12 @@ class RadioManager(
      * Sequential attempt loop: the only place establish() is called from. Aborts as
      * soon as a newer request arrives, and lands on a terminal Failed state when the
      * attempts run out, so the UI never sits in Reconnecting forever.
+     *
+     * The finally clause is what actually guarantees that. An exception escaping the
+     * loop used to leave the UI parked on the progress state this function had just
+     * set, with the attempt coroutine dead and nothing left to fire a reconnect: the
+     * app then showed "Retrying (attempt 1)" until it was force stopped. Landing on
+     * Failed is what puts the Reconnect and Forget buttons back.
      */
     private suspend fun runAttempts(
         gen: Int,
@@ -329,42 +336,62 @@ class RadioManager(
         absentIsTerminal: Boolean,
         exhaustedReason: String,
     ) {
-        for (attempt in 0 until attempts) {
-            if (gen != requestGeneration) return
-            val wait = delayFor(attempt)
-            if (wait > 0) {
-                _state.value = progressFor(attempt)
-                delay(wait)
-                if (gen != requestGeneration) return
-            }
-            // Scan first: a GATT connect to a radio that is not advertising costs a ~5 s
-            // timeout and comes back as status 133, which reads like a broken app.
-            val presence = presenceFor(attempt)
-            if (presence != null) {
-                _state.value = searchingFor(attempt)
-                val visible = presence.isVisible(PRESENCE_TIMEOUT_MS)
-                if (gen != requestGeneration) return
-                if (!visible) {
-                    Log.w(TAG, "${name ?: "Radio"} not advertising (attempt ${attempt + 1}/$attempts)")
-                    if (absentIsTerminal) {
-                        _state.value = RadioState.Failed("${name ?: "The radio"} is not in range")
-                        return
+        var settled = false
+        try {
+            for (attempt in 0 until attempts) {
+                if (gen != requestGeneration) { settled = true; return }
+                val wait = delayFor(attempt)
+                if (wait > 0) {
+                    _state.value = progressFor(attempt)
+                    delay(wait)
+                    if (gen != requestGeneration) { settled = true; return }
+                }
+                // Scan first: a GATT connect to a radio that is not advertising costs a ~5 s
+                // timeout and comes back as status 133, which reads like a broken app.
+                val presence = presenceFor(attempt)
+                if (presence != null) {
+                    _state.value = searchingFor(attempt)
+                    val visible = presence.isVisible(PRESENCE_TIMEOUT_MS)
+                    if (gen != requestGeneration) { settled = true; return }
+                    if (!visible) {
+                        Log.w(TAG, "${name ?: "Radio"} not advertising (attempt ${attempt + 1}/$attempts)")
+                        if (absentIsTerminal) {
+                            _state.value = RadioState.Failed("${name ?: "The radio"} is not in range")
+                            settled = true
+                            return
+                        }
+                        continue
                     }
-                    continue
+                }
+                _state.value = progressFor(attempt)
+                try {
+                    establish(gen, factory(), name)
+                    if (attempt > 0) Log.i(TAG, "Connected after ${attempt + 1} attempt(s)")
+                    settled = true
+                    return
+                } catch (e: TimeoutCancellationException) {
+                    // withTimeout throws a CancellationException subtype, but this one is
+                    // local to the attempt: the connect, MTU, discovery, bonding and
+                    // handshake windows all land here. Rethrowing it as if the caller had
+                    // been cancelled killed the loop on the first slow attempt, which is
+                    // the whole "Retrying (attempt 1)" wedge. It is an attempt failure.
+                    Log.w(TAG, "Attempt ${attempt + 1}/$attempts timed out: ${e.message}")
+                } catch (e: CancellationException) {
+                    settled = true
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "Attempt ${attempt + 1}/$attempts failed: ${e.message}")
                 }
             }
-            _state.value = progressFor(attempt)
-            try {
-                establish(gen, factory(), name)
-                if (attempt > 0) Log.i(TAG, "Connected after ${attempt + 1} attempt(s)")
-                return
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "Attempt ${attempt + 1}/$attempts failed: ${e.message}")
+            if (gen == requestGeneration) _state.value = RadioState.Failed(exhaustedReason)
+            settled = true
+        } finally {
+            // Anything else escaping (including this coroutine being cancelled while a
+            // progress state is showing) must still leave the card actionable.
+            if (!settled && gen == requestGeneration && _state.value !is RadioState.Failed) {
+                _state.value = RadioState.Failed(exhaustedReason)
             }
         }
-        if (gen == requestGeneration) _state.value = RadioState.Failed(exhaustedReason)
     }
 
     private suspend fun establish(gen: Int, conn: RadioConnection, name: String?) {

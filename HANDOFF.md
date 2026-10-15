@@ -9,6 +9,57 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## The retry loop killed itself on the first timeout (2026-10-15, reproduced and diagnosed on the phone)
+
+This is the actual cause of the "connect, unable to connect, retrying, retrying, only a reboot
+fixes it" reports. The GATT-client section below it is a real hardening change but it was not
+the bug, and its release note for 0.2.17 overstates what it fixed.
+
+Caught live: the attached Galaxy Note 20 Ultra (0.2.17, versionCode 19, Play build) sat on
+"Retrying (attempt 1)" for 1 h 45 m. Evidence, all from the device:
+
+- `dumpsys bluetooth_manager`: last `registerClient(com.suteny0r.mangledbabyducks)` and
+  `clientConnect(...address=EDA63B_A)` at **10-14 23:23:21**, and nothing since. GATT
+  `Connections: 0`. So the app had not called `connectGatt` in ten hours. The controller's
+  connect list was not full and nothing was leaked.
+- The same log shows **`Bluetooth crashed 1 time` / `Disabled due to CRASH by android` at
+  10-15 07:39:22**, then the adapter re-enabled one second later, then
+  `BluetoothGatt close(EDA63B_A), clientIf=8` at 07:39:23.003, which is our adapter-off
+  handler. The stack crash is the trigger; the wedge is ours.
+- `dumpsys activity services` showed no `RadioService`. The UI state was frozen, not working.
+- `am force-stop` plus a relaunch reconnected in 20 s (`connectGatt ... (live clients: 1)`,
+  `setTime took 196 ms; Subscribed`), which is what proves the fault was app-side.
+
+Root cause, `RadioManager.runAttempts`: `withTimeout` throws `TimeoutCancellationException`,
+which **is** a `CancellationException`, so the `catch (e: CancellationException) { throw e }`
+clause rethrew it. It propagated out of the loop and out of `attemptLock.withLock` and killed
+the attempt coroutine after attempt 1. `_state` was left on the progress value line 356 had
+just set, never reached `Failed`, so the Connect card never offered Reconnect or Forget and
+nothing was left alive to schedule another attempt. Every timeout inside `establish` did this:
+the 20 s connect wait, MTU, service discovery, bonding, and both `awaitConfigComplete` windows.
+"Retrying (attempt 1)" forever is literally what the code did the first time an attempt timed
+out, which is also why a Bluetooth toggle never helped and only a reboot did — the process had
+to die.
+
+Fixes:
+
+1. `runAttempts` catches `TimeoutCancellationException` **before** the `CancellationException`
+   clause and treats it as an ordinary attempt failure. Order matters; the subtype must come
+   first.
+2. `runAttempts` has a `finally` that lands on `Failed` if the loop exits any other abnormal
+   way while its generation is still current. The attempt loop is now structurally incapable of
+   leaving the card stuck on a progress state.
+3. `BleConnection.connect` throws if `connectGatt` returns null, which is what it does while the
+   adapter is off or restarting — exactly the state after a stack crash. Previously that burned
+   the full 20 s window waiting on a callback for a client that was never registered.
+4. The first `startDrainPendingPackets()` in `connect()` was awaited unbounded; it is the only
+   remaining path with no ceiling, since the loop runs until the radio returns a zero-length
+   read. Now `withTimeoutOrNull(INITIAL_DRAIN_MS)` (30 s).
+
+Verified: builds clean; the diagnosis was confirmed on hardware. The *fix* is not yet running on
+a phone — the Note 20 Ultra carries the Play-signed build and Play App Signing means no local
+artifact matches it, so installing would need an uninstall that wipes the node store.
+
 ## BLE: await the disconnect before closing the GATT client (2026-10-14, NOT reproduced, NOT verified)
 Report, from a second Android device the user cannot reach directly: connect/disconnect works for
 a while, then every connect fails ("unable to connect, retrying, retrying"). Bluetooth off/on did
