@@ -1,0 +1,3 @@
+<en-US>
+Share a picture in a message. A new camera button in the message toolbar lets you take a photo or pick one from your gallery. The picture is uploaded to meshpic.org and the short link is added to your message, because a mesh message is far too small to carry a photo itself. The app tells you before it uploads anything: anyone with the link can view the picture, and meshpic.org deletes it after about a day. Pictures are shrunk before sending to keep uploads quick.
+</en-US>

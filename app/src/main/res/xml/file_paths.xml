@@ -3,4 +3,7 @@
     <!-- Only the generated diagnostic zips are ever shared, so the grant is scoped to the
          one cache subdirectory they are written to rather than to cacheDir as a whole. -->
     <cache-path name="diagnostic-logs" path="logs/" />
+    <!-- Where the camera writes a picture the user is about to share. Cache, not the
+         gallery: they asked to share it, not to keep it. -->
+    <cache-path name="camera-pictures" path="pictures/" />
 </paths>

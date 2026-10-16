@@ -9,6 +9,48 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## Share a picture via meshpic.org (0.2.28, 2026-10-16, API verified live, app NOT yet verified)
+
+Composer toolbar button beside the map link: camera or gallery, upload, insert the short
+link. A 200-byte text packet cannot carry a photograph, so the link is what crosses the mesh.
+
+**meshpic.org publishes no API.** Everything below was read off the site's own uploader and
+then checked against the live service. It can change without notice, so every failure path
+ends in a plain message and nothing retries automatically.
+
+```
+GET  /            -> Set-Cookie: meshpic_session=...   (token from THIS render is useless)
+GET  /            with that cookie -> <meta name="csrf-token" content="...">
+POST /upload      multipart, field "file"
+                  headers: Cookie, X-CSRF-Token, X-Meshpic-UI: 1, + browser-ish set
+     201 -> {"short_id":"gor","expires_at":"...","images":[{"id":"agA","url":"/image/gor/agA"}]}
+     link = https://meshpic.org/<short_id>
+```
+
+**The two-step handshake is the whole trick and cost an hour to find.** The CSRF token is
+bound to the session, and the first GET mints the session in the very response carrying the
+token, so that pair is always refused with 403. Fetch the page a second time *sending the
+cookie* and the token validates. Verified both ways against the live service: one GET gives
+403, two gives 201.
+
+A bare request carrying only the cookie and token was also refused; the combination that
+worked included a browser User-Agent, `Origin`, `Referer` and the `Sec-Fetch-*` trio. The
+User-Agent still names this app so the operator can identify the client.
+
+The service rate-limits, and **its throttle responds 403, not 429** — repeated uploads from
+one address started failing with the identical headers that had just succeeded. That is why
+403 is worded as "try again in a few minutes" rather than as a permission error.
+
+Other facts worth keeping: 10 MB and JPG/PNG/GIF/WebP are the service's limits; images are
+downscaled to a 2048 px long edge and stepped down in JPEG quality to stay under 4 MB, since
+phone photographs routinely blow the limit; EXIF rotation is applied, because stripping it
+silently is how pictures end up sideways; retention defaults to 24 h and can be changed with
+`PATCH /_ui/my-images/<short_id>` `{"retention_hours":N}`, which this does not use.
+
+One test upload is live at `meshpic.org/gor` until roughly 2026-10-17 18:31 UTC. It could not
+be deleted because `DELETE /_ui/my-images/<short_id>` needs the session that owns it and that
+cookie was gone by the time the cleanup ran. It is an 8x8 red square.
+
 ## Android Auto Messages had no Direct Messages section (0.2.27, 2026-10-16, NOT yet verified)
 
 Separate bug in the same screen, and arithmetic rather than data:

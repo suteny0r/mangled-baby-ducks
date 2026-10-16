@@ -1,6 +1,17 @@
 package com.suteny0r.mangledbabyducks.ui
 
+import android.content.Context
+import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
+import com.suteny0r.mangledbabyducks.net.MeshPicUploader
+import java.io.File
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.material.icons.outlined.PhotoCamera
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -1309,6 +1320,34 @@ private fun Composer(
         apply(FormattingResult(joined, TextRange(joined.length)))
     }
 
+    // Picture sharing: a 200-byte text packet cannot carry a photograph, so the picture
+    // goes to meshpic.org and only the short link travels over the mesh.
+    var pictureSource by remember { mutableStateOf(false) }
+    var uploading by remember { mutableStateOf(false) }
+    var cameraTarget by remember { mutableStateOf<Uri?>(null) }
+    val uploadScope = rememberCoroutineScope()
+
+    fun sharePicture(uri: Uri) {
+        uploading = true
+        uploadScope.launch {
+            when (val result = MeshPicUploader.upload(context, uri)) {
+                is MeshPicUploader.Result.Success ->
+                    append((if (text.isEmpty()) "" else " ") + result.link)
+                is MeshPicUploader.Result.Failure ->
+                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+            }
+            uploading = false
+        }
+    }
+
+    val pickImage = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri -> uri?.let(::sharePicture) }
+
+    val takePicture = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { captured -> if (captured) cameraTarget?.let(::sharePicture) }
+
     Column(Modifier.fillMaxWidth()) {
         // MessagePreview: our bubble as it will render, once the draft holds paired markdown.
         if (containsMarkdownSyntax(text)) {
@@ -1431,6 +1470,12 @@ private fun Composer(
                     ToolbarButton(Icons.Outlined.Map, "Map link", enabled = here != null) {
                         here?.let { (lat, lon) -> append((if (text.isEmpty()) "" else " ") + mapsLink(lat, lon)) }
                     }
+                    // Not in the original either: a picture, shared as a link.
+                    ToolbarButton(
+                        Icons.Outlined.PhotoCamera,
+                        if (uploading) "Sharing picture" else "Share a picture",
+                        enabled = !uploading,
+                    ) { pictureSource = true }
                     // RequestPositionButton: the sentence now, our position right after the
                     // text when it is sent, with a response requested from a DM peer.
                     ToolbarButton(Icons.Filled.AddLocation, "Share position", tint = if (sharePosition) MaterialTheme.colorScheme.primary else null) {
@@ -1455,6 +1500,38 @@ private fun Composer(
                 }
             }
         }
+    }
+
+    // Camera or gallery, plus the one thing the user has to know before choosing either:
+    // the picture leaves the mesh. Everything else here is reversible; an upload is not.
+    if (pictureSource) {
+        AlertDialog(
+            onDismissRequest = { pictureSource = false },
+            title = { Text("Share a Picture") },
+            text = {
+                Text(
+                    "The picture is uploaded to meshpic.org and only the link is sent over " +
+                        "the mesh. Anyone with the link can view it, and it is deleted there " +
+                        "after about a day."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pictureSource = false
+                    cameraTarget = newCameraUri(context)
+                    cameraTarget?.let(takePicture::launch)
+                        ?: Toast.makeText(context, "Could not open the camera", Toast.LENGTH_SHORT).show()
+                }) { Text("Camera") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    pictureSource = false
+                    pickImage.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                }) { Text("Gallery") }
+            },
+        )
     }
 
     // FormattingToolbarButtons' "Insert Link" alert.
@@ -1493,6 +1570,19 @@ private fun styleIcon(style: MarkdownStyle): ImageVector = when (style) {
     MarkdownStyle.CODE -> Icons.Filled.Code
     MarkdownStyle.LINK -> Icons.Filled.Link
 }
+
+/**
+ * A file for the camera app to write into, handed over through the app's own FileProvider.
+ * Cache rather than the gallery: the user asked to share a picture, not to keep one, and a
+ * shot taken for the mesh should not silently land in their camera roll. Only the newest is
+ * kept, so a declined or failed share leaves nothing behind.
+ */
+private fun newCameraUri(context: Context): Uri? = runCatching {
+    val dir = File(context.cacheDir, "pictures").apply { mkdirs() }
+    dir.listFiles()?.forEach { it.delete() }
+    val file = File(dir, "camera-${System.currentTimeMillis()}.jpg")
+    FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+}.getOrNull()
 
 @Composable
 private fun ToolbarButton(

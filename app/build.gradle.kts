@@ -17,8 +17,8 @@ android {
         applicationId = "com.suteny0r.mangledbabyducks"
         minSdk = 26
         targetSdk = 36
-        versionCode = 29
-        versionName = "0.2.27"
+        versionCode = 30
+        versionName = "0.2.28"
     }
 
     // Release signing comes from local.properties (untracked): release.store.file,
