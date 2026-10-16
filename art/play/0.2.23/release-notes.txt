@@ -1,0 +1,3 @@
+<en-US>
+Fixes a stray piece of the "Disconnect" label showing beside the connection card when nothing had been swiped. It appeared only at larger font sizes.
+</en-US>
