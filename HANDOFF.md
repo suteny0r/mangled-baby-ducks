@@ -9,6 +9,26 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## "Disconnect" caption leaked past the Connect card (0.2.22, 2026-10-16, NOT yet verified)
+
+Spotted in a tester's screenshots: a clipped `ct` on the black background just past the
+Connect card's right edge, level with the status line, present at rest with nothing swiped.
+
+`SwipeToDisconnect` draws the swipe action underneath the card and lets the card uncover it.
+The card is inset `end = 16.dp`; the action `Column` was `align(CenterEnd)` with
+`width(110.dp)` and **no end padding**, so it ran to the screen edge and its last 16dp were
+never covered by anything. The 64dp icon is centred and stops short of that strip, but the
+centred caption reaches it once it is wider than about 78dp — which is what a larger font
+scale does. Hence a permanent "ct" on the tester's S20 FE and nothing on the Note 20 Ultra
+running the same build.
+
+Fixed by giving the column the same `padding(end = 16.dp)` as the card so it ends where the
+card ends, plus `clipToBounds()` so an oversized caption cannot escape at any font scale.
+
+Worth remembering generally: anything positioned against the screen edge behind a card that
+is inset from the screen edge will show. Check new layouts at a large font scale, not just
+the development phone's default.
+
 ## Out of range meant disconnected for good (0.2.22, 2026-10-15, NOT yet verified)
 
 Reported against 0.2.21: went out of range, came back, no automatic reconnect.

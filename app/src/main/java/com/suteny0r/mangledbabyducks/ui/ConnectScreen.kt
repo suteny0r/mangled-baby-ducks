@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -530,7 +531,17 @@ private fun SwipeToDisconnect(onDisconnect: () -> Unit, content: @Composable () 
         Column(
             Modifier
                 .align(Alignment.CenterEnd)
-                .width(actionWidth),
+                // Inset to the card's own right edge. Without this the column ran to the
+                // screen edge while the card stopped 16dp short, so its last 16dp were
+                // never covered. The icon is centred and does not reach that strip, but
+                // the caption does once it is wider than about 78dp, which is what a
+                // larger font scale does: a tester's phone showed a permanent "ct" poking
+                // out past the card at rest while the same build looked clean here.
+                .padding(end = 16.dp)
+                .width(actionWidth)
+                // And belt and braces, so an oversized caption cannot escape the column
+                // at any font scale.
+                .clipToBounds(),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
