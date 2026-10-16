@@ -1,0 +1,5 @@
+<en-US>
+Fixes a fault that could leave Bluetooth unable to connect until the phone was restarted. Disconnecting while the app was still connecting caused it to release the same Bluetooth connection twice, which can leave Android's Bluetooth in a bad state. Only one release now happens, whichever part of the app gets there first.
+
+Diagnostic logs no longer record the same stretch of history twice after an app update.
+</en-US>

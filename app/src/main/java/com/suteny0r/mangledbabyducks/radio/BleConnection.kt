@@ -86,6 +86,26 @@ class BleConnection(
     /** Whether STATE_DISCONNECTED has already arrived, so [disconnect] need not wait for it. */
     @Volatile private var disconnectReported = false
 
+    /**
+     * Hand the GATT handle to exactly one caller and clear it. Whoever gets it owns the
+     * teardown; everyone else gets null and does nothing.
+     *
+     * Two callers racing to tear the same link down is the normal case, not an edge one.
+     * A user-initiated disconnect runs on Main, calls [disconnect], and that fires
+     * failAllPending("Disconnected by app"), which makes the in-flight establish throw —
+     * and establish's catch calls [disconnect] again from the attempt loop. Both used to
+     * pass the null check, because `gatt` was only cleared after the wait, so both called
+     * close() on the same BluetoothGatt. A tester's log showed the live-client counter
+     * walking down to -3, which is what exposed it. Double-closing a GATT client is
+     * undefined behaviour in the stack and is exactly the kind of damage that ends in
+     * "only a reboot fixes it".
+     */
+    private fun claimGatt(): BluetoothGatt? = synchronized(teardownLock) {
+        gatt.also { gatt = null }
+    }
+
+    private val teardownLock = Any()
+
     // Android invalidates GATT handles silently when the adapter turns off — no
     // onConnectionStateChange ever fires — so adapter state must be watched directly.
     private val adapterReceiver = object : BroadcastReceiver() {
@@ -96,11 +116,12 @@ class BleConnection(
                 if (!closed) {
                     Log.w(TAG, "Bluetooth adapter turned off; dropping link")
                     failAllPending("Bluetooth turned off")
-                    gatt?.let {
+                    // Through claimGatt like every other teardown, so this cannot close a
+                    // handle that disconnect() is already closing.
+                    claimGatt()?.let {
                         runCatching { it.close() }
                         Log.i(TAG, "GATT client closed (live clients: ${liveClients.decrementAndGet()})")
                     }
-                    gatt = null
                     // The handles are already void, so there is nothing left to tear down
                     // and no disconnect to await; marking it closed is what stops the RSSI
                     // poll loop, which otherwise spins for the life of the process.
@@ -465,7 +486,7 @@ class BleConnection(
         runCatching { context.unregisterReceiver(bondReceiver) }
         runCatching { context.unregisterReceiver(adapterReceiver) }
         failAllPending("Disconnected by app")
-        gatt?.let { g ->
+        claimGatt()?.let { g ->
             val done = CompletableDeferred<Unit>()
             pendingDisconnect = done
             runCatching { g.disconnect() }
@@ -488,7 +509,8 @@ class BleConnection(
             runCatching { g.close() }
             Log.i(TAG, "GATT client closed (live clients: ${liveClients.decrementAndGet()})")
         }
-        gatt = null
+        // Not `gatt = null` here: claimGatt already did it, under the lock, and writing it
+        // again would race a connect that has moved on.
         pendingDisconnect = null
         scope.cancel()
     }

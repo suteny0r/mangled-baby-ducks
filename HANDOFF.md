@@ -9,7 +9,66 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
-## A scan miss is no longer a verdict on a user's connect (0.2.24, 2026-10-16, NOT yet verified)
+## Two callers closed the same GATT client (0.2.25, 2026-10-16, NOT yet verified)
+
+Found in a tester's 0.2.24 log, by the live-client counter walking **negative**: 0, -1, -2,
+-3. More closes than opens, so a `BluetoothGatt` was being closed twice. Thread ids name both
+culprits in one pair of lines:
+
+```
+12:04:20.742 t21483 No STATE_DISCONNECTED within 400ms; closing anyway   <- Main
+12:04:20.743 t21574 No STATE_DISCONNECTED within 400ms; closing anyway   <- attempt loop
+12:04:20.745 t21483 GATT client closed (live clients: 0)
+12:04:20.746 t21574 GATT client closed (live clients: -1)
+```
+
+`RadioManager.disconnect()` has no `withContext`, so it runs on the caller's dispatcher,
+which is Main. It calls `beginRequest()` → `connection.disconnect()`, and that fires
+`failAllPending("Disconnected by app")`, which makes the in-flight `establish` throw — and
+establish's catch calls `conn.disconnect()` again from the attempt loop. Both passed the
+`gatt?.let` null check, because `gatt` was only cleared *after* the disconnect wait, so both
+reached `close()` on the same handle. A user-initiated disconnect during an active connect
+did this **every time**.
+
+Double-closing a GATT client is undefined behaviour in the stack, and is a strong candidate
+for the original "connect, retrying, retrying, only a reboot fixes it" reports that started
+this whole thread of work.
+
+Fix: `claimGatt()` hands the handle to exactly one caller under a lock and clears it in the
+same step. Whoever gets it owns the teardown; everyone else gets null and does nothing. The
+adapter-off receiver goes through it too. `disconnect()` no longer writes `gatt = null`
+itself, because `claimGatt` already did it under the lock.
+
+**The counter earned its keep.** It was added in 0.2.17 purely as instrumentation for a fault
+that could not be reproduced locally, and it is the only reason this was visible at all.
+Leave it in.
+
+## The rolling log captured everything twice (0.2.25, 2026-10-16, NOT yet verified)
+
+Same tester export: `history.txt` held 640 lines of which 360 were unique, the same window
+twice over. `logcat` without `-d` dumps the **whole existing ring buffer** before it starts
+following, so every app restart re-ingested history already on disk and appended it again.
+The tester updating 0.2.22 to 0.2.24 mid-session is what made it obvious.
+
+Fixed with `-T 1`, which starts at the end of the buffer. Nothing is lost: the export's live
+`logcat.txt` still carries whatever the ring holds at the time.
+
+## A scan miss is no longer a verdict on a user's connect (0.2.24, 2026-10-16, VERIFIED on a tester's phone)
+
+Confirmed by the 0.2.24 log, and it confirms the directed-advertising theory outright:
+
+```
+11:59:02.350 🐶_9aac not advertising (attempt 1/3)
+11:59:02.350 Connecting anyway; a bonded radio can be invisible to a scan
+11:59:02.369 connectGatt B0:A6:04:C5:9A:AD (live clients: 1)
+11:59:02.423 MTU 512
+11:59:52.981 setTime took 200 ms; Subscribed        <- 241 nodes
+```
+
+A radio invisible to every scan connected first time and ran a full handshake. The same log
+also shows the 0.2.21 MTU fix working: `MTU request refused (status 6); continuing at 23`.
+
+
 
 Tester's Heltec v4, photographed sitting beside the phone: powered up, `Up 3m`, 46 nodes
 online, 99% battery, on the mesh. The app said `🐶_9aac is not in range` and never attempted

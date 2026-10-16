@@ -49,8 +49,14 @@ class LogStore(private val context: Context) {
             // filter the file fills with ViewRootImpl and BLASTBufferQueue chatter: in one
             // two-minute sample those were 125 of 229 lines, which is what makes an
             // unfiltered capture useless long before it is big.
+            // -T 1 starts at the end of the buffer. Without it logcat dumps the whole
+            // existing ring before it begins following, so every app restart re-ingested
+            // history already on disk and appended it again: a tester's export came back
+            // with 640 lines of which 360 were unique, the same window twice, because the
+            // app had been updated mid-session. The live dump in the export still carries
+            // whatever the ring holds, so nothing is lost by starting at the end.
             ProcessBuilder(
-                listOf("logcat", "-v", "threadtime") + TAGS.map { "$it:V" } + "*:W"
+                listOf("logcat", "-v", "threadtime", "-T", "1") + TAGS.map { "$it:V" } + "*:W"
             ).redirectErrorStream(true).start()
         } catch (e: Exception) {
             // Not fatal: the export still carries the live dump and the device report.
