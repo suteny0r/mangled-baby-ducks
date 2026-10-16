@@ -12,10 +12,12 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import android.util.Log
 import com.suteny0r.mangledbabyducks.db.BackupResult
+import com.suteny0r.mangledbabyducks.db.ChannelEntity
 import com.suteny0r.mangledbabyducks.db.MapNode
 import com.suteny0r.mangledbabyducks.db.MeshDatabase
 import com.suteny0r.mangledbabyducks.db.NodeBackupManager
 import com.suteny0r.mangledbabyducks.db.NodeWithUser
+import com.suteny0r.mangledbabyducks.db.UserEntity
 import com.suteny0r.mangledbabyducks.radio.BleScanner
 import com.suteny0r.mangledbabyducks.radio.HardwareCatalog
 import com.suteny0r.mangledbabyducks.radio.LanScanner
@@ -181,6 +183,21 @@ class AppContainer(context: Context) {
 
     val mapNodes: StateFlow<List<MapNode>> =
         database.positionDao().mapNodes()
+            .stateIn(appScope, SharingStarted.Eagerly, emptyList())
+
+    /**
+     * The car Messages screen's two lists, hot for exactly the reason above. It observed
+     * the cold DAO flows directly and so rendered "No channels yet; connect a radio" with
+     * a radio connected and messages in the store, which is the same fault the node list
+     * had. Any flow a car screen needs populated in its *first* template has to be hot and
+     * cached here; the phone never shows these because its ViewModels already are.
+     */
+    val activeChannels: StateFlow<List<ChannelEntity>> =
+        database.channelDao().activeChannels()
+            .stateIn(appScope, SharingStarted.Eagerly, emptyList())
+
+    val dmContacts: StateFlow<List<UserEntity>> =
+        database.userDao().dmContacts()
             .stateIn(appScope, SharingStarted.Eagerly, emptyList())
 
     /**

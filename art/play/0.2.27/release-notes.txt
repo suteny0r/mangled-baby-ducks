@@ -1,0 +1,7 @@
+<en-US>
+Android Auto fixes for the Messages screen.
+
+Direct Messages are listed again. The car screen shows a limited number of rows, and on a radio with several channels the channels used every available row, so the Direct Messages section disappeared completely. Channels and direct messages now share the space.
+
+The Messages screen no longer says there is nothing to show while it is still loading. It briefly reported no channels and no messages even with a radio connected and messages waiting.
+</en-US>

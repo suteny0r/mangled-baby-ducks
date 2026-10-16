@@ -141,6 +141,14 @@ abstract class MeshCarScreen(carContext: CarContext) : Screen(carContext) {
         if (flow is StateFlow<T>) {
             onValue(flow.value)
             trace("$label seeded from StateFlow")
+        } else {
+            // A cold flow cannot be read synchronously, so this screen genuinely does not
+            // know its contents yet. Counting it keeps [isLoading] honest, so a template
+            // can say so instead of asserting the list is empty. Claiming "No messages
+            // yet" with a radio connected and messages in the store is the same fault the
+            // node list had; the answer there was a hot flow, and that is still preferred
+            // where the query is not parameterised.
+            pendingFirstEmissions++
         }
         lifecycleScope.launch {
             trace("$label launched")
@@ -149,6 +157,7 @@ abstract class MeshCarScreen(carContext: CarContext) : Screen(carContext) {
                 var emissions = 0
                 flow.distinctUntilChanged().collect { value ->
                     emissions++
+                    if (emissions == 1 && flow !is StateFlow<T>) pendingFirstEmissions--
                     if (emissions <= 2) trace("$label emit #$emissions")
                     onValue(value)
                     invalidate()
@@ -159,6 +168,14 @@ abstract class MeshCarScreen(carContext: CarContext) : Screen(carContext) {
     }
 
     private var observeSeq = 0
+
+    /**
+     * True until every cold flow this screen observes has emitted once. Only meaningful
+     * for the empty-state caption: an empty list and an unknown list look identical in a
+     * template, and telling the driver the wrong one is worse than saying nothing yet.
+     */
+    private var pendingFirstEmissions = 0
+    protected val isLoading: Boolean get() = pendingFirstEmissions > 0
 
     /**
      * How many rows this template may hold: the host's ConstraintManager limit, capped by
@@ -885,8 +902,11 @@ class CarMessagesScreen(carContext: CarContext) : MeshCarScreen(carContext) {
     private var contacts: List<UserEntity> = emptyList()
 
     init {
-        observe(container.database.channelDao().activeChannels()) { channels = it }
-        observe(container.database.userDao().dmContacts()) { contacts = it }
+        // The hot copies in AppContainer, not the DAO flows. A cold flow gets no
+        // synchronous seed in observe(), so this screen drew its empty state first and
+        // only filled in after the first emission plus a host template round trip.
+        observe(container.activeChannels) { channels = it }
+        observe(container.dmContacts) { contacts = it }
     }
 
     override fun onGetTemplate(): Template {
@@ -896,7 +916,17 @@ class CarMessagesScreen(carContext: CarContext) : MeshCarScreen(carContext) {
             .setTitle("Messages")
             .setHeaderAction(Action.BACK)
 
-        val channelRows = channels.take(limit).map { channel ->
+        // Split the budget. The host's list limit is commonly 6, and a radio with six
+        // channels left `take(limit - 6)` = take(0) for contacts, so Direct Messages
+        // vanished entirely — not empty, absent, because the section is only added when it
+        // has rows. Each side is guaranteed its half and may grow into whatever the other
+        // does not use. Contacts are ordered lastMessage-first, so the half that survives
+        // is the half worth showing.
+        val half = limit / 2
+        val channelTake = minOf(channels.size, maxOf(limit - contacts.size, half))
+        val contactTake = minOf(contacts.size, limit - channelTake)
+
+        val channelRows = channels.take(channelTake).map { channel ->
             val name = channelName(channel, channel.index)
             Row.Builder()
                 .setTitle(name)
@@ -907,7 +937,7 @@ class CarMessagesScreen(carContext: CarContext) : MeshCarScreen(carContext) {
                 }
                 .build()
         }
-        val contactRows = contacts.take((limit - channelRows.size).coerceAtLeast(0)).map { user ->
+        val contactRows = contacts.take(contactTake).map { user ->
             val name = displayName(user, user.num)
             Row.Builder()
                 .setTitle(name)
@@ -921,7 +951,11 @@ class CarMessagesScreen(carContext: CarContext) : MeshCarScreen(carContext) {
 
         if (channelRows.isEmpty() && contactRows.isEmpty()) {
             template.setSingleList(
-                ItemList.Builder().setNoItemsMessage("No channels yet; connect a radio").build()
+                ItemList.Builder()
+                    .setNoItemsMessage(
+                        if (isLoading) "Loading…" else "No channels yet; connect a radio"
+                    )
+                    .build()
             )
             return template.build()
         }
@@ -986,7 +1020,10 @@ class CarThreadScreen(carContext: CarContext, private val target: ThreadTarget) 
 
     override fun onGetTemplate(): Template {
         val limit = contentLimit(ConstraintManager.CONTENT_LIMIT_TYPE_LIST, LIST_ROW_CAP)
-        val list = ItemList.Builder().setNoItemsMessage("No messages yet")
+        // This thread's query is parameterised, so it cannot be one of the hot flows in
+        // AppContainer and the first template is drawn before it has emitted.
+        val list = ItemList.Builder()
+            .setNoItemsMessage(if (isLoading) "Loading messages…" else "No messages yet")
         val here = carLocation(myNum, positions.values.toList())
         messages.take(limit).forEach { message ->
             val mine = message.fromNum == myNum

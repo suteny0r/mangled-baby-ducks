@@ -9,6 +9,63 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## Android Auto Messages had no Direct Messages section (0.2.27, 2026-10-16, NOT yet verified)
+
+Separate bug in the same screen, and arithmetic rather than data:
+
+```kotlin
+val channelRows = channels.take(limit)
+val contactRows = contacts.take((limit - channelRows.size).coerceAtLeast(0))
+```
+
+`limit` is the host's `CONTENT_LIMIT_TYPE_LIST`, commonly **6**. The tester's radio has six
+channels, so channels took the whole budget and contacts got `take(0)`. The section is only
+added to the template when it has rows, so Direct Messages was **absent**, not empty — no
+caption, nothing to notice. This happens whenever `channels.size >= limit`.
+
+Now split: `half = limit / 2`, each side guaranteed its half and free to grow into whatever
+the other does not use. Verified across the edge cases — 6+6 gives 3/3, 6+0 gives 6/0, 2+10
+gives 2/4, 8+1 gives 5/1, and no case exceeds the limit. Contacts are ordered
+lastMessage-first, so the half that survives is the half worth showing.
+
+The general trap: `contentLimit` is a budget for the **whole template**, and any screen with
+two sections has to divide it rather than let the first section spend it all.
+
+## Android Auto Messages said "no messages" with a radio connected (0.2.27, 2026-10-16, NOT yet verified)
+
+The same defect as the car node list's "No nodes yet", in a second place. `observe()` seeds a
+screen's fields synchronously **only** `if (flow is StateFlow<T>)`, and `CarMessagesScreen`
+was observing the cold DAO flows directly:
+
+```kotlin
+observe(container.database.channelDao().activeChannels()) { channels = it }
+observe(container.database.userDao().dmContacts()) { contacts = it }
+```
+
+So the first template was built before either had emitted, and the screen asserted
+"No channels yet; connect a radio" with a radio connected and messages in the store.
+
+Two fixes, because there are two kinds of offender:
+
+1. **Un-parameterised queries become hot flows in `AppContainer`** — `activeChannels` and
+   `dmContacts` join `nodesWithUsers` and `mapNodes`, `Eagerly` for the same reason. This is
+   the preferred fix and it fully solves the Messages list.
+2. **Parameterised queries cannot be**, so they must stop lying instead. `CarThreadScreen`'s
+   messages are per-conversation. `observe()` now counts cold flows that have not yet
+   emitted, and `isLoading` lets a template print "Loading messages…" rather than
+   "No messages yet". An empty list and an unknown list look identical in a template, and
+   telling the driver the wrong one is worse than saying nothing yet.
+
+**The rule for new car screens**: anything needed in the *first* template must be a hot
+`StateFlow` on `AppContainer`, or the empty state must be guarded by `isLoading`. The phone
+never shows these faults, because its ViewModel `StateFlow`s are already hot and cached, so
+the DHU is the only place they appear.
+
+Still observing cold flows, same class, not yet reported: `CarHomeScreen`'s `unreadCount`
+(badge reads 0 briefly), `CarRadioScreen`'s `knownRadios` (saved list briefly absent), and
+`CarNodeDetailScreen`'s three per-node queries (parameterised, so `isLoading` is the fix if
+it ever matters).
+
 ## MTU 23 is a dead link; re-ask instead of accepting it (0.2.26, 2026-10-16, NOT yet verified)
 
 A tester's 0.2.25 log correlates perfectly across two hours and six connects:
