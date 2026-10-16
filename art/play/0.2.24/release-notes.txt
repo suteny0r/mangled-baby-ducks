@@ -1,0 +1,3 @@
+<en-US>
+Fixes a radio that could not be connected to even while sitting next to the phone. The app checked for the radio's signal first and gave up with "is not in range" if it did not see one. Some radios stop broadcasting openly once they have been paired with a phone and signal that phone directly instead, so they are invisible to that check while still perfectly reachable. Tapping a radio now goes ahead and connects even when the check finds nothing, so an unanswered check costs a few seconds rather than preventing the connection.
+</en-US>

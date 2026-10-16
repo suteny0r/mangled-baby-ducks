@@ -298,9 +298,14 @@ class RadioManager(
                 progressFor = { attempt -> RadioState.Connecting(attempt + 1, CONNECT_ATTEMPTS) },
                 searchingFor = { attempt -> RadioState.Searching(attempt + 1, CONNECT_ATTEMPTS) },
                 presenceFor = { presence },
-                // A radio that is not advertising will not answer a GATT connect either,
-                // so say so instead of retrying into three 5 s timeouts.
-                absentIsTerminal = true,
+                // The scan is a fast path, not a gate. It used to be terminal here, on the
+                // reasoning that a radio which is not advertising will not answer a GATT
+                // connect either, and that reasoning is wrong for a bonded peer: a Heltec
+                // sitting beside the phone, powered up and on the mesh, was invisible to
+                // every scan while the app reported "is not in range" and never tried. A
+                // connect the user asked for is worth a 5 s timeout to find out.
+                absentIsTerminal = false,
+                attemptWhenAbsent = true,
                 exhaustedReason = "Could not reach ${name ?: "the radio"}",
             )
         }
@@ -345,6 +350,16 @@ class RadioManager(
         searchingFor: (Int) -> RadioState,
         presenceFor: (Int) -> PresenceProbe?,
         absentIsTerminal: Boolean,
+        /**
+         * Whether to go ahead with the GATT connect when the scan found nothing. True for
+         * a connect the user asked for: a bonded radio can be perfectly connectable while
+         * invisible to a scan, because peripherals commonly switch to directed advertising
+         * at their bonded peer, and ESP32 radios do. Observed with a Heltec sitting next to
+         * the phone, powered up and on the mesh, that the app refused to even try. False
+         * for the background loops, where the scan is there to avoid burning 5 s timeouts
+         * behind the user's back.
+         */
+        attemptWhenAbsent: Boolean = false,
         exhaustedReason: String,
     ) {
         var settled = false
@@ -371,7 +386,8 @@ class RadioManager(
                             settled = true
                             return
                         }
-                        continue
+                        if (!attemptWhenAbsent) continue
+                        Log.i(TAG, "Connecting anyway; a bonded radio can be invisible to a scan")
                     }
                 }
                 _state.value = progressFor(attempt)

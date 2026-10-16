@@ -9,6 +9,38 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## A scan miss is no longer a verdict on a user's connect (0.2.24, 2026-10-16, NOT yet verified)
+
+Tester's Heltec v4, photographed sitting beside the phone: powered up, `Up 3m`, 46 nodes
+online, 99% battery, on the mesh. The app said `🐶_9aac is not in range` and never attempted
+a GATT connect. Their RAK nRF connects from the same phone without trouble.
+
+The initial, user-initiated connect ran with `absentIsTerminal = true` and this comment:
+
+> A radio that is not advertising will not answer a GATT connect either, so say so instead
+> of retrying into three 5 s timeouts.
+
+That is false for a bonded peer. Peripherals commonly switch to **directed advertising** at
+their bonded peer once a bond exists, and ESP32/NimBLE does; directed adverts do not surface
+in a general or address-filtered Android scan, yet the peripheral will accept a connection
+from that peer. The tester's own screenshot corroborates it: the radio that **is** visible
+(`DayZ_bffc`) is one the phone is not bonded to, and the invisible one is the bonded one.
+A bond certainly exists, because an earlier log shows this radio reaching MTU negotiation.
+
+Fix: `runAttempts` gains `attemptWhenAbsent`, default false. The user-initiated connect sets
+`absentIsTerminal = false, attemptWhenAbsent = true`, so the scan is a fast path rather than
+a gate and a miss still gets its GATT attempt. The background loops keep the old behaviour —
+the scan exists there to avoid burning 5 s timeouts behind the user's back.
+
+Cost is an explicit tap taking roughly 30 s to fail instead of 6 s. That is the right trade
+for an action the user asked for, and the premise it replaces was demonstrably wrong.
+
+The directed-advertising explanation is the best fit for the evidence but is **not proven**.
+The fix stands either way: whatever the reason the scan misses it, refusing to try a
+connection the user explicitly requested, on the strength of one 6 s scan, is wrong. If it
+still fails, have the tester unpair the radio in Android's Bluetooth settings first — that
+clears the bond and is the cheapest test of the theory.
+
 ## "Disconnect" caption leaked past the Connect card (0.2.22, 2026-10-16, NOT yet verified)
 
 Spotted in a tester's screenshots: a clipped `ct` on the black background just past the
