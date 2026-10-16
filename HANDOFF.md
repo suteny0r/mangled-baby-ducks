@@ -9,7 +9,45 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
-## Two callers closed the same GATT client (0.2.25, 2026-10-16, NOT yet verified)
+## MTU 23 is a dead link; re-ask instead of accepting it (0.2.26, 2026-10-16, NOT yet verified)
+
+A tester's 0.2.25 log correlates perfectly across two hours and six connects:
+
+| MTU result | Outcome |
+|---|---|
+| `MTU 512` | connects and completes the handshake |
+| `MTU 23` after a status-6 refusal | `Drain aborted: Read failed: 133` about two seconds later, every time |
+
+0.2.21 was right that a refused MTU must not abort a link that is already up. It was wrong to
+then carry on as though 23 were a usable MTU. Meshtastic frames are routinely longer than 22
+bytes, and the value handed to `onMtuChanged` alongside a failure status is not meaningful in
+the first place.
+
+Status 6 is a race, not a capability: the ESP32 answers that way when the peripheral won the
+race to start its own MTU exchange. By the time we ask again the exchange has settled, so the
+fix that matches the cause is to ask again — `MTU_ATTEMPTS = 3`, `MTU_RETRY_GAP_MS = 400`.
+`mtuRefused` is set in the callback so `connect()` can tell a refusal from a real answer
+rather than trusting the reported number. If all three are refused it still carries on, which
+is the 0.2.21 behaviour and still correct.
+
+## 0.2.25 verified on a tester's phone (2026-10-16)
+
+The same log confirms four earlier fixes, three of them branches that had never been
+exercised until now:
+
+- `Attempt 1/3 timed out: Timed out waiting for 95000 ms` — the 0.2.18
+  `TimeoutCancellationException` catch, firing for the first time. Attempt 1 hung 95 s on the
+  CCCD write; on 0.2.17 that would have killed the loop outright. Instead it went on to
+  attempts 2 and 3 and reached `Connected after 3 attempt(s)`. **That fix is the only reason
+  that radio connected at all.**
+- `Radio stopped responding; treating the link as lost`, twice — the 0.2.19 dead-link
+  detector, via the drain's read failures.
+- `Watching for 🐶_9aac to come back into range` — the 0.2.22 presence watch, after the
+  reconnect loop exhausted all ten attempts.
+- `live clients` max 1, min 0 across ten open/close cycles on 0.2.25, against min -3 on
+  0.2.24. The double-close fix below works.
+
+## Two callers closed the same GATT client (0.2.25, 2026-10-16, VERIFIED on a tester's phone)
 
 Found in a tester's 0.2.24 log, by the live-client counter walking **negative**: 0, -1, -2,
 -3. More closes than opens, so a `BluetoothGatt` was being closed twice. Thread ids name both

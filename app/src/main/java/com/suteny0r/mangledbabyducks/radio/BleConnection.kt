@@ -85,6 +85,8 @@ class BleConnection(
     @Volatile private var everConnected = false
     /** Whether STATE_DISCONNECTED has already arrived, so [disconnect] need not wait for it. */
     @Volatile private var disconnectReported = false
+    /** Set when onMtuChanged reports a failure status, so connect() knows to ask again. */
+    @Volatile private var mtuRefused = false
 
     /**
      * Hand the GATT handle to exactly one caller and clear it. Whoever gets it owns the
@@ -181,9 +183,12 @@ class BleConnection(
             // central's request with 6 (GATT_REQUEST_NOT_SUPPORTED) when the peripheral
             // got its own MTU exchange in first, which is a race, so the same radio fails
             // only sometimes. nRF52 radios (RAK) never do it, which is why one of the
-            // tester's two radios worked and the other did not.
+            // tester's two radios worked and the other did not. The flag is what tells
+            // connect() to ask again rather than accept the value reported here, which
+            // alongside a failure status is not meaningful.
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                Log.w(TAG, "MTU request refused (status $status); continuing at $mtu")
+                Log.w(TAG, "onMtuChanged status $status, reported $mtu")
+                mtuRefused = true
             }
             pendingMtu?.complete(mtu)
         }
@@ -271,16 +276,43 @@ class BleConnection(
 
         val g = gatt ?: throw RadioException("GATT gone")
 
-        val mtuDeferred = CompletableDeferred<Int>()
-        pendingMtu = mtuDeferred
-        g.requestMtu(512)
-        // A radio that never answers the request is not a radio we have to give up on
-        // either; Android does long reads and writes on its own, so a smaller MTU costs
-        // round trips and nothing else. A genuine link drop still aborts here, because
-        // failAllPending completes this deferred exceptionally.
-        val mtu = withTimeoutOrNull(MTU_TIMEOUT_MS) { mtuDeferred.await() }
-        pendingMtu = null
-        if (mtu == null) Log.w(TAG, "No MTU response in ${MTU_TIMEOUT_MS}ms; continuing at the default")
+        // Negotiating the MTU is not optional in practice, whatever the comment here used
+        // to say. A tester's log correlates perfectly: every connect that reached MTU 512
+        // completed, and every one that fell back to 23 died about two seconds later with
+        // "Read failed: 133". Meshtastic frames are routinely longer than 22 bytes, and the
+        // value reported alongside a failure status is not trustworthy anyway.
+        //
+        // The refusal is a race, not a capability: an ESP32 answers 6
+        // (GATT_REQUEST_NOT_SUPPORTED) when the peripheral got its own MTU exchange in
+        // first. By the time we ask again the exchange has settled, so a retry is the fix
+        // that matches the cause.
+        var mtu: Int? = null
+        for (attempt in 0 until MTU_ATTEMPTS) {
+            if (attempt > 0) delay(MTU_RETRY_GAP_MS)
+            val deferred = CompletableDeferred<Int>()
+            pendingMtu = deferred
+            mtuRefused = false
+            if (!g.requestMtu(512)) {
+                Log.w(TAG, "requestMtu rejected outright (attempt ${attempt + 1}/$MTU_ATTEMPTS)")
+                continue
+            }
+            // A genuine link drop still aborts here, because failAllPending completes this
+            // deferred exceptionally rather than normally.
+            val answer = withTimeoutOrNull(MTU_TIMEOUT_MS) { deferred.await() }
+            pendingMtu = null
+            if (answer != null && !mtuRefused) {
+                mtu = answer
+                break
+            }
+            if (answer == null) {
+                Log.w(TAG, "No MTU response in ${MTU_TIMEOUT_MS}ms (attempt ${attempt + 1}/$MTU_ATTEMPTS)")
+            } else {
+                Log.w(TAG, "MTU request refused, reported $answer (attempt ${attempt + 1}/$MTU_ATTEMPTS)")
+            }
+        }
+        // Still best-effort at the end of it: a link that is up is worth trying even on a
+        // small MTU, and refusing to proceed here is what 0.2.21 fixed.
+        if (mtu == null) Log.w(TAG, "Carrying on without an MTU upgrade; reads may fail")
         else Log.i(TAG, "MTU $mtu")
 
         val discovery = CompletableDeferred<Unit>()
@@ -536,6 +568,9 @@ class BleConnection(
         private const val RSSI_REJECT_LIMIT = 3
         /** How long to wait for an answer to the MTU request before carrying on without one. */
         private const val MTU_TIMEOUT_MS = 10_000L
+        /** A refusal is a race with the peripheral's own exchange, so it is worth re-asking. */
+        private const val MTU_ATTEMPTS = 3
+        private const val MTU_RETRY_GAP_MS = 400L
         private const val TAG = "BleConnection"
 
         /**

@@ -1,0 +1,3 @@
+<en-US>
+Fixes connections to Heltec and other ESP32 radios dropping moments after connecting. When the app asked the radio to raise the Bluetooth packet size, the radio sometimes turned the request down because it was busy making the same request itself. The app then continued at the smallest possible size, which is too small for the data the radio sends, and the connection failed within a couple of seconds. The app now simply asks again, which succeeds once the radio has finished.
+</en-US>
