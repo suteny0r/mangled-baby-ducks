@@ -9,6 +9,29 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## Picture share rejected every image; distance badge on DM rows (0.2.29, 2026-10-16)
+
+0.2.28's picture share answered "That image could not be read" for every gallery pick. The
+bounds pass in `MeshPicUploader.encode`:
+
+```kotlin
+context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+    ?: return null
+```
+
+`decodeStream` returns null **by design** when `inJustDecodeBounds` is set — it fills
+`outWidth`/`outHeight` and decodes nothing. The elvis was meant to catch a null stream but
+was hanging off the decode result, so the function bailed on every image and the path could
+never have worked. Null-check the stream; let the dimensions report success.
+
+Worth remembering how this got shipped: the meshpic HTTP contract **was** verified live with
+curl, and that verification said nothing at all about the Android decode path either side of
+it. Verifying the part that was hard to get right is not the same as verifying the feature.
+
+Also here: the Android Auto conversation list now carries the distance badge on its Direct
+Messages rows, matching the node list and the thread view. Channel rows do not get one, since
+a channel is a group with no single node to measure to.
+
 ## Share a picture via meshpic.org (0.2.28, 2026-10-16, API verified live, app NOT yet verified)
 
 Composer toolbar button beside the map link: camera or gallery, upload, insert the short

@@ -900,6 +900,8 @@ class CarMessagesScreen(carContext: CarContext) : MeshCarScreen(carContext) {
 
     private var channels: List<ChannelEntity> = emptyList()
     private var contacts: List<UserEntity> = emptyList()
+    private var positions: Map<Long, MapNode> = emptyMap()
+    private var myNum = 0L
 
     init {
         // The hot copies in AppContainer, not the DAO flows. A cold flow gets no
@@ -907,6 +909,9 @@ class CarMessagesScreen(carContext: CarContext) : MeshCarScreen(carContext) {
         // only filled in after the first emission plus a host template round trip.
         observe(container.activeChannels) { channels = it }
         observe(container.dmContacts) { contacts = it }
+        // For the distance badge on DM rows, as the node list carries.
+        observe(container.mapNodes) { list -> positions = list.associateBy { it.nodeNum } }
+        observe(container.radioManager.myNodeNum) { myNum = it }
     }
 
     override fun onGetTemplate(): Template {
@@ -937,11 +942,22 @@ class CarMessagesScreen(carContext: CarContext) : MeshCarScreen(carContext) {
                 }
                 .build()
         }
+        // Only the DM rows get a distance: a channel is a group, so there is no one node to
+        // measure to. Same span the node list and the thread view use.
+        val here = carLocation(myNum, positions.values.toList())
         val contactRows = contacts.take(contactTake).map { user ->
             val name = displayName(user, user.num)
+            val detail = SpannableStringBuilder(
+                user.lastMessage?.let { "last message ${relativeTime(it)}" } ?: nodeNumString(user.num)
+            )
+            val there = positions[user.num]
+            if (here != null && there != null && user.num != myNum) {
+                detail.append(" · ")
+                detail.append(distanceSpan(haversineMeters(here.first, here.second, there.latitude, there.longitude)))
+            }
             Row.Builder()
                 .setTitle(name)
-                .addText(user.lastMessage?.let { "last message ${relativeTime(it)}" } ?: nodeNumString(user.num))
+                .addText(detail)
                 .setBrowsable(true)
                 .setOnClickListener {
                     screenManager.push(CarThreadScreen(carContext, ThreadTarget.Direct(user.num, name)))

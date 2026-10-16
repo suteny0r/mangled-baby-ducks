@@ -202,8 +202,12 @@ object MeshPicUploader {
      */
     private fun encode(context: Context, uri: Uri): ByteArray? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-            ?: return null
+        // decodeStream returns null here *by design* when inJustDecodeBounds is set: it
+        // fills outWidth/outHeight and decodes nothing. Hanging an elvis off its result
+        // therefore rejected every image ever picked. The only thing worth null-checking
+        // on this pass is the stream; the dimensions are what report success.
+        val boundsStream = context.contentResolver.openInputStream(uri) ?: return null
+        boundsStream.use { BitmapFactory.decodeStream(it, null, bounds) }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
 
         val options = BitmapFactory.Options().apply {

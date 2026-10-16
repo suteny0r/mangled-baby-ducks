@@ -1,0 +1,5 @@
+<en-US>
+Fixes picture sharing, which reported "That image could not be read" for every picture chosen.
+
+Android Auto now shows the distance to a contact in the message list, next to when they last wrote, the same way the node list does.
+</en-US>
