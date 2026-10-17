@@ -32,13 +32,23 @@
     <!-- Android Auto: PlaceListMapTemplate (nodes on the host-drawn map) needs this. -->
     <uses-permission android:name="androidx.car.app.MAP_TEMPLATES" />
 
+    <!--
+      enableOnBackInvokedCallback: predictive back. Safe here because every back handler in
+      the app is Compose's BackHandler, which registers an OnBackPressedCallback and so
+      routes through the new OnBackInvokedCallback path. There is not one onBackPressed()
+      override or raw callback anywhere, and those are what this flag breaks. The root
+      handler in MainActivity is disabled on the Nodes tab, so back from there reaches the
+      system and animates to home; sub-screen handlers still intercept, which means no
+      in-app predictive animation until they use PredictiveBackHandler.
+    -->
     <application
         android:name=".MeshtasticApplication"
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.Meshtastic"
         android:supportsRtl="true"
-        android:allowBackup="false">
+        android:allowBackup="false"
+        android:enableOnBackInvokedCallback="true">
 
         <!-- Android Auto: template UI (Car App Library) plus car-readable message notifications. -->
         <meta-data

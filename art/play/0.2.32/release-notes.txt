@@ -1,0 +1,3 @@
+﻿<en-US>
+Supports Android's predictive back gesture. On Android 13 and later, swiping back from the edge of the screen now previews where you are going before you let go.
+</en-US>

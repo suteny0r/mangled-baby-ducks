@@ -9,6 +9,26 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## Predictive back enabled (0.2.32, 2026-10-17, VERIFIED on the phone)
+
+`android:enableOnBackInvokedCallback="true"`. The app had been logging the "not enabled"
+warning on every screen change since `targetSdk` went to 36.
+
+It was safe because of what the audit found, not by luck: **all 22 back handlers are Compose
+`BackHandler`**, which registers an `OnBackPressedCallback` and so routes through the new
+`OnBackInvokedCallback` path. There is not one `onBackPressed()` override or raw
+`OnBackPressedCallback` anywhere, and those are precisely what this flag breaks. Check that
+again before anyone adds one.
+
+`MainActivity`'s root handler is `enabled = selected != TAB_NODES`, so back from the Nodes
+tab falls through to the system and can animate to home. Sub-screen handlers still intercept,
+which means **no in-app predictive animation** — that needs `PredictiveBackHandler` per
+screen and is a separate, larger piece of work, not done here.
+
+Verified on the phone: config sub-screen back returns to the Settings list with its scroll
+intact, a non-Nodes tab returns to Nodes, Nodes exits the app. Zero `OnBackInvokedCallback`
+warnings afterwards, nothing from the app's own tags, empty crash buffer.
+
 ## Sharing a picture wiped the typed message (0.2.31, 2026-10-17, VERIFIED on the phone)
 
 Type a caption, press the camera button, pick a picture: the caption came back replaced by
