@@ -107,8 +107,8 @@ import org.maplibre.geojson.FeatureCollection
 import org.maplibre.geojson.LineString
 import org.maplibre.geojson.Point
 
-/** Streets: keyless openfreemap vector style. */
-private const val STREETS_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
+/** Streets: keyless openfreemap vector style. Shared with the message map thumbnails. */
+internal const val STREETS_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
 
 /**
  * Satellite: Esri World Imagery raster tiles (keyless, attribution required).

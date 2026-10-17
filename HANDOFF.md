@@ -9,6 +9,48 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## Map links render inline, and open without the stale map (0.2.33, 2026-10-17, VERIFIED on the phone)
+
+A shared coordinate now draws as a map in the bubble instead of a URL. Tapping opens it.
+
+**Framed to span the whole mesh**, not the pin. A pin alone says nothing; against every node
+the mesh knows about it says where this is relative to everyone, which is the question a mesh
+user is actually asking. Same bounds-of-all-nodes rule the Map tab uses, inset 12%. Mesh
+nodes are small dots, the shared point is the pin, both drawn in Compose over the snapshot
+using `MapSnapshot.pixelForLatLng` rather than baked in, so they follow the app's colours.
+
+`MapSnapshotter`, not a `MapView`: a message list can hold many of these and a live map
+apiece would be ruinous. Same openfreemap style as the Map tab, so a shared pin looks like
+the rest of the app. Snapshots are cached by rounded mesh extent and node count, not by every
+node position, or one node drifting a few metres would throw away every thumbnail on screen.
+The snapshotter must be driven from the main thread; only the waiting happens off it.
+
+### The stale-Maps problem was the launch, not the link
+
+Reported as: with Maps already open on a selected place or a route, the link failed to move
+it, and closing Maps first made the same link work.
+
+Measured on the phone. The URL is **not** at fault — firing the existing
+`maps.google.com/?q=` link with `am start`, which carries `FLAG_ACTIVITY_NEW_TASK`, replaced
+a route context correctly. `LocalUriHandler.openUri` passes no task flags, so Maps simply
+resumes its existing task showing whatever it was showing.
+
+`openMapLink` now starts an explicit `ACTION_VIEW` with `FLAG_ACTIVITY_NEW_TASK` and
+`FLAG_ACTIVITY_CLEAR_TOP`. Verified: Maps holding a route to New York, tap the thumbnail,
+Maps abandons the route and shows the shared South Florida location.
+
+**The link format was deliberately left alone.** The documented `?api=1&query=` form would
+cost thirteen more bytes of a two hundred byte packet, and it is going out to clients that
+are not this app, to fix something that was never the URL's fault.
+
+### Known, not fixed: `?q=lat,lon` can snap to a nearby business
+
+Seen during the test: in a dense area Maps resolved the coordinate to "Cooper City Antique
+Mall" rather than dropping an unnamed pin on the exact point. `?q=` is a *search*, so Google
+is free to match a POI near it. In a sparse area the same form gives "Unnamed location" at
+the exact spot. Fixing it would mean converting to a `geo:` URI at tap time, which trades the
+snapping for other behaviour; not changed without asking.
+
 ## Predictive back enabled (0.2.32, 2026-10-17, VERIFIED on the phone)
 
 `android:enableOnBackInvokedCallback="true"`. The app had been logging the "not enabled"

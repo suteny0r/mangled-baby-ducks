@@ -1,0 +1,5 @@
+﻿<en-US>
+Shared locations now appear as a map in the conversation instead of a link. The map is zoomed out far enough to show your whole mesh, with your nodes as dots and the shared spot as a pin, so you can see where it is relative to everyone. Tap it to open it in your maps app.
+
+Tapping a location link now works when your maps app is already open. Previously it would come back to the front still showing whatever it had before, such as a route in progress, leaving the shared spot off screen.
+</en-US>

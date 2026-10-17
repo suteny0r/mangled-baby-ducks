@@ -1,7 +1,14 @@
 package com.suteny0r.mangledbabyducks.ui
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalDensity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -949,6 +956,7 @@ private fun Bubble(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     // MessageText: inline markdown, mentions as links, link runs tinted and tappable. On
     // our accent bubble the link is white like the rest of the text, underlined, since
     // the accent colour would vanish. A mention opens the node (handleURL's
@@ -967,11 +975,19 @@ private fun Bubble(
     // 200-byte packet can carry. Show the picture and keep the link for the tap.
     val payload = message.payload ?: "EMPTY MESSAGE"
     val pictures = remember(payload) { MeshPicLinks.find(payload) }
+    // Same idea for a shared coordinate: draw the map, keep the link for the tap.
+    val maps = remember(payload) { mapLinksIn(payload) }
     // Only pictures that failed to load keep their link in the text, so an expired one is
     // still reachable rather than a broken box with nothing to tap.
     var failedPictures by remember(payload) { mutableStateOf(emptySet<String>()) }
     val shown = remember(payload, pictures, failedPictures) {
-        MeshPicLinks.strip(payload, pictures.filter { it.shortId !in failedPictures })
+        // Map links come out too, so the bubble shows the map rather than the raw URL.
+        var text = MeshPicLinks.strip(payload, pictures.filter { it.shortId !in failedPictures })
+        maps.forEach { text = text.replace(it.url, "") }
+        text.replace(Regex("""\(\s*\)"""), "")
+            .replace(Regex("""[ \t]+([.,!?;:])"""), "$1")
+            .replace(Regex("""[ \t]{2,}"""), " ")
+            .trim()
     }
     val rendered = remember(shown, names, mine) {
         renderMessageMarkdown(shown, { names[it] }, linkColor, codeBackground, linkListener)
@@ -995,6 +1011,9 @@ private fun Bubble(
                     style = MaterialTheme.typography.bodyLarge,
                     color = if (mine) Color.White else MaterialTheme.colorScheme.onSurface,
                 )
+            }
+            maps.forEach { link ->
+                InlineMap(link = link, onOpen = { openMapLink(context, link.url) })
             }
             pictures.filter { it.shortId !in failedPictures }.forEach { picture ->
                 InlinePicture(
@@ -1614,6 +1633,86 @@ private fun styleIcon(style: MarkdownStyle): ImageVector = when (style) {
     MarkdownStyle.STRIKETHROUGH -> Icons.Filled.FormatStrikethrough
     MarkdownStyle.CODE -> Icons.Filled.Code
     MarkdownStyle.LINK -> Icons.Filled.Link
+}
+
+/**
+ * Open a map link in the maps app, forcing it to actually go there.
+ *
+ * `LocalUriHandler.openUri` hands the URL over without task flags, so a maps app that is
+ * already running comes back to the front showing whatever it was showing — a selected
+ * place, or a route in progress — and the shared pin is nowhere on screen. Closing the maps
+ * app first made the same link work, which is what gives the cause away.
+ *
+ * `FLAG_ACTIVITY_NEW_TASK` with `CLEAR_TOP` makes the delivery a fresh start of the target
+ * rather than a resume of its existing state. The URL itself is left alone: it is also
+ * going out over the mesh to clients that are not this app, and the documented
+ * `?api=1&query=` form would cost thirteen more bytes of a two hundred byte packet to fix
+ * something that is not the URL's fault.
+ */
+private fun openMapLink(context: Context, url: String) {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+    }
+    runCatching { context.startActivity(intent) }
+        .onFailure { Toast.makeText(context, "No app can open that link", Toast.LENGTH_SHORT).show() }
+}
+
+/**
+ * A coordinate shared in a message, drawn as a map framed to span the whole mesh.
+ *
+ * The pin on its own says nothing; against every node the mesh knows about it says where
+ * this is relative to everyone, which is the question being asked. Mesh nodes are the small
+ * dots, the shared point is the pin. Tapping opens the link in the maps app.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun InlineMap(link: MapLink, onOpen: () -> Unit) {
+    val context = LocalContext.current
+    val meshNodes by context.container.mapNodes.collectAsState()
+    val density = LocalDensity.current
+    val widthPx = with(density) { 276.dp.roundToPx() }
+    val heightPx = with(density) { 160.dp.roundToPx() }
+    val pinColor = MaterialTheme.colorScheme.error
+    val nodeColor = MaterialTheme.colorScheme.primary
+
+    val rendered by produceState<MapThumbnail.Rendered?>(null, link.url, meshNodes.size, widthPx) {
+        value = MapThumbnail.render(
+            context, link.latitude, link.longitude, meshNodes, widthPx, heightPx,
+        )
+    }
+
+    rendered?.let { map ->
+        Box(
+            Modifier
+                .width(276.dp)
+                .height(160.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .combinedClickable(onClick = onOpen, onLongClick = onOpen),
+        ) {
+            Image(
+                bitmap = map.bitmap.asImageBitmap(),
+                contentDescription = "Map of the shared location",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.matchParentSize(),
+            )
+            // Drawn over the snapshot rather than baked into it, so the marks follow the
+            // app's colours and stay crisp whatever the bitmap is scaled to.
+            Canvas(Modifier.matchParentSize()) {
+                val scaleX = size.width / map.bitmap.width
+                val scaleY = size.height / map.bitmap.height
+                map.nodes.forEach { point ->
+                    drawCircle(
+                        color = nodeColor,
+                        radius = 3.dp.toPx(),
+                        center = Offset(point.x * scaleX, point.y * scaleY),
+                    )
+                }
+                val pin = Offset(map.pin.x * scaleX, map.pin.y * scaleY)
+                drawCircle(Color.White, radius = 7.dp.toPx(), center = pin)
+                drawCircle(pinColor, radius = 5.dp.toPx(), center = pin)
+            }
+        }
+    }
 }
 
 /**
