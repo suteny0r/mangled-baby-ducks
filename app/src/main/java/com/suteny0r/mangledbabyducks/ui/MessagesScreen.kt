@@ -16,6 +16,7 @@ import com.suteny0r.mangledbabyducks.net.PictureSaver
 import androidx.compose.runtime.produceState
 import java.io.File
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.material.icons.outlined.PhotoCamera
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -1361,12 +1362,22 @@ private fun Composer(
     var cameraTarget by remember { mutableStateOf<Uri?>(null) }
     val uploadScope = rememberCoroutineScope()
 
+    // The draft as it is *now*, not as it was when the upload started. An upload spans a
+    // trip out to the photo picker and back plus several seconds of network, and `text` is
+    // a plain val captured from whichever composition built this lambda. Appending to that
+    // captured copy threw away everything the draft held, so a caption typed before the
+    // camera button was pressed came back replaced by the bare link.
+    val liveDraft by rememberUpdatedState(draft)
+
     fun sharePicture(uri: Uri) {
         uploading = true
         uploadScope.launch {
             when (val result = MeshPicUploader.upload(context, uri)) {
-                is MeshPicUploader.Result.Success ->
-                    append((if (text.isEmpty()) "" else " ") + result.link)
+                is MeshPicUploader.Result.Success -> {
+                    val current = liveDraft.text
+                    val joined = current + (if (current.isEmpty()) "" else " ") + result.link
+                    apply(FormattingResult(joined, TextRange(joined.length)))
+                }
                 is MeshPicUploader.Result.Failure ->
                     Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
             }

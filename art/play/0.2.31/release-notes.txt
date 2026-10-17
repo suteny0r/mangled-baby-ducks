@@ -1,0 +1,3 @@
+<en-US>
+Fixes a message being wiped out when a picture was shared. Text typed before choosing a picture was replaced by the picture link instead of the link being added to it. The link is now added to whatever you have already written.
+</en-US>

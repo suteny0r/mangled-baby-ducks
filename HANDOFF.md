@@ -9,7 +9,41 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
-## meshpic pictures render inline, and are kept (0.2.30, 2026-10-17, NOT yet verified)
+## Sharing a picture wiped the typed message (0.2.31, 2026-10-17, VERIFIED on the phone)
+
+Type a caption, press the camera button, pick a picture: the caption came back replaced by
+the bare link.
+
+`sharePicture` appended to `text`, which is `val text = draft.text` — a plain value captured
+from whichever composition built that lambda. The upload spans a trip out to the photo picker
+and back plus seconds of network, so by the time the append ran it was writing
+`capturedText + link` over a draft that had moved on. Classic stale capture in an async
+callback.
+
+Fixed with `rememberUpdatedState(draft)` and reading `liveDraft.text` at append time. The
+rule for anything in this composer that completes after an await: read the draft live, never
+close over `text`.
+
+Verified on the phone: typed "hello test" (Bytes: 10), camera > Gallery > pick, came back
+"hello test https://meshpic.org/lDm" (Bytes: 34).
+
+## meshpic pictures render inline, and are kept (0.2.30, 2026-10-17, VERIFIED end to end on the phone)
+
+Verified on a debug build installed over the Play one, against private channel 1:
+
+- Gallery pick uploaded and returned `https://meshpic.org/fNp`, 23 bytes — the two-step CSRF
+  handshake works from the app, not just from curl.
+- Picture rendered inline in the bubble with no URL, on both the send side and the **receive**
+  side (the radio echoed the broadcast back and it rendered under the sender's name).
+- Stored at `files/meshpic/fNp.img`, 53,662 bytes.
+- **Airplane mode plus a cold restart still rendered it**, which is the proof that it is
+  stored rather than depending on meshpic still holding it.
+- Long press offered Save to photos; MediaStore then held
+  `Pictures/Mangled Baby Ducks/meshpic-fNp.jpg` at the identical 53,662 bytes, extension
+  sniffed correctly.
+- The camera path was confirmed separately by the user.
+- Zero warnings or errors from any of the app's own tags; the crash buffer was empty.
+
 
 A message whose text is a meshpic link now draws the picture instead of the URL. Tap opens
 the link, long press offers "Save to photos".
