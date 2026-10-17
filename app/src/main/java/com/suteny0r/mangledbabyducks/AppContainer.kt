@@ -26,6 +26,8 @@ import com.suteny0r.mangledbabyducks.radio.MeshProtocol
 import com.suteny0r.mangledbabyducks.radio.MessageNotifier
 import com.suteny0r.mangledbabyducks.radio.PacketIngest
 import com.suteny0r.mangledbabyducks.diagnostics.LogStore
+import com.suteny0r.mangledbabyducks.net.MeshPicCache
+import com.suteny0r.mangledbabyducks.net.MeshPicLinks
 import com.suteny0r.mangledbabyducks.radio.PresenceProbe
 import com.suteny0r.mangledbabyducks.radio.RadioConnection
 import com.suteny0r.mangledbabyducks.radio.RadioManager
@@ -164,6 +166,20 @@ class AppContainer(context: Context) {
 
     /** Process-lifetime scope for the shared hot flows below and the launch-time prune. */
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    init {
+        // Fetch a shared picture the moment its message lands, not when someone finally
+        // opens the thread. meshpic.org deletes an image after about a day, so a message
+        // that arrives overnight would otherwise lose its picture before it was ever seen,
+        // and the link left behind would be dead. Once the copy is local it is permanent.
+        appScope.launch {
+            radioManager.incomingMessages.collect { message ->
+                MeshPicLinks.find(message.payload.orEmpty()).forEach { picture ->
+                    runCatching { MeshPicCache.get(context, picture.shortId) }
+                }
+            }
+        }
+    }
 
     /**
      * The two lists every surface reads, kept hot for the whole process so a screen can

@@ -9,6 +9,43 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## meshpic pictures render inline, and are kept (0.2.30, 2026-10-17, NOT yet verified)
+
+A message whose text is a meshpic link now draws the picture instead of the URL. Tap opens
+the link, long press offers "Save to photos".
+
+`https://meshpic.org/image/<short_id>` serves the bytes with **no cookie, token, header or
+User-Agent** — verified against the live service, `200 image/jpeg` from a bare curl. That is
+the view page's own `og:image` target, so the image URL is derivable from the short link
+without fetching the page.
+
+**The pictures are stored, not cached.** meshpic deletes an image after about a day, so
+relying on the link means a conversation quietly rots: yesterday's photographs become dead
+URLs. `MeshPicCache` keeps a permanent copy in `filesDir/meshpic/<short_id>.img` — not
+`cacheDir`, which Android may evict, and not Coil's bounded LRU either. Downloads are written
+to `.part` and renamed, so an interrupted one is never mistaken for a stored picture; they
+are deduplicated per short id so several bubbles share one fetch; and the store is pruned
+oldest-first past 256 MB.
+
+**Fetched on arrival, not on render.** `AppContainer` collects `radioManager.incomingMessages`
+and pulls any meshpic link straight away. Render-time fetching alone would lose the picture
+of any message that arrived while nobody opened the thread, which for an overnight message is
+most of them. Render-time fetching remains as the fallback for history that predates this.
+
+The dead-link fallback only fires for a picture that expired *before this device ever saw
+it*; then the link is genuinely all that is left of the message.
+
+Saving uses `MediaStore` into `Pictures/Mangled Baby Ducks`. No permission is needed from
+Android 10, which is why `WRITE_EXTERNAL_STORAGE` is declared `maxSdkVersion=28` and only
+requested below that. The stored bytes carry no extension, so the type is sniffed with
+`inJustDecodeBounds` rather than assumed to be JPEG.
+
+`MeshPicLinks` lives in `net`, not `ui`: it is about the service. Its `strip` tidies the
+wreckage a removed URL leaves in a sentence — "see <link>." became "see ." and "(<link>)"
+became "( )". Checked against thirteen cases including `http://`, duplicates, two links in
+one message, trailing punctuation, other hosts, and the reserved paths (`/image/<id>` must
+not read as a short id of "image").
+
 ## Picture share rejected every image; distance badge on DM rows (0.2.29, 2026-10-16)
 
 0.2.28's picture share answered "That image could not be read" for every gallery pick. The

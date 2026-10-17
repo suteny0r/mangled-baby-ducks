@@ -1,0 +1,5 @@
+<en-US>
+Shared pictures now appear in the conversation instead of a link. Tap a picture to open it, or hold it to save it to your photos.
+
+Pictures are kept on your phone. meshpic.org deletes a shared picture after about a day, so the app downloads it as soon as the message arrives and keeps its own copy. The picture stays in your conversation long after the link has stopped working.
+</en-US>

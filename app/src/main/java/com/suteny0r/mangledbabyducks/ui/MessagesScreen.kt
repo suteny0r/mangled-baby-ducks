@@ -7,7 +7,13 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
+import coil.compose.AsyncImage
+import androidx.compose.ui.layout.ContentScale
+import com.suteny0r.mangledbabyducks.net.MeshPicCache
+import com.suteny0r.mangledbabyducks.net.MeshPicLinks
 import com.suteny0r.mangledbabyducks.net.MeshPicUploader
+import com.suteny0r.mangledbabyducks.net.PictureSaver
+import androidx.compose.runtime.produceState
 import java.io.File
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.material.icons.outlined.PhotoCamera
@@ -956,15 +962,22 @@ private fun Bubble(
             if (node != null) onOpenMention(node) else runCatching { uriHandler.openUri(url) }
         }
     }
-    val rendered = remember(message.payload, names, mine) {
-        renderMessageMarkdown(message.payload ?: "EMPTY MESSAGE", { names[it] }, linkColor, codeBackground, linkListener)
+    // A picture sent through meshpic.org arrives as a short link, because that is all a
+    // 200-byte packet can carry. Show the picture and keep the link for the tap.
+    val payload = message.payload ?: "EMPTY MESSAGE"
+    val pictures = remember(payload) { MeshPicLinks.find(payload) }
+    // Only pictures that failed to load keep their link in the text, so an expired one is
+    // still reachable rather than a broken box with nothing to tap.
+    var failedPictures by remember(payload) { mutableStateOf(emptySet<String>()) }
+    val shown = remember(payload, pictures, failedPictures) {
+        MeshPicLinks.strip(payload, pictures.filter { it.shortId !in failedPictures })
+    }
+    val rendered = remember(shown, names, mine) {
+        renderMessageMarkdown(shown, { names[it] }, linkColor, codeBackground, linkListener)
     }
     Box {
-        Text(
-            rendered,
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (mine) Color.White else MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier
+        Column(
+            Modifier
                 .widthIn(max = 300.dp)
                 .background(
                     if (mine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
@@ -972,7 +985,28 @@ private fun Bubble(
                 )
                 .combinedClickable(onClick = {}, onLongClick = { menuOpen = true })
                 .padding(horizontal = 12.dp, vertical = 10.dp),
-        )
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            // A message that was nothing but a link has no text left to draw.
+            if (shown.isNotEmpty()) {
+                Text(
+                    rendered,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (mine) Color.White else MaterialTheme.colorScheme.onSurface,
+                )
+            }
+            pictures.filter { it.shortId !in failedPictures }.forEach { picture ->
+                InlinePicture(
+                    picture = picture,
+                    onOpen = { runCatching { uriHandler.openUri(picture.link) } },
+                    // meshpic deletes a picture after its retention window. Once this
+                    // device has a copy that no longer matters, so this only fires for one
+                    // that expired before anyone here looked at it, and then the link is
+                    // the only thing left of it.
+                    onUnavailable = { failedPictures = failedPictures + picture.shortId },
+                )
+            }
+        }
         // MessageText.cornerBadges: a white glyph on a green disc, hung off the bubble's
         // bottom trailing corner. Affirmative only, so plain traffic carries nothing.
         Row(
@@ -1569,6 +1603,90 @@ private fun styleIcon(style: MarkdownStyle): ImageVector = when (style) {
     MarkdownStyle.STRIKETHROUGH -> Icons.Filled.FormatStrikethrough
     MarkdownStyle.CODE -> Icons.Filled.Code
     MarkdownStyle.LINK -> Icons.Filled.Link
+}
+
+/**
+ * A received picture, drawn from this device's own stored copy.
+ *
+ * It is fetched once and kept, so the bubble never depends on meshpic.org still holding it:
+ * the link expires in about a day, the picture does not. Long press offers to put a copy in
+ * the photo library, which is the only way it leaves the app.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun InlinePicture(
+    picture: MeshPicLinks.Picture,
+    onOpen: () -> Unit,
+    onUnavailable: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var menuOpen by remember { mutableStateOf(false) }
+
+    // Seeded from the stored copy so an already-held picture draws on the first frame
+    // rather than flickering through a gap.
+    val file by produceState<File?>(MeshPicCache.cached(context, picture.shortId), picture.shortId) {
+        if (value == null) {
+            val fetched = MeshPicCache.get(context, picture.shortId)
+            if (fetched == null) onUnavailable() else value = fetched
+        }
+    }
+
+    fun savePicture() {
+        scope.launch {
+            val source = file ?: return@launch
+            val result = PictureSaver.save(context, source, "meshpic-${picture.shortId}")
+            Toast.makeText(
+                context,
+                when (result) {
+                    is PictureSaver.Result.Saved -> "Saved to your photos"
+                    is PictureSaver.Result.Failed -> result.message
+                },
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
+    }
+
+    // Below Android 10 MediaStore needs the legacy storage permission; from 10 it does not,
+    // so nothing is ever requested there.
+    val askStorage = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) savePicture()
+        else Toast.makeText(context, "Storage permission is needed to save pictures", Toast.LENGTH_SHORT).show()
+    }
+
+    file?.let { stored ->
+        Box {
+            AsyncImage(
+                model = stored,
+                contentDescription = "Shared picture",
+                contentScale = ContentScale.FillWidth,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 320.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .combinedClickable(onClick = onOpen, onLongClick = { menuOpen = true }),
+            )
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text("Save to photos") },
+                    onClick = {
+                        menuOpen = false
+                        if (PictureSaver.needsLegacyPermission) {
+                            askStorage.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                        } else {
+                            savePicture()
+                        }
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("Open in browser") },
+                    onClick = { menuOpen = false; onOpen() },
+                )
+            }
+        }
+    }
 }
 
 /**

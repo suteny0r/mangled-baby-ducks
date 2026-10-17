@@ -37,7 +37,9 @@ object MeshPicUploader {
 
     private const val TAG = "MeshPic"
     private const val BASE = "https://meshpic.org"
-    private const val UA = "MangledBabyDucks/1.0 (+https://github.com/suteny0r/mangled-baby-ducks)"
+    /** Names this app so the service's operator can see who is calling. */
+    const val USER_AGENT = "MangledBabyDucks/1.0 (+https://github.com/suteny0r/mangled-baby-ducks)"
+    private const val UA = USER_AGENT
 
     /** The service's own ceiling. We aim well under it; see [encode]. */
     private const val SERVICE_MAX_BYTES = 10 * 1024 * 1024
