@@ -382,6 +382,16 @@ class NodesViewModel(app: Application) : AndroidViewModel(app) {
     }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /**
+     * How many nodes the store holds before any filter, so the header can say when it is
+     * showing a subset. A filter chip left on reads exactly like an empty node table:
+     * "Signed" alone reduced a 119-node store to the connected radio, and the header's
+     * count said 1 with nothing to say where the rest had gone.
+     */
+    val totalNodeCount: StateFlow<Int> = container.nodesWithUsers
+        .map { list -> list.count { !it.node.ignored } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
     private fun nodeMatches(entry: NodeWithUser, needle: String): Boolean {
         val user = entry.user
         return listOfNotNull(

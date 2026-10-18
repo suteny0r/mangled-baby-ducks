@@ -133,11 +133,21 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
     val batteryByNode by vm.batteryByNode.collectAsState()
     val positionByNode by vm.positionByNode.collectAsState()
     val myLocation by vm.myLocation.collectAsState()
+    val totalNodes by vm.totalNodeCount.collectAsState()
 
     Column(Modifier.fillMaxSize()) {
         // iOS sidebar title is "Nodes (<live count>)" (NodeList.swift), inline next to
         // the logo with the ConnectedDevice pill at the trailing edge.
-        AppHeader("Nodes (${nodes.size})", large = false)
+        //
+        // "N of M" whenever a filter is hiding nodes. iOS shows the filtered count alone,
+        // which reads identically to an empty node table: "Signed" left on cut a 119-node
+        // store down to the connected radio, the header said "Nodes (1)", and nothing on
+        // the screen said the other 118 were still there.
+        val hidden = nodes.size < totalNodes
+        AppHeader(
+            if (hidden) "Nodes (${nodes.size} of $totalNodes)" else "Nodes (${nodes.size})",
+            large = false,
+        )
         // iOS .searchable field: a gray rounded bar with the magnifier inside.
         SearchField(
             value = search,

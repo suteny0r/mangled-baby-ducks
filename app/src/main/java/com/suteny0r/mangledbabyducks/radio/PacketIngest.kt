@@ -405,6 +405,25 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
             ackTimestamp = if (packet.rxTime != 0) packet.rxTime.uint() * 1000 else System.currentTimeMillis(),
             relayNode = packet.relayNode.uint(),
         )
+        // Every outcome of a send, named. Until now only a PKI nak on a DM was logged
+        // (RadioManager.healPkiFailure), so a channel broadcast that came back "Failed to
+        // deliver to mesh" left nothing in the log at all and could only be theorised
+        // about afterwards. A broadcast is acked implicitly, by hearing a neighbour
+        // rebroadcast it, so the channel and the relaying node are the two facts that
+        // explain it: MAX_RETRANSMIT on one channel and a clean ack on another means
+        // nobody who holds that channel's key relayed in time.
+        val relay = packet.relayNode.uint() and 0xFF
+        val where = "channel ${packet.channel}, relay " +
+            if (relay == 0L) "none" else "…%02x".format(relay)
+        if (errorReason == 0) {
+            Log.d(TAG, "Send ${"0x%08x".format(requestId)} acked on $where")
+        } else {
+            Log.w(
+                TAG,
+                "Send ${"0x%08x".format(requestId)} naked: " +
+                    "${routing.errorReason.name} ($errorReason) on $where",
+            )
+        }
         return AckResult(requestId, errorReason)
     }
 
