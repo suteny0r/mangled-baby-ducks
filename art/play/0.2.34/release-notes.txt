@@ -1,0 +1,7 @@
+﻿<en-US>
+Asking a node for its details now works when you met it on a private channel. Exchange User Info, sharing your position with a node and asking for its position back were all sent on the default channel, so a node you only share a private channel with never heard them and stayed nameless no matter how many times you tried.
+
+Android Auto: the Messages and Nodes screens now show the radio status at the top and keep it current. Before, they had no way to tell you the radio had dropped, because the conversations and nodes they list are stored on the phone and look the same either way.
+
+Joining a radio over Wi-Fi is quicker. The app's own search for radios on your network could take the connection slot from the radio you were joining, which cost an attempt and a few seconds.
+</en-US>
