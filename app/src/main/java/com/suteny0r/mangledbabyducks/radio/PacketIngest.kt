@@ -321,6 +321,13 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
                 lastHeard = lastHeard,
                 hopsAway = hopsAway,
                 hasXeddsaSigned = (existing?.hasXeddsaSigned ?: false) || packet.xeddsaSigned,
+                // The channel this node was actually decoded on. Until now the field was
+                // written only by a NodeInfo, so a node whose NodeInfo had never arrived
+                // read as channel 0, and anything RadioManager.channelFor sent it went to
+                // a channel it holds no key for. Every packet already carries the answer.
+                // Zero is kept as "no information": a PKI direct message decodes on the
+                // PKC channel and reports 0, which must not erase a known private channel.
+                channel = if (packet.channel > 0) packet.channel else existing?.channel ?: 0,
             )
         )
         // A brand-new row is the app-side counterpart of a firmware NodeDB insert, which
