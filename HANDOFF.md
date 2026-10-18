@@ -1,4 +1,4 @@
-﻿# Handoff â€” 2026-08-20 (~session resume)
+# Handoff â€” 2026-08-20 (~session resume)
 
 ## What this is
 Mangled Baby Ducks: an Android (Kotlin/Compose) Meshtastic-compatible client, ported from
