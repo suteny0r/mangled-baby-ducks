@@ -175,8 +175,15 @@ class NodeDetailViewModel(app: Application) : AndroidViewModel(app) {
     fun remove(target: Long, removed: Long) =
         launchAdmin { run { container.radioManager.removeNode(target, removed) } }
 
-    fun sfHistory(target: Long, channel: Int = 0) =
-        launchAdmin { run { container.radioManager.requestStoreAndForwardClientHistory(target, channel) } }
+    fun sfHistory(target: Long, channel: Int? = null) =
+        launchAdmin {
+            run {
+                container.radioManager.requestStoreAndForwardClientHistory(
+                    target,
+                    channel ?: container.radioManager.channelFor(target),
+                )
+            }
+        }
 
     fun exchangeUser(target: Long) =
         launchAdmin { run { container.radioManager.exchangeUserInfo(target) } }
@@ -203,7 +210,6 @@ class NodeDetailViewModel(app: Application) : AndroidViewModel(app) {
                     latitudeI = fix.latitudeI,
                     longitudeI = fix.longitudeI,
                     altitude = fix.altitude,
-                    channel = 0,
                 )
             }
         }

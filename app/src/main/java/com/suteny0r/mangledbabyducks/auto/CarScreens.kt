@@ -710,7 +710,6 @@ class CarNodeDetailScreen(carContext: CarContext, private val num: Long) : MeshC
                     latitudeI = fix.latitudeI,
                     longitudeI = fix.longitudeI,
                     altitude = fix.altitude,
-                    channel = 0,
                 )
             }
             actions += actionRow("Exchange User Info") { container.radioManager.exchangeUserInfo(num) }

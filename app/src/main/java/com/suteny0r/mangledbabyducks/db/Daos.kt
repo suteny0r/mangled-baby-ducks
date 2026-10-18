@@ -239,6 +239,18 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE toNum IS NULL AND channel = :channel ORDER BY timestamp DESC LIMIT 1")
     suspend fun lastChannelMessage(channel: Int): MessageEntity?
 
+    /**
+     * The channel index a node was last reached on, either way. Traffic aimed at one node
+     * has to go out on a channel that node can decrypt, and the node row only knows the
+     * answer once a NodeInfo for it has arrived: for a node we have only ever met on a
+     * private channel, its own messages are the only record of where it lives.
+     */
+    @Query(
+        "SELECT channel FROM messages WHERE fromNum = :num OR toNum = :num " +
+            "ORDER BY timestamp DESC LIMIT 1"
+    )
+    suspend fun lastChannelWith(num: Long): Int?
+
     @Query("SELECT * FROM messages WHERE messageId = :messageId")
     suspend fun get(messageId: Long): MessageEntity?
 

@@ -9,6 +9,83 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## Node-targeted traffic always went out on channel 0 (unreleased, 2026-10-18, NOT verified on hardware)
+
+Reported: a node seen only on a private channel messaged the user, the user replied, then
+shared location, exchanged user info and exchanged position with it. Ninety minutes later it
+was still nameless. The user suspected the node evictor.
+
+The evictor is not involved, and the device log says so: `NodeDB cap 120: evicted 1
+oldest-heard`, one row at a time, which is the mirror tracking a radio whose own NodeDB is
+full at 120. Both eviction queries (`NodeDao.oldestEvictableNums`, `NodeDao.protectedNums`)
+exclude any node with message history, so a node you have exchanged messages with cannot be
+the victim. Its node row was never at risk; what was missing was its **user** row.
+
+The cause is that every node-targeted action hardcoded channel 0:
+`NodeDetailScreen.sendPosition` (`channel = 0`), `sfHistory` (`channel: Int = 0`), the car
+screen's Exchange Positions, `exchangeUserInfo`'s default, and `sendTextMessage`'s default,
+which is what every DM call site used. A peer met on a private channel holds no key for
+channel 0, so all of it was transmitted where that peer could not hear it. The one path that
+got this right was `healPkiFailure`, which passes the failing message's channel, and even
+that resolved to 0 because the DM it was repairing had itself been stored with channel 0.
+
+`RadioManager.channelFor(nodeNum)` now answers it: the node row's own channel when it has
+one (the radio's answer, from NodeInfo), else the channel of the last message either way
+with that node (`MessageDao.lastChannelWith`), else 0. The node row is useless in exactly
+this case, because its channel is only filled in by the NodeInfo that never arrived, which
+is why the messages are the fallback. Every call site above now passes null and lets it
+resolve; channel-thread senders still pass their index explicitly.
+
+Device evidence for the diagnosis: `DM to !0e31d0cf naked with error 39` (PKI_UNKNOWN_PUBKEY)
+at 08:03, one repair attempt, nothing after. 0.2.33 from Play is on the phone, so the store
+could not be read directly (`run-as` needs a debuggable build, and reinstalling would wipe
+the very data the report is about).
+
+Still open, raised and not decided: the store mirrors the radio's cap by design, so on a
+large mesh the app can never hold more nodes than the radio does. Keeping app-side history
+beyond the radio's NodeDB would be a deliberate change to that rule.
+
+## Android Auto: Messages and Nodes never noticed the link changing (unreleased, 2026-10-18, NOT verified on a head unit)
+
+Reported: the Radio screen tracks connect/disconnect correctly, the status at the top of
+Messages goes stale, and Nodes probably too.
+
+Neither screen observed `RadioManager.state` at all. Both read Room, and Room does not change
+when a radio drops: channels, contacts and nodes all survive with the same names, so nothing
+called `invalidate()` and the screen kept its last draw. Only Home, Map and Radio watched the
+connection. Note for whoever reads the original report: there was no status line on the
+Messages screen to go stale, so what was seen was either Home's Radio row or a frozen list.
+
+Both lists now carry the Radio row the Map list has always had, factored into
+`MeshCarScreen.radioRow` (Map uses it too). Title stays "Radio" and the state goes in the
+secondary line, because a row whose title changes spends a template step against the host's
+quota while new text under the same title is a free refresh.
+
+Two consequences: it costs one row of the host's content limit (commonly 6), so the Messages
+channel/DM split now runs on `limit - 1`; and since a `ListTemplate` is one list or sections
+and never both, Messages' empty state became a section and Nodes says "No nodes yet" in a
+row, because neither list can reach the host's no-items message once the status row is
+always present.
+
+## The LAN sweep stole the TCP slot from the radio being connected (unreleased, 2026-10-18, diagnosed from a tester's log)
+
+Reported as a delay joining a TCP radio after updating. From the tester's log: want_config at
+07:54:51.5, silence, `Link lost: Stream ended` at 07:55:00.9, and a sweep hit on the same
+host 150 ms later. The firmware serves one TCP client; `LanScanner.probe` opened its own
+socket to the radio nine seconds into the handshake and took the slot. Attempt 2 was clean
+and Subscribed by 07:55:06, so it showed as sixteen seconds rather than a failure.
+
+The exclusion already existed and was looking at the wrong moment: `ConnectViewModel` built
+the set once when the scan started, from the remembered radio, which is only written after a
+connect succeeds. The real order is scan first, connect second.
+
+`discover()` now takes the exclusion as a function and asks it per host, and
+`RadioManager.activeHost` answers from `lastAddress`, set before the first attempt, so the
+handshake is covered and not only an established link. The LAN sweep also follows the BLE
+scan's lifecycle now instead of running for the life of the Connect tab. Residual window: a
+probe already in flight when Connect is tapped, bounded by the 2.5 s probe budget; the retry
+covers it, which is what happened here.
+
 ## Map links render inline, and open without the stale map (0.2.33, 2026-10-17, VERIFIED on the phone)
 
 A shared coordinate now draws as a map in the bubble instead of a URL. Tapping opens it.

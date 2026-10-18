@@ -742,7 +742,9 @@ class RadioManager(
                 runCatching { pushContactToRadio(peer, known) }
             }
         }
-        runCatching { exchangeUserInfo(peer, channel = message.channel) }
+        // A zero here is "we do not know", not "the default channel": fall through to
+        // channelFor rather than re-asking on a channel that has already failed once.
+        runCatching { exchangeUserInfo(peer, channel = message.channel.takeIf { it > 0 }) }
         if (now - lastKeyBroadcastMs > KEY_BROADCAST_COOLDOWN_MS) {
             lastKeyBroadcastMs = now
             Log.i(TAG, "Broadcasting node info after key nak")
@@ -808,12 +810,18 @@ class RadioManager(
     suspend fun sendTextMessage(
         text: String,
         toNum: Long? = null,
-        channel: Int = 0,
+        /**
+         * The channel to send on. Every channel-thread caller passes its index; a DM
+         * caller leaves it null and [channelFor] decides, because a peer met on a private
+         * channel cannot read anything sent on channel 0.
+         */
+        channel: Int? = null,
         replyId: Long = 0,
         isEmoji: Boolean = false,
     ): Boolean {
         val myNum = _myNodeNum.value
         if (myNum == 0L) return false
+        val onChannel = channel ?: toNum?.let { channelFor(it) } ?: 0
         // Curly-quote normalization from the iOS sender.
         val normalized = text.replace('’', '\'').replace('“', '"').replace('”', '"')
         val payload = normalized.encodeToByteArray()
@@ -828,7 +836,7 @@ class RadioManager(
                 messageId = messageId,
                 fromNum = myNum,
                 toNum = toNum,
-                channel = channel,
+                channel = onChannel,
                 portNum = Portnums.PortNum.TEXT_MESSAGE_APP_VALUE,
                 payload = normalized,
                 timestamp = System.currentTimeMillis(),
@@ -849,7 +857,7 @@ class RadioManager(
         val packet = MeshProtos.MeshPacket.newBuilder()
             .setId(messageId.toInt())
             .setTo((toNum ?: MeshProtocol.BROADCAST_NUM).toInt())
-            .setChannel(channel)
+            .setChannel(onChannel)
             .setWantAck(true)
             .setPriority(MeshProtos.MeshPacket.Priority.RELIABLE)
             .setDecoded(data)
@@ -1246,11 +1254,31 @@ class RadioManager(
     }
 
     /**
+     * Which channel a packet aimed at one node must go out on.
+     *
+     * Channel 0 was hardcoded at every node-targeted action, and for a node met on a
+     * private channel that is the wrong radio entirely: the peer holds no key for the
+     * default channel, so the request is noise to it and nothing ever comes back. A node
+     * that had only ever spoken on a private channel could be asked for its user info,
+     * sent a position and asked for one back, and stay nameless indefinitely, because
+     * none of the three was ever transmitted anywhere it could hear.
+     *
+     * The node row's own channel is the radio's answer and wins when it has one, but it
+     * is only filled in by a NodeInfo, which is exactly what is missing in that case.
+     * The messages are the fallback: a conversation is proof of a channel that works.
+     */
+    suspend fun channelFor(nodeNum: Long): Int =
+        db.nodeDao().get(nodeNum)?.channel?.takeIf { it > 0 }
+            ?: db.messageDao().lastChannelWith(nodeNum)?.takeIf { it > 0 }
+            ?: 0
+
+    /**
      * Ask a node to broadcast its identity to the mesh with a User info exchange
      * request (admin request to exchange). Mirrors iOS exchangeUserInfo. Target
-     * channel comes from the destination node's row, 0 for unknown.
+     * channel comes from the destination node's row, resolved by [channelFor] when the
+     * caller does not already know it.
      */
-    suspend fun exchangeUserInfo(targetNum: Long, channel: Int = 0): Boolean {
+    suspend fun exchangeUserInfo(targetNum: Long, channel: Int? = null): Boolean {
         val myNum = _myNodeNum.value
         if (myNum == 0L) return false
         val me = db.userDao().get(myNum) ?: return false
@@ -1266,7 +1294,7 @@ class RadioManager(
             reliable = true,
             wantAck = true,
             wantResponse = true,
-            channel = channel,
+            channel = channel ?: channelFor(targetNum),
             hopsAway = 0,
         ) { it.setPayload(user.toByteString()) }
     }
@@ -1281,7 +1309,8 @@ class RadioManager(
         latitudeI: Int,
         longitudeI: Int,
         altitude: Int,
-        channel: Int,
+        /** Null resolves to the channel the node is actually reachable on; see [channelFor]. */
+        channel: Int? = null,
         wantResponse: Boolean = true,
     ): Boolean {
         val position = MeshProtos.Position.newBuilder()
@@ -1298,7 +1327,7 @@ class RadioManager(
             reliable = false,
             wantAck = false,
             wantResponse = wantResponse,
-            channel = channel,
+            channel = channel ?: channelFor(toNum),
             hopsAway = 0,
         ) { it.setPayload(position.toByteString()) }
     }

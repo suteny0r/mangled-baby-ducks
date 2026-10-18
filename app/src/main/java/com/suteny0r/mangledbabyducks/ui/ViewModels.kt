@@ -546,12 +546,13 @@ class MessagesViewModel(app: Application) : AndroidViewModel(app) {
                 text, toNum = toNum, replyId = replyId, isEmoji = isEmoji,
             )
             // A direct share also asks the peer for its position back.
-            if (ok && sharePosition) sendOurPosition(toNum, 0, wantResponse = true)
+            // Null channel: the peer may only be reachable on a private one (channelFor).
+            if (ok && sharePosition) sendOurPosition(toNum, null, wantResponse = true)
         }
     }
 
     /** Our position as the lists define it: the radio's own fix when present, else the phone's. */
-    private suspend fun sendOurPosition(toNum: Long, channel: Int, wantResponse: Boolean) {
+    private suspend fun sendOurPosition(toNum: Long, channel: Int?, wantResponse: Boolean) {
         val here = myLocation.value ?: return
         val altitude = container.locationSharer.lastFix.value?.altitude ?: 0
         container.radioManager.sendDestPosition(
