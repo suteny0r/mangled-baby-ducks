@@ -1,4 +1,4 @@
-# Handoff — 2026-08-20 (~session resume)
+﻿# Handoff â€” 2026-08-20 (~session resume)
 
 ## What this is
 Mangled Baby Ducks: an Android (Kotlin/Compose) Meshtastic-compatible client, ported from
@@ -9,7 +9,7 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
-## Node-targeted traffic always went out on channel 0 (unreleased, 2026-10-18, NOT verified on hardware)
+## Node-targeted traffic always went out on channel 0 (0.2.34, 2026-10-18, VERIFIED on the phone)
 
 Reported: a node seen only on a private channel messaged the user, the user replied, then
 shared location, exchanged user info and exchanged position with it. Ninety minutes later it
@@ -37,15 +37,30 @@ is why the messages are the fallback. Every call site above now passes null and 
 resolve; channel-thread senders still pass their index explicitly.
 
 Device evidence for the diagnosis: `DM to !0e31d0cf naked with error 39` (PKI_UNKNOWN_PUBKEY)
-at 08:03, one repair attempt, nothing after. 0.2.33 from Play is on the phone, so the store
-could not be read directly (`run-as` needs a debuggable build, and reinstalling would wipe
-the very data the report is about).
+at 08:03, one repair attempt, nothing after. 0.2.33 from Play was on the phone at the time,
+so the store could not be read directly (`run-as` needs a debuggable build, and reinstalling
+would have wiped the very data the report was about), which is why this was diagnosed from
+the code and the log rather than the database.
+
+Confirmed on the phone on 0.2.34: node detail resolves the node, which is the path that had
+been failing for ninety minutes. The reporter's case was `!0e31d0cf` on private channel 1,
+and the screenshot of that thread is what established the conversation was a channel thread
+and not DMs: the typed replies had been routed correctly all along, since channel threads
+pass their index. Only the node-detail actions were going to channel 0.
+
+A second, smaller hole was found while confirming this and closed in the same release:
+`NodeEntity.channel` had only ever been written by a NodeInfo, so a node that had never
+introduced itself read as channel 0 and `channelFor` had to fall through to message history,
+which does not exist before the first conversation. `updateFromAnyPacket` now keeps
+`packet.channel`, treating 0 as no information rather than channel 0, because a PKI direct
+message decodes on the PKC channel and reports 0 and must not erase a known private channel.
+Resolution order is now node row channel, then last message channel, then 0.
 
 Still open, raised and not decided: the store mirrors the radio's cap by design, so on a
 large mesh the app can never hold more nodes than the radio does. Keeping app-side history
 beyond the radio's NodeDB would be a deliberate change to that rule.
 
-## Android Auto: Messages and Nodes never noticed the link changing (unreleased, 2026-10-18, NOT verified on a head unit)
+## Android Auto: Messages and Nodes never noticed the link changing (0.2.34, 2026-10-18, NOT yet verified on a head unit)
 
 Reported: the Radio screen tracks connect/disconnect correctly, the status at the top of
 Messages goes stale, and Nodes probably too.
@@ -67,7 +82,7 @@ and never both, Messages' empty state became a section and Nodes says "No nodes 
 row, because neither list can reach the host's no-items message once the status row is
 always present.
 
-## The LAN sweep stole the TCP slot from the radio being connected (unreleased, 2026-10-18, diagnosed from a tester's log)
+## The LAN sweep stole the TCP slot from the radio being connected (0.2.34, 2026-10-18, diagnosed from a tester's log, fix NOT yet verified)
 
 Reported as a delay joining a TCP radio after updating. From the tester's log: want_config at
 07:54:51.5, silence, `Link lost: Stream ended` at 07:55:00.9, and a sweep hit on the same
@@ -107,7 +122,7 @@ The snapshotter must be driven from the main thread; only the waiting happens of
 Reported as: with Maps already open on a selected place or a route, the link failed to move
 it, and closing Maps first made the same link work.
 
-Measured on the phone. The URL is **not** at fault — firing the existing
+Measured on the phone. The URL is **not** at fault â€” firing the existing
 `maps.google.com/?q=` link with `am start`, which carries `FLAG_ACTIVITY_NEW_TASK`, replaced
 a route context correctly. `LocalUriHandler.openUri` passes no task flags, so Maps simply
 resumes its existing task showing whatever it was showing.
@@ -141,7 +156,7 @@ again before anyone adds one.
 
 `MainActivity`'s root handler is `enabled = selected != TAB_NODES`, so back from the Nodes
 tab falls through to the system and can animate to home. Sub-screen handlers still intercept,
-which means **no in-app predictive animation** — that needs `PredictiveBackHandler` per
+which means **no in-app predictive animation** â€” that needs `PredictiveBackHandler` per
 screen and is a separate, larger piece of work, not done here.
 
 Verified on the phone: config sub-screen back returns to the Settings list with its scroll
@@ -153,7 +168,7 @@ warnings afterwards, nothing from the app's own tags, empty crash buffer.
 Type a caption, press the camera button, pick a picture: the caption came back replaced by
 the bare link.
 
-`sharePicture` appended to `text`, which is `val text = draft.text` — a plain value captured
+`sharePicture` appended to `text`, which is `val text = draft.text` â€” a plain value captured
 from whichever composition built that lambda. The upload spans a trip out to the photo picker
 and back plus seconds of network, so by the time the append ran it was writing
 `capturedText + link` over a draft that had moved on. Classic stale capture in an async
@@ -170,7 +185,7 @@ Verified on the phone: typed "hello test" (Bytes: 10), camera > Gallery > pick, 
 
 Verified on a debug build installed over the Play one, against private channel 1:
 
-- Gallery pick uploaded and returned `https://meshpic.org/fNp`, 23 bytes — the two-step CSRF
+- Gallery pick uploaded and returned `https://meshpic.org/fNp`, 23 bytes â€” the two-step CSRF
   handshake works from the app, not just from curl.
 - Picture rendered inline in the bubble with no URL, on both the send side and the **receive**
   side (the radio echoed the broadcast back and it rendered under the sender's name).
@@ -188,13 +203,13 @@ A message whose text is a meshpic link now draws the picture instead of the URL.
 the link, long press offers "Save to photos".
 
 `https://meshpic.org/image/<short_id>` serves the bytes with **no cookie, token, header or
-User-Agent** — verified against the live service, `200 image/jpeg` from a bare curl. That is
+User-Agent** â€” verified against the live service, `200 image/jpeg` from a bare curl. That is
 the view page's own `og:image` target, so the image URL is derivable from the short link
 without fetching the page.
 
 **The pictures are stored, not cached.** meshpic deletes an image after about a day, so
 relying on the link means a conversation quietly rots: yesterday's photographs become dead
-URLs. `MeshPicCache` keeps a permanent copy in `filesDir/meshpic/<short_id>.img` — not
+URLs. `MeshPicCache` keeps a permanent copy in `filesDir/meshpic/<short_id>.img` â€” not
 `cacheDir`, which Android may evict, and not Coil's bounded LRU either. Downloads are written
 to `.part` and renamed, so an interrupted one is never mistaken for a stored picture; they
 are deduplicated per short id so several bubbles share one fetch; and the store is pruned
@@ -214,7 +229,7 @@ requested below that. The stored bytes carry no extension, so the type is sniffe
 `inJustDecodeBounds` rather than assumed to be JPEG.
 
 `MeshPicLinks` lives in `net`, not `ui`: it is about the service. Its `strip` tidies the
-wreckage a removed URL leaves in a sentence — "see <link>." became "see ." and "(<link>)"
+wreckage a removed URL leaves in a sentence â€” "see <link>." became "see ." and "(<link>)"
 became "( )". Checked against thirteen cases including `http://`, duplicates, two links in
 one message, trailing punctuation, other hosts, and the reserved paths (`/image/<id>` must
 not read as a short id of "image").
@@ -229,7 +244,7 @@ context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(i
     ?: return null
 ```
 
-`decodeStream` returns null **by design** when `inJustDecodeBounds` is set — it fills
+`decodeStream` returns null **by design** when `inJustDecodeBounds` is set â€” it fills
 `outWidth`/`outHeight` and decodes nothing. The elvis was meant to catch a null stream but
 was hanging off the decode result, so the function bailed on every image and the path could
 never have worked. Null-check the stream; let the dimensions report success.
@@ -270,7 +285,7 @@ A bare request carrying only the cookie and token was also refused; the combinat
 worked included a browser User-Agent, `Origin`, `Referer` and the `Sec-Fetch-*` trio. The
 User-Agent still names this app so the operator can identify the client.
 
-The service rate-limits, and **its throttle responds 403, not 429** — repeated uploads from
+The service rate-limits, and **its throttle responds 403, not 429** â€” repeated uploads from
 one address started failing with the identical headers that had just succeeded. That is why
 403 is worded as "try again in a few minutes" rather than as a permission error.
 
@@ -295,11 +310,11 @@ val contactRows = contacts.take((limit - channelRows.size).coerceAtLeast(0))
 
 `limit` is the host's `CONTENT_LIMIT_TYPE_LIST`, commonly **6**. The tester's radio has six
 channels, so channels took the whole budget and contacts got `take(0)`. The section is only
-added to the template when it has rows, so Direct Messages was **absent**, not empty — no
+added to the template when it has rows, so Direct Messages was **absent**, not empty â€” no
 caption, nothing to notice. This happens whenever `channels.size >= limit`.
 
 Now split: `half = limit / 2`, each side guaranteed its half and free to grow into whatever
-the other does not use. Verified across the edge cases — 6+6 gives 3/3, 6+0 gives 6/0, 2+10
+the other does not use. Verified across the edge cases â€” 6+6 gives 3/3, 6+0 gives 6/0, 2+10
 gives 2/4, 8+1 gives 5/1, and no case exceeds the limit. Contacts are ordered
 lastMessage-first, so the half that survives is the half worth showing.
 
@@ -322,12 +337,12 @@ So the first template was built before either had emitted, and the screen assert
 
 Two fixes, because there are two kinds of offender:
 
-1. **Un-parameterised queries become hot flows in `AppContainer`** — `activeChannels` and
+1. **Un-parameterised queries become hot flows in `AppContainer`** â€” `activeChannels` and
    `dmContacts` join `nodesWithUsers` and `mapNodes`, `Eagerly` for the same reason. This is
    the preferred fix and it fully solves the Messages list.
 2. **Parameterised queries cannot be**, so they must stop lying instead. `CarThreadScreen`'s
    messages are per-conversation. `observe()` now counts cold flows that have not yet
-   emitted, and `isLoading` lets a template print "Loading messages…" rather than
+   emitted, and `isLoading` lets a template print "Loading messagesâ€¦" rather than
    "No messages yet". An empty list and an unknown list look identical in a template, and
    telling the driver the wrong one is worse than saying nothing yet.
 
@@ -357,7 +372,7 @@ the first place.
 
 Status 6 is a race, not a capability: the ESP32 answers that way when the peripheral won the
 race to start its own MTU exchange. By the time we ask again the exchange has settled, so the
-fix that matches the cause is to ask again — `MTU_ATTEMPTS = 3`, `MTU_RETRY_GAP_MS = 400`.
+fix that matches the cause is to ask again â€” `MTU_ATTEMPTS = 3`, `MTU_RETRY_GAP_MS = 400`.
 `mtuRefused` is set in the callback so `connect()` can tell a refusal from a real answer
 rather than trusting the reported number. If all three are refused it still carries on, which
 is the 0.2.21 behaviour and still correct.
@@ -367,14 +382,14 @@ is the 0.2.21 behaviour and still correct.
 The same log confirms four earlier fixes, three of them branches that had never been
 exercised until now:
 
-- `Attempt 1/3 timed out: Timed out waiting for 95000 ms` — the 0.2.18
+- `Attempt 1/3 timed out: Timed out waiting for 95000 ms` â€” the 0.2.18
   `TimeoutCancellationException` catch, firing for the first time. Attempt 1 hung 95 s on the
   CCCD write; on 0.2.17 that would have killed the loop outright. Instead it went on to
   attempts 2 and 3 and reached `Connected after 3 attempt(s)`. **That fix is the only reason
   that radio connected at all.**
-- `Radio stopped responding; treating the link as lost`, twice — the 0.2.19 dead-link
+- `Radio stopped responding; treating the link as lost`, twice â€” the 0.2.19 dead-link
   detector, via the drain's read failures.
-- `Watching for 🐶_9aac to come back into range` — the 0.2.22 presence watch, after the
+- `Watching for ðŸ¶_9aac to come back into range` â€” the 0.2.22 presence watch, after the
   reconnect loop exhausted all ten attempts.
 - `live clients` max 1, min 0 across ten open/close cycles on 0.2.25, against min -3 on
   0.2.24. The double-close fix below works.
@@ -393,8 +408,8 @@ culprits in one pair of lines:
 ```
 
 `RadioManager.disconnect()` has no `withContext`, so it runs on the caller's dispatcher,
-which is Main. It calls `beginRequest()` → `connection.disconnect()`, and that fires
-`failAllPending("Disconnected by app")`, which makes the in-flight `establish` throw — and
+which is Main. It calls `beginRequest()` â†’ `connection.disconnect()`, and that fires
+`failAllPending("Disconnected by app")`, which makes the in-flight `establish` throw â€” and
 establish's catch calls `conn.disconnect()` again from the attempt loop. Both passed the
 `gatt?.let` null check, because `gatt` was only cleared *after* the disconnect wait, so both
 reached `close()` on the same handle. A user-initiated disconnect during an active connect
@@ -428,7 +443,7 @@ Fixed with `-T 1`, which starts at the end of the buffer. Nothing is lost: the e
 Confirmed by the 0.2.24 log, and it confirms the directed-advertising theory outright:
 
 ```
-11:59:02.350 🐶_9aac not advertising (attempt 1/3)
+11:59:02.350 ðŸ¶_9aac not advertising (attempt 1/3)
 11:59:02.350 Connecting anyway; a bonded radio can be invisible to a scan
 11:59:02.369 connectGatt B0:A6:04:C5:9A:AD (live clients: 1)
 11:59:02.423 MTU 512
@@ -441,7 +456,7 @@ also shows the 0.2.21 MTU fix working: `MTU request refused (status 6); continui
 
 
 Tester's Heltec v4, photographed sitting beside the phone: powered up, `Up 3m`, 46 nodes
-online, 99% battery, on the mesh. The app said `🐶_9aac is not in range` and never attempted
+online, 99% battery, on the mesh. The app said `ðŸ¶_9aac is not in range` and never attempted
 a GATT connect. Their RAK nRF connects from the same phone without trouble.
 
 The initial, user-initiated connect ran with `absentIsTerminal = true` and this comment:
@@ -458,7 +473,7 @@ A bond certainly exists, because an earlier log shows this radio reaching MTU ne
 
 Fix: `runAttempts` gains `attemptWhenAbsent`, default false. The user-initiated connect sets
 `absentIsTerminal = false, attemptWhenAbsent = true`, so the scan is a fast path rather than
-a gate and a miss still gets its GATT attempt. The background loops keep the old behaviour —
+a gate and a miss still gets its GATT attempt. The background loops keep the old behaviour â€”
 the scan exists there to avoid burning 5 s timeouts behind the user's back.
 
 Cost is an explicit tap taking roughly 30 s to fail instead of 6 s. That is the right trade
@@ -467,7 +482,7 @@ for an action the user asked for, and the premise it replaces was demonstrably w
 The directed-advertising explanation is the best fit for the evidence but is **not proven**.
 The fix stands either way: whatever the reason the scan misses it, refusing to try a
 connection the user explicitly requested, on the strength of one 6 s scan, is wrong. If it
-still fails, have the tester unpair the radio in Android's Bluetooth settings first — that
+still fails, have the tester unpair the radio in Android's Bluetooth settings first â€” that
 clears the bond and is the cheapest test of the theory.
 
 ## "Disconnect" caption leaked past the Connect card (0.2.22, 2026-10-16, NOT yet verified)
@@ -479,7 +494,7 @@ Connect card's right edge, level with the status line, present at rest with noth
 The card is inset `end = 16.dp`; the action `Column` was `align(CenterEnd)` with
 `width(110.dp)` and **no end padding**, so it ran to the screen edge and its last 16dp were
 never covered by anything. The 64dp icon is centred and stops short of that strip, but the
-centred caption reaches it once it is wider than about 78dp — which is what a larger font
+centred caption reaches it once it is wider than about 78dp â€” which is what a larger font
 scale does. Hence a permanent "ct" on the tester's S20 FE and nothing on the Note 20 Ultra
 running the same build.
 
@@ -517,7 +532,7 @@ watch that may run for hours. `PresenceProbe` is now a two-method interface rath
 
 The one-attempt-loop invariant still holds: the watch takes `attemptLock` like every other
 caller and abandons everything if a newer generation has superseded it. `beginRequest` and
-`scheduleReconnect` both cancel it. It is a **loop, not recursion** — re-entering
+`scheduleReconnect` both cancel it. It is a **loop, not recursion** â€” re-entering
 `watchForReturn` from inside its own job would cancel the job it is running on, since
 `presenceWatchJob` still points at it.
 
@@ -550,8 +565,8 @@ Seen in the radio power-cycle log on 0.2.20:
 11:07:11.462  No STATE_DISCONNECTED within 2000ms; closing anyway
 ```
 
-`onConnectionStateChange` had reported the drop at :09.459 — that is *why* the teardown was
-running at all — and then `disconnect()` armed a fresh `pendingDisconnect` and waited the
+`onConnectionStateChange` had reported the drop at :09.459 â€” that is *why* the teardown was
+running at all â€” and then `disconnect()` armed a fresh `pendingDisconnect` and waited the
 full `DISCONNECT_WAIT_MS` for a report that had been and gone. Two seconds added to every
 reconnect after a clean drop, which is the common case.
 
@@ -561,7 +576,7 @@ so a report that lands *during* the call still releases the wait normally and th
 race between the check and the await.
 
 This also removes the `ABORT_WAIT_MS` 400 ms wait after a failed connect whenever the stack
-did report the failure, which it does for status 133 — visible seven times in the tester's
+did report the failure, which it does for status 133 â€” visible seven times in the tester's
 log. The waits only run now when the stack really has said nothing.
 
 ## A refused MTU negotiation killed the connection (0.2.21, 2026-10-15, diagnosed from a tester's log)
@@ -581,7 +596,7 @@ pass:
 | successful connections | 0 |
 
 `onMtuChanged` completed `pendingMtu` **exceptionally** on any non-success status, and that
-exception propagated out of `establish` and aborted the whole attempt — on a link that was
+exception propagated out of `establish` and aborted the whole attempt â€” on a link that was
 already up and perfectly usable. Status 6 is `GATT_REQUEST_NOT_SUPPORTED`: an ESP32 answers
 the central's MTU request that way when the peripheral won the race to start its own MTU
 exchange. It is a race, hence "sometimes". nRF52 radios never do it, hence one radio working
@@ -664,8 +679,8 @@ callers reach it:
 
 - The RSSI poll, which is the only thing that runs on an idle link. Any thrown exception
   (`DeadObjectException`) is immediate death; `RSSI_REJECT_LIMIT` consecutive `false` returns
-  (~15 s) is the slower signal. A single `false` is ordinary — the stack rejects an RSSI read
-  while another GATT operation is in flight — so one is not enough.
+  (~15 s) is the slower signal. A single `false` is ordinary â€” the stack rejects an RSSI read
+  while another GATT operation is in flight â€” so one is not enough.
 - The drain, where a `TimeoutCancellationException` from `readOnce`'s 10 s window is a dead
   link, not a slow one. This is the faster detector of the two.
 
@@ -711,7 +726,7 @@ just set, never reached `Failed`, so the Connect card never offered Reconnect or
 nothing was left alive to schedule another attempt. Every timeout inside `establish` did this:
 the 20 s connect wait, MTU, service discovery, bonding, and both `awaitConfigComplete` windows.
 "Retrying (attempt 1)" forever is literally what the code did the first time an attempt timed
-out, which is also why a Bluetooth toggle never helped and only a reboot did — the process had
+out, which is also why a Bluetooth toggle never helped and only a reboot did â€” the process had
 to die.
 
 Fixes:
@@ -723,7 +738,7 @@ Fixes:
    way while its generation is still current. The attempt loop is now structurally incapable of
    leaving the card stuck on a progress state.
 3. `BleConnection.connect` throws if `connectGatt` returns null, which is what it does while the
-   adapter is off or restarting — exactly the state after a stack crash. Previously that burned
+   adapter is off or restarting â€” exactly the state after a stack crash. Previously that burned
    the full 20 s window waiting on a callback for a client that was never registered.
 4. The first `startDrainPendingPackets()` in `connect()` was awaited unbounded; it is the only
    remaining path with no ceiling, since the loop runs until the radio returns a zero-length
@@ -913,10 +928,10 @@ change.
 ## External Notification module config (2026-10-09 22:30, verified on the phone)
 Port of `ExternalNotificationConfig.swift`: Settings gains a "Module Configuration" group
 (`ModuleSection` enum in `ConfigScreens.kt`, parallel to the LocalConfig `ConfigSection`) with
-one entry so far, External Notification. The form has the same three sections as upstream —
+one entry so far, External Notification. The form has the same three sections as upstream â€”
 Options (enabled, alert on bell/message, PWM/I2S buzzer mode), Primary GPIO (active high/low,
 output pin, output duration, nag timeout), Optional GPIO (the alerts and pins split out to the
-buzzer and vibra motor) — reusing the existing `ConfigSwitchRow`/`ConfigPickerRow`/
+buzzer and vibra motor) â€” reusing the existing `ConfigSwitchRow`/`ConfigPickerRow`/
 `GpioPickerRow` row kit. `RadioManager.setModuleConfig` is a new standalone
 `set_module_config` admin write with no edit transaction, matching the Swift
 `saveExternalNotificationModuleConfig` family: none of the per-module saves wrap begin/commit,
@@ -924,7 +939,7 @@ unlike the whole-section `setConfig` the LocalConfig forms use. `SettingsViewMod
 through a new `moduleConfigFlow` (same shape as `configFlow`, keyed `module.external_notification`)
 and writes it with `writeExternalNotificationConfig`, sharing the forms' `writeResult` line.
 New option lists in `ConfigEnums.kt`: `Intervals.nagTimeout` (seconds) and `OUTPUT_MS_INTERVALS`
-(milliseconds, `OutputIntervals.allCases` — note its 2/3/4-second steps don't fit the existing
+(milliseconds, `OutputIntervals.allCases` â€” note its 2/3/4-second steps don't fit the existing
 `intervalLabel` scale, hence the separate `outputMsLabel`). Verified on the phone against Ren
 Hoek (a Heltec V4 TFT, firmware 2.8.1): the form loaded the radio's real config (Enabled, Use
 PWM Buzzer, and the message-buzzer alert all already on, Buzzer GPIO 6), matching Device
@@ -1000,13 +1015,13 @@ Three upstream catch-ups from the refreshed clone (`8425daa6`):
   backup used. `adoptLegacyBackups(deviceId, nodeNum, address)` runs from `myInfo` on every
   connect: node-number entries matching the node number or radio address move onto the
   device key (newest wins, duplicates deleted). Verified: SOBE's folder `255142777` became
-  `e7a5e0e6…`, logcat "Backup for node 255142777 now keyed by device e7a5…"; Spiney Norman
+  `e7a5e0e6â€¦`, logcat "Backup for node 255142777 now keyed by device e7a5â€¦"; Spiney Norman
   and Spanky Ham stay node-keyed until they next connect. Rows show name, `!hex` node num,
   device id with a badge, date. Export/import carry `deviceId`; import accepts alphanumeric
   directory names. `deleteBackup(key)`; `restoreFromBackup(nodeNum)` resolves through
   `entryFor(nodeNum)`.
 - **LoRa no-reboot** (upstream b91d3f06): `RadioManager.appliesLoRaConfigWithoutReboot`
-  = live `deviceMetadata.firmwareVersion` ≥ 2.8.0 (unknown → false).
+  = live `deviceMetadata.firmwareVersion` â‰¥ 2.8.0 (unknown â†’ false).
   `SettingsViewModel.writeLoraConfig` calls `refreshAfterLoRaChange()` after a successful
   save on such firmware: NONCE_ONLY_CONFIG now, NONCE_ONLY_DB 2 s later. `ConfigForm`
   gained `saveNote`; the LoRa form shows "Your device may reboot after saving." on 2.8
@@ -1653,7 +1668,7 @@ uninstalled, the 02:08 backup set pushed back and restored).
 - `RadioManager.sendTextMessage` marks our own DM row encrypted when we hold the
   recipient's key. Still unported: the outbound `packet.pkiEncrypted` / `publicKey` that
   iOS sets, which changes what the firmware is asked to do.
-- Message Details shows "Encrypted" and "Signed · verified" above Channel, and `Bubble`
+- Message Details shows "Encrypted" and "Signed Â· verified" above Channel, and `Bubble`
   draws MessageText's corner badges (white glyph on a green disc, bottom trailing). The
   store-and-forward envelope and translate badges are not ported.
 - Verified encrypted end to end with a DM from Spiney Norman: stored pkiEncrypted=1,
@@ -1692,7 +1707,7 @@ uninstalled, the 02:08 backup set pushed back and restored).
   check passed. A sideload over the top keeps user data; only a DB older than version 4, an
   uninstall, or a rollback to an older APK wipes.
 - Not ported: per-message `pkiEncrypted` and `xeddsaSigned`, so iOS's "Encrypted" and
-  "Signed · verified" lines are still missing. Another migration when wanted.
+  "Signed Â· verified" lines are still missing. Another migration when wanted.
 
 ## Back from a thread skipped a level (2026-10-05, installed)
 
@@ -1965,13 +1980,13 @@ bundles GPL-3.0 protobufs, and until this round the repo had no license at all.
   short description and assets, plus the release checklist: tag `v<versionName>` per
   Play build so the in-app source URL matches the shipped binary).
 - `ui/AboutScreen.kt` (new, no Swift original): Settings > "About and licenses". Version,
-  disclaimer with ® on first mention, GPL text and third-party notices read from
+  disclaimer with Â® on first mention, GPL text and third-party notices read from
   `app/src/main/assets/LICENSE.txt` and `NOTICES.txt`, source and issues links, credits
   for Meshtastic-Apple, protobufs, MapLibre, protobuf, AndroidX, Kotlin, ZXing, map data.
-  `NOTICES.txt` carries the full BSD-2, BSD-3 and Apache-2.0 texts (Apache §4 and BSD
+  `NOTICES.txt` carries the full BSD-2, BSD-3 and Apache-2.0 texts (Apache Â§4 and BSD
   both require the text to ship with the binary).
 - Settings footer is one labelSmall line, "Not affiliated with or endorsed by Meshtastic
-  LLC."; the full ® notice and compatibility statement are in About (user wants every
+  LLC."; the full Â® notice and compatibility statement are in About (user wants every
   attribution as unobtrusive as the licenses allow).
 - Map: compact attribution chip at bottom-end, collapsed to an info icon by default
   (OSM attribution guidelines and Esri's SDKs accept this on small screens). Tap the
@@ -2019,14 +2034,14 @@ remove_by_nodenum, add_contact(new key), exchangeUserInfo. SOBE runs firmware 2.
 add_contact is available.
 Test state: three nodes were flagged mismatched (`!16cd737c` W1HQL-Shack, `!62f8eeac`
 FAU ind, `!a6961cf4` Thing 2). Drove the phone UI via uiautomator to W1HQL-Shack's detail;
-the Key mismatch row showed fingerprints `Hu2xvEMu…` -> `v+e2lgPx…` and the dialog opened;
+the Key mismatch row showed fingerprints `Hu2xvEMuâ€¦` -> `v+e2lgPxâ€¦` and the dialog opened;
 the confirm tap was sent and the phone dropped off adb the same second, so whether it
 landed is **unverified**. Check with the pulled DB (`run-as ... cat databases/mesh.db`):
 `select keyMatch from users where num=0x16cd737c`, and `logcat -s RadioManager` for
 "Accepted new key for !16cd737c". Note the auto-connect did not fire on this launch (BLE
 state read as off at that moment?); connecting from the Connect tab worked.
 
-## Public-key self-healing (2026-09-19 evening, built, NOT installed — phone unplugged again)
+## Public-key self-healing (2026-09-19 evening, built, NOT installed â€” phone unplugged again)
 Until now a re-flashed node was detected (first-wins key policy, red lock, "Key mismatch"
 row) but never repaired automatically; the manual fix was Settings > Broadcast node info.
 Two pieces added, neither yet exercised on hardware:
@@ -2065,7 +2080,7 @@ enough). The DHU runs the sideloaded build fine. `tools/dhu.ps1` launches it in 
 The app has **two personalities** in the Android Auto launcher because `automotive_app_desc.xml`
 declares both `template` and `notification`: (1) the templated `MeshCarAppService` (POI), and
 (2) a notification-messaging app keyed to `MainActivity`. The host de-duplicates the app grid
-to one "Mangled…" entry, which opens the templated app, but the dock's "recent app" slot is
+to one "Mangledâ€¦" entry, which opens the templated app, but the dock's "recent app" slot is
 filled from whichever personality was last active; a fresh message notification makes that the
 messaging one, and tapping it opens Android Auto's own message view (last message, Play aloud,
 Reply). That is exactly what the user saw in the car twice. On the DHU, launching that
@@ -2079,7 +2094,7 @@ home menu (Map 234 nodes, Messages, Nodes 96, Radio). Installed on the phone 19:
 seen in the car. Also: "Customize launcher" is not in this Android Auto build's settings at all
 (checked with and without a head unit connected; per-vehicle settings have only Forget/Rename).
 
-## Android Auto round 2 (2026-09-19 afternoon, built, NOT installed — phone unplugged)
+## Android Auto round 2 (2026-09-19 afternoon, built, NOT installed â€” phone unplugged)
 The user drove with the first build: it worked but "very limited": no visible way to pick a
 channel, open the node list, or connect/disconnect. The action-strip icons and the Radio
 row inside the map list were not discoverable on the real head unit (they were on the DHU).
@@ -2176,14 +2191,14 @@ Still unverified: the template step quota under churn (row titles kept stable), 
 reply end-to-end on a real head unit, and whether the foreground `RadioService` may be
 started from the host-bound session on a cold start (wrapped in `runCatching`).
 
-## Cosmetic parity round (2026-08-25, built, NOT installed — phone was not attached)
+## Cosmetic parity round (2026-08-25, built, NOT installed â€” phone was not attached)
 Display-only pass to match the iOS app's visible UI. No behavior or schema changes:
 - **Tab bar reordered to iOS ContentView order**: Messages, Nodes, Map, Settings,
   Connect (was Connect-first). `Router.TAB_*` constants renumbered; Connect icon is now
   `Link` (iOS `link` symbol). Unread badge still on Messages.
 - **Theme**: dropped Material You dynamic color; both modes now use the iOS AccentColor
   navy `#2855A8` (AccentColor.colorset sRGB 0.157/0.333/0.659).
-- **Messages**: channel fallback name "Primary" → "Primary Channel"; header casing
+- **Messages**: channel fallback name "Primary" â†’ "Primary Channel"; header casing
   "Direct Messages"; DM rows use the iOS list timestamp convention (HH:mm today,
   literal "Yesterday", else MM/dd/yy) instead of relative time; muted channels/contacts
   show the bell-slash trailing icon; thread title lost its "#" prefix; screen title
@@ -2200,13 +2215,13 @@ Display-only pass to match the iOS app's visible UI. No behavior or schema chang
   "Are you sure?", destructive-role buttons labeled "Shutdown Node?" / "Reboot node?" /
   "Delete Node", destructive tint on button + label. ActionButton grew a `destructive`
   param; ConfirmableAction carries confirmLabel+destructive.
-- **Settings**: config rows split into iOS groups — "Radio Configuration" (LoRa,
+- **Settings**: config rows split into iOS groups â€” "Radio Configuration" (LoRa,
   Security) and "Device Configuration" (Bluetooth, Device, Display, Network, Position,
   Power).
 - **Connect**: "Connect" page title added (iOS navigationTitle).
 - Build clean (one pre-existing-style ExperimentalCoroutinesApi warning fixed by
   annotating NodesViewModel). **Install pending: adb devices showed nothing on
-  2026-08-25** — install when the phone is attached:
+  2026-08-25** â€” install when the phone is attached:
   `adb -s R5CN70YWT5Z install -r app\build\outputs\apk\debug\app-debug.apk`.
 - Not done by design (would need schema/data work beyond cosmetics): per-row unread
   dots and message previews in the thread list (ChannelEntity has no lastMessage column),
@@ -2214,23 +2229,23 @@ Display-only pass to match the iOS app's visible UI. No behavior or schema chang
 
 ## Feature parity round 2 (2026-08-24, built and installed, pending click-through)
 Closed the remaining iOS node-action / parity gaps the user approved (NO skips):
-- **Schema v3→v4** (destructive wipe, per convention): new columns `users.unmessagable`,
+- **Schema v3â†’v4** (destructive wipe, per convention): new columns `users.unmessagable`,
   `nodes.node_status`, `nodes.has_xeddsa_signed`; `fallbackToDestructiveMigration` as always.
 - **PacketIngest NODE_STATUS_APP** dispatch (iOS `AccessoryManager+Nodes`); `NodeDao.setMute`,
   `UserDao` mute write.
-- **RadioManager: `sendPayload` + 9 cross-node admin methods** — shutdown, reboot,
+- **RadioManager: `sendPayload` + 9 cross-node admin methods** â€” shutdown, reboot,
   remove-node, exchange-user-info, send-to-position, local-stats request, device-metadata
   request, store-and-forward config + client-history request. All `sessionPasskey` is
   **intentionally NOT set** (iOS sets it; deliberate divergence, documented in KDoc).
   `PacketIngest.adminResponse()` dispatches the responses.
-- **NodeDetailScreen**: full Actions section per iOS NodeDetail — Alerts (mute bell toggle,
+- **NodeDetailScreen**: full Actions section per iOS NodeDetail â€” Alerts (mute bell toggle,
   now a local `users.mute` flag), Share Contact QR (gated on `unmessagable == false`),
   Favorite, Message, Exchange position/user, Local stats, Refresh metadata, Send to
   position, Client history, plus destructive Shutdown / Reboot / Remove with an
   AlertDialog confirm (ConfirmableAction is a `data class`, not sealed). Mute/Remove
-  hidden on the self row. "Signed node — Verified automatically" positive row (iOS
+  hidden on the self row. "Signed node â€” Verified automatically" positive row (iOS
   `hasXeddsaSigned`) above the key-mismatch warning.
-- **NodesScreen rows**: PKI glyph from iOS NodeListItem keyStatus — solid green lock when
+- **NodesScreen rows**: PKI glyph from iOS NodeListItem keyStatus â€” solid green lock when
   `pkiEncrypted && keyMatch`, outlined red lock on mismatch, bell-slash when muted;
   self row and rows without a glyph render the avatar as before.
 - **ShareContactURL**: `shareContactUrl()` builds `https://meshtastic.org/v/#` + base64url
@@ -2247,7 +2262,7 @@ Closed the remaining iOS node-action / parity gaps the user approved (NO skips):
 Closed the per-node field gaps vs the iOS app using only data already in the local DB
 (scope was explicitly limited to this; admin actions like delete/reboot/shutdown, the
 XEdDSA "signed node" badge, and full telemetry parity were all deliberately NOT done):
-- `NodeDetailScreen.kt`: new identity card rows — Node number (decimal + Copy),
+- `NodeDetailScreen.kt`: new identity card rows â€” Node number (decimal + Copy),
   User ID (`!hex`), Role (via new `roleLabel(Int)` mapping the config.proto Role enum,
   shown in the Identity row), first-heard timestamp in the Link row, Battery % and
   Uptime rows (new `latestDevice()` VM helper over `TelemetryDao.latestDeviceMetrics`,
@@ -2285,12 +2300,12 @@ Port of iOS `FavoriteNodeButton`/`IgnoreNodeButton` (client-mode favorite/ignore
 - **Radio config editing shipped for all 8 sections** (LoRa, Device, Position, Bluetooth,
   Display, Network, Power, Security) and the write path is now proven on hardware. See
   "Config sections" below.
-- Connected to **📣_9f4a (SOBE)**, which is the auto-connect target again. The saved-radio
-  list holds SOBE and **🐭_4fae (Peewee Herman)**, which is powered off (it was used to
+- Connected to **ðŸ“£_9f4a (SOBE)**, which is the auto-connect target again. The saved-radio
+  list holds SOBE and **ðŸ­_4fae (Peewee Herman)**, which is powered off (it was used to
   test the not-in-range path).
 - **POST_NOTIFICATIONS is denied** (`granted=false, USER_SET`), so message notifications
   are silently dropped. The launch-time permission dialog was dismissed with back, not
-  answered — the choice is the user's. Grant it from system settings if notifications are
+  answered â€” the choice is the user's. Grant it from system settings if notifications are
   wanted for testing.
 - The nodes/channels/my_info tables were wiped and rebuilt twice by the radio switches
   (the cross-radio guard); they are now populated from SOBE. Messages, positions,
@@ -2298,7 +2313,7 @@ Port of iOS `FavoriteNodeButton`/`IgnoreNodeButton` (client-mode favorite/ignore
 - 47+ unread messages were sitting in the badge from the day's test traffic; harmless.
 
 ## Test rig (memory file `mesh-test-radios.md` has the full version)
-- Phone radio: "SOBE GAT562 30s" (📣), BLE `📣_9f4a` = ED:A6:3B:FA:9F:4A. It normally sits
+- Phone radio: "SOBE GAT562 30s" (ðŸ“£), BLE `ðŸ“£_9f4a` = ED:A6:3B:FA:9F:4A. It normally sits
   on PC serial COM14, but **COM14 IS NOT TO BE TOUCHED** (user instruction): opening it
   kicks the phone's BLE session. Reach SOBE only through the app. (COM14 was not even
   enumerated on 2026-08-19 evening; ports present were COM3, COM5, COM18.)
@@ -2306,13 +2321,13 @@ Port of iOS `FavoriteNodeButton`/`IgnoreNodeButton` (client-mode favorite/ignore
   (**`!0f352b79`**), 2.7.x used the MAC-derived/legacy number (`!6bed6674`, earlier `!1eff739f`).
   Since 2026-09-20 the radio runs 2.8.1 again, so it is **`!0f352b79`**; the other numbers are
   stale entries in peers' node DBs carrying the same public key.
-- Test traffic sender: **Spiney Norman on COM3** (🦔_8e18 = 3C:DC:75:6F:8E:19).
+- Test traffic sender: **Spiney Norman on COM3** (ðŸ¦”_8e18 = 3C:DC:75:6F:8E:19).
   `set PYTHONIOENCODING=utf-8; meshtastic --port COM3 --sendtext ... --dest '!1eff739f' --ack`
   `meshtastic --port COM3 --nodes` is the quickest way to see whether a radio is alive.
-- Spanky Ham (🐷) at 192.168.20.129 (TCP): unreliable LoRa path, don't rely on it.
-- **Never use 6abc (🍆_6abc, 10:20:BA:6A:6A:BD) or swaffelen for tests** (user instruction).
-- Other bonded radios that are NOT SOBE: "Peewee Herman" 🐭_4fae (CD:12:B4:98:4F:AE,
-  `!b4984fae`, WISMESH_TAG, low battery, drops off BLE) and "Pickle Rick" 🥒_f1e4
+- Spanky Ham (ðŸ·) at 192.168.20.129 (TCP): unreliable LoRa path, don't rely on it.
+- **Never use 6abc (ðŸ†_6abc, 10:20:BA:6A:6A:BD) or swaffelen for tests** (user instruction).
+- Other bonded radios that are NOT SOBE: "Peewee Herman" ðŸ­_4fae (CD:12:B4:98:4F:AE,
+  `!b4984fae`, WISMESH_TAG, low battery, drops off BLE) and "Pickle Rick" ðŸ¥’_f1e4
   (E1:B4:D6:DE:F1:E4). The app had been remembering Peewee Herman, which is what looked
   like a connection bug for most of a session.
 - Channels on all nodes: 0 = unnamed Primary, 1 = "LongPrivate" (swaffelen has ONLY
@@ -2324,14 +2339,14 @@ Port of iOS `FavoriteNodeButton`/`IgnoreNodeButton` (client-mode favorite/ignore
 Symptom (reported twice): on launch the app cycled "connecting / connection lost /
 reconnecting" or stalled, and never said which radio it was reaching for.
 
-Root cause, straight out of logcat: **two attempt loops driving `establish()` at once** —
+Root cause, straight out of logcat: **two attempt loops driving `establish()` at once** â€”
 `connect()`'s own 3-attempt retry plus the reconnect fired by any unrequested BLE
 disconnect, which a failed connect also is. Both registered a GATT client for the same
 radio (`clientIf 7` *and* `8` connecting simultaneously, interleaved "Connect attempt N/3"
 and "Reconnect attempt N" lines) and each cancelled the other. `MainActivity` re-armed it
 from onCreate, the permission result and every onResume, with a state guard sitting behind
 a suspending DataStore read. A drop during the node-DB step also waited out the full 120 s
-nonce timeout — that was the "hang".
+nonce timeout â€” that was the "hang".
 
 Invariants now in `RadioManager` (do not relax any of these):
 - `attemptLock` + `requestGeneration`: `runAttempts` is the only caller of `establish`,
@@ -2361,7 +2376,7 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
 `lastConnectedMs` for ordering) that only Forget deletes from.
 `AppContainer.rememberRadio()` writes both and is the only writer.
 
-## Config sections (Settings → Radio configuration)
+## Config sections (Settings â†’ Radio configuration)
 `ui/ConfigScreens.kt` holds one form per section plus the shared rows/dialogs;
 `SettingsScreen` is now a list that opens a section as a sub-screen (local state +
 `BackHandler`, since navigation is still a tab switch, not a nav graph).
@@ -2381,11 +2396,11 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
 - Scan-before-connect, radio present (2026-08-19 20:47): auto-connect started a filtered
   scan, saw SOBE 739 ms later, then issued the single GATT connect and negotiated MTU 247.
 - Scan-before-connect, radio absent (2026-08-19 21:04, Peewee Herman powered off by the
-  user for the test): scan 21:04:10.633 → 21:04:16.644 (the 6 s window), then
-  "🐭_4fae not advertising (attempt 1/3)" and a terminal "🐭_4fae is not in range" with a
+  user for the test): scan 21:04:10.633 â†’ 21:04:16.644 (the 6 s window), then
+  "ðŸ­_4fae not advertising (attempt 1/3)" and a terminal "ðŸ­_4fae is not in range" with a
   Retry button. **Zero** GATT connects and one scan start for the whole launch; the old
   behaviour was three ~5 s blind connects returning status 133.
-- Saved-radio list with two entries (🐭_4fae and 📣_9f4a), each with its own Connect and
+- Saved-radio list with two entries (ðŸ­_4fae and ðŸ“£_9f4a), each with its own Connect and
   Forget, "in range <rssi>" shown for whichever the running scan sees, and switching
   between radios from the list.
 - Retry loop still earns its keep: reconnecting to SOBE right after switching away from it
@@ -2395,13 +2410,13 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
   whose link was just torn down.
 - Connect flow (2026-08-19 19:24-19:46): one bounded burst of 3 sequential attempts against
   an unreachable radio, one GATT client at a time, ending in a terminal "Could not reach
-  🐭_4fae"; resume cycles adding zero attempts; scan → Connect reaching `Subscribed`
-  ("Connected to 📣_9f4a", node DB loaded, MTU 247); force-stop → relaunch auto-connecting
-  on the first attempt; saved list rendering "📣_9f4a • ED:A6:3B:FA:9F:4A • last used just
-  now • Connected".
+  ðŸ­_4fae"; resume cycles adding zero attempts; scan â†’ Connect reaching `Subscribed`
+  ("Connected to ðŸ“£_9f4a", node DB loaded, MTU 247); force-stop â†’ relaunch auto-connecting
+  on the first attempt; saved list rendering "ðŸ“£_9f4a â€¢ ED:A6:3B:FA:9F:4A â€¢ last used just
+  now â€¢ Connected".
 - BLE connect pipeline (wantConfig/wantDatabase nonces 69420/69421), TCP framing,
   auto-reconnect (BT-off detection via adapter receiver), heartbeat watchdog for TCP.
-- Messaging: channels + DMs, acks (✓/✓✓), 200-byte composer, tapbacks (👍 verified over
+- Messaging: channels + DMs, acks (âœ“/âœ“âœ“), 200-byte composer, tapbacks (ðŸ‘ verified over
   LoRa), replies, DM-from-node-list, notification deep links, per-message notifications,
   unread badge on the Messages tab.
 - Nodes list + node detail (identity/link/position, 48h battery & channel-util charts,
@@ -2410,10 +2425,10 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
 - Map: satellite default (Esri) + streets toggle (openfreemap liberty), node markers with
   labels, camera auto-fit, waypoints (orange), long-press waypoint creation ("MBD test"
   shared on LongPrivate). Labels: Noto Sans glyphs only, emoji stripped (SDF servers have
-  no emoji). A test waypoint "MBD test" (never expires) exists on LongPrivate — delete by
+  no emoji). A test waypoint "MBD test" (never expires) exists on LongPrivate â€” delete by
   sending an empty-name waypoint with the same id (in `waypoints` table) if unwanted.
 - **Config write path proven end to end (2026-08-19 21:36-21:38)**: Display section,
-  `heading_bold` false → true → Save. Radio stored it and rebooted (link lost, GATT 133 on
+  `heading_bold` false â†’ true â†’ Save. Radio stored it and rebooted (link lost, GATT 133 on
   attempts 1-2, "Connected after 3 attempt(s)"), and the fresh config dump came back with
   the new value (Save greyed, Revert gone). Then set back to false the same way, so SOBE is
   as it was. All six new sections were also opened against the live radio and render its
@@ -2427,7 +2442,7 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
 - Retention pruning of positions/telemetry (30 days) runs on connect.
 
 ## Deliberately not done
-- MQTT client proxy: radio has MQTT disabled → untestable, and enabling bridges the
+- MQTT client proxy: radio has MQTT disabled â†’ untestable, and enabling bridges the
   user's mesh to the public broker. Decision documented in commit `0b8cdbe`.
 - Channel-set Apply is still implemented-but-never-fired (it REPLACES the radio's
   channels). Config `setConfig` writes are now proven (see above); the admin
@@ -2489,7 +2504,7 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
   bonded names, the Connect tab's scan for what is actually in range, and
   `meshtastic --port COM3 --nodes` for whether the node is alive on LoRa).
 - Diagnosing connection churn: filter logcat for `clientConnect(com.suteny0r` and
-  `clientIf` — two client interfaces at once is the tell for a double driver. A working
+  `clientIf` â€” two client interfaces at once is the tell for a double driver. A working
   scan-then-connect looks like `BluetoothLeScanner: Start Scan with callback` followed by
   one `clientConnect` under a second later.
 - **Proto `uint32` is a signed `Int` in the generated Java.** The Power section showed
@@ -2511,9 +2526,10 @@ deliberate Disconnect; `KNOWN_RADIOS` is the saved list (JSON, `org.json`, cappe
   `ProduceStateDoesNotAssignValue` errors in `MessagesScreen.kt:270` and
   `NodeDetailScreen.kt:241`. Unrelated to config editing, still unfixed.
 - gradle must run via PowerShell `& .\gradlew.bat` (cmd /c chaining fails in this harness);
-  multiline `python -c` also fails in Git Bash here — write scripts to the scratchpad.
+  multiline `python -c` also fails in Git Bash here â€” write scripts to the scratchpad.
 - Screenshots: `adb exec-out screencap -p > file.png` through a PowerShell redirect
   corrupts the PNG (BOM/encoding). Use `adb shell screencap -p /sdcard/x.png` then
   `adb pull`.
 - Git Bash rewrites `/data/...` paths in adb shell arguments; prefix the command with
   `MSYS_NO_PATHCONV=1` when reading app-private files via `run-as`.
+
