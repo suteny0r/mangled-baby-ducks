@@ -191,6 +191,26 @@ abstract class MeshCarScreen(carContext: CarContext) : Screen(carContext) {
     protected fun icon(resId: Int): CarIcon =
         CarIcon.Builder(IconCompat.createWithResource(carContext, resId)).build()
 
+    /**
+     * The link status as a row, the way the Map list has always carried it. Every list
+     * screen shows it, because a driver reading a stale node list has no other way to tell
+     * that the radio dropped: the rows themselves are Room contents and look exactly the
+     * same connected or not.
+     *
+     * The title stays "Radio" and the state goes in the secondary line. That is the rule
+     * the whole car UI follows: a row whose title changes counts as a template step against
+     * the host's quota, while the same titles with new text is a free refresh.
+     */
+    protected fun radioRow(state: RadioState, deviceName: String?): Row =
+        Row.Builder()
+            .setTitle("Radio")
+            .addText(state.describe(deviceName))
+            .setImage(icon(R.drawable.ic_car_radio))
+            // PlaceListMapTemplate rejects a non-browsable row without a distance span.
+            .setBrowsable(true)
+            .setOnClickListener { screenManager.push(CarRadioScreen(carContext)) }
+            .build()
+
     protected fun toast(text: String) {
         CarToast.makeText(carContext, text, CarToast.LENGTH_SHORT).show()
     }
@@ -364,16 +384,7 @@ class CarMapScreen(carContext: CarContext) : MeshCarScreen(carContext) {
         val here = carLocation(myNum, nodes)
         val list = ItemList.Builder().setNoItemsMessage("No nodes with a position yet")
 
-        list.addItem(
-            Row.Builder()
-                .setTitle("Radio")
-                .addText(state.describe(deviceName))
-                .setImage(icon(R.drawable.ic_car_radio))
-                // PlaceListMapTemplate rejects a non-browsable row without a distance span.
-                .setBrowsable(true)
-                .setOnClickListener { screenManager.push(CarRadioScreen(carContext)) }
-                .build()
-        )
+        list.addItem(radioRow(state, deviceName))
         nodes.filter { it.nodeNum != myNum }.take(limit - 1).forEach { node ->
             val text = SpannableStringBuilder("heard ${relativeTime(node.time)}")
             here?.let { (lat, lon) ->
@@ -548,12 +559,18 @@ class CarNodesScreen(carContext: CarContext) : MeshCarScreen(carContext) {
     private var myNum = 0L
     /** Set on the phone's node list; there is no car-side toggle for it. */
     private var pinFavorites = true
+    private var state: RadioState = RadioState.Idle
+    private var deviceName: String? = null
 
     init {
         observe(container.nodesWithUsers) { nodes = it }
         observe(container.mapNodes) { list -> positions = list.associateBy { it.nodeNum } }
         observe(container.radioManager.myNodeNum) { myNum = it }
         observe(container.pinFavorites) { pinFavorites = it }
+        // Without these the screen never hears that the link changed: node rows come from
+        // Room and read the same whether the radio is attached or gone.
+        observe(container.radioManager.state) { state = it }
+        observe(container.radioManager.deviceName) { deviceName = it }
     }
 
     override fun onGetTemplate(): Template {
@@ -562,11 +579,18 @@ class CarNodesScreen(carContext: CarContext) : MeshCarScreen(carContext) {
         trace("onGetTemplate: nodes=${nodes.size} positions=${positions.size} myNum=$myNum " +
             "contentLimit took ${SystemClock.elapsedRealtime() - limitStart}ms")
         val here = carLocation(myNum, positions.values.toList())
-        val list = ItemList.Builder().setNoItemsMessage("No nodes yet")
-        nodes.asSequence()
-            .filter { !it.node.ignored }
+        val list = ItemList.Builder()
+        // The status row costs one row of the host's budget, as it does on the Map list.
+        // It also means the list is never empty, so the host's no-items message can no
+        // longer appear and the empty case has to say so in a row of its own.
+        list.addItem(radioRow(state, deviceName))
+        val visible = nodes.filter { !it.node.ignored }
+        if (visible.isEmpty()) {
+            list.addItem(Row.Builder().setTitle("No nodes yet").build())
+        }
+        visible.asSequence()
             .sortedWith(nodeOrder(myNum, pinFavorites))
-            .take(limit)
+            .take(maxOf(limit - 1, 1))
             .forEach { entry ->
                 val num = entry.node.num
                 val detail = SpannableStringBuilder(
@@ -902,6 +926,8 @@ class CarMessagesScreen(carContext: CarContext) : MeshCarScreen(carContext) {
     private var contacts: List<UserEntity> = emptyList()
     private var positions: Map<Long, MapNode> = emptyMap()
     private var myNum = 0L
+    private var state: RadioState = RadioState.Idle
+    private var deviceName: String? = null
 
     init {
         // The hot copies in AppContainer, not the DAO flows. A cold flow gets no
@@ -912,6 +938,11 @@ class CarMessagesScreen(carContext: CarContext) : MeshCarScreen(carContext) {
         // For the distance badge on DM rows, as the node list carries.
         observe(container.mapNodes) { list -> positions = list.associateBy { it.nodeNum } }
         observe(container.radioManager.myNodeNum) { myNum = it }
+        // Without these the screen never hears that the link changed. Channels and
+        // contacts are Room contents and survive a disconnect, so the list sat there
+        // looking exactly as it had while connected, with nothing saying otherwise.
+        observe(container.radioManager.state) { state = it }
+        observe(container.radioManager.deviceName) { deviceName = it }
     }
 
     override fun onGetTemplate(): Template {
@@ -927,9 +958,11 @@ class CarMessagesScreen(carContext: CarContext) : MeshCarScreen(carContext) {
         // has rows. Each side is guaranteed its half and may grow into whatever the other
         // does not use. Contacts are ordered lastMessage-first, so the half that survives
         // is the half worth showing.
-        val half = limit / 2
-        val channelTake = minOf(channels.size, maxOf(limit - contacts.size, half))
-        val contactTake = minOf(contacts.size, limit - channelTake)
+        // One row of the budget goes to the status section, as on the Map and Nodes lists.
+        val budget = maxOf(limit - 1, 1)
+        val half = budget / 2
+        val channelTake = minOf(channels.size, maxOf(budget - contacts.size, half))
+        val contactTake = minOf(contacts.size, budget - channelTake)
 
         val channelRows = channels.take(channelTake).map { channel ->
             val name = channelName(channel, channel.index)
@@ -965,13 +998,27 @@ class CarMessagesScreen(carContext: CarContext) : MeshCarScreen(carContext) {
                 .build()
         }
 
+        // The status goes first and is always present. A ListTemplate is either one list
+        // or sections, never both, so the empty case became a section too rather than the
+        // host's no-items message.
+        template.addSectionedList(
+            SectionedItemList.create(
+                ItemList.Builder().addItem(radioRow(state, deviceName)).build(),
+                "Status",
+            )
+        )
         if (channelRows.isEmpty() && contactRows.isEmpty()) {
-            template.setSingleList(
-                ItemList.Builder()
-                    .setNoItemsMessage(
-                        if (isLoading) "Loading…" else "No channels yet; connect a radio"
-                    )
-                    .build()
+            template.addSectionedList(
+                SectionedItemList.create(
+                    ItemList.Builder()
+                        .addItem(
+                            Row.Builder()
+                                .setTitle(if (isLoading) "Loading…" else "No channels yet")
+                                .build()
+                        )
+                        .build(),
+                    "Conversations",
+                )
             )
             return template.build()
         }
