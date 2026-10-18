@@ -812,8 +812,23 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    fun setOwner(longName: String, shortName: String) {
-        viewModelScope.launch { container.radioManager.setOwner(longName, shortName) }
+    fun setOwner(longName: String, shortName: String, unmessagable: Boolean = false) {
+        viewModelScope.launch {
+            container.radioManager.setOwner(longName, shortName, unmessagable)
+        }
+    }
+
+    /** UserConfig.swift's licensed branch: HamParameters, not a flag on the owner record. */
+    fun setHamMode(
+        callSign: String,
+        longName: String,
+        shortName: String,
+        txPower: Int,
+        frequency: Float,
+    ) {
+        viewModelScope.launch {
+            container.radioManager.setHamMode(callSign, longName, shortName, txPower, frequency)
+        }
     }
 
     val shareLocation: StateFlow<Boolean> = container.prefs.data

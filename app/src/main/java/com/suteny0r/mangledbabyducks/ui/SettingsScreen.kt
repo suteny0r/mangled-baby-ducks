@@ -303,9 +303,15 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
         OwnerDialog(
             initialLong = myUser?.longName ?: "",
             initialShort = myUser?.shortName ?: "",
+            initialUnmessagable = myUser?.unmessagable == true,
+            initialLicensed = myUser?.isLicensed == true,
             onDismiss = { editingOwner = false },
-            onSave = { longName, shortName ->
-                vm.setOwner(longName, shortName)
+            onSave = { longName, shortName, unmessagable ->
+                vm.setOwner(longName, shortName, unmessagable)
+                editingOwner = false
+            },
+            onSaveLicensed = { callSign, longName, shortName, txPower, frequency ->
+                vm.setHamMode(callSign, longName, shortName, txPower, frequency)
                 editingOwner = false
             },
         )
@@ -495,20 +501,48 @@ fun qrBitmap(content: String, size: Int = 720): Bitmap {
     return Bitmap.createBitmap(pixels, size, size, Bitmap.Config.RGB_565)
 }
 
+/**
+ * Port of UserConfig.swift's User Details section: the two names plus the two flags that
+ * live on the owner record rather than in any Config section, which is why neither had a
+ * home in the radio configuration forms.
+ *
+ * Licensed Operator is not a flag on the same save. iOS branches at the confirm button:
+ * clear, it sends a `User` through `saveUser`; set, it sends `HamParameters` through
+ * `saveLicensedUser`. The second takes a call sign, a TX power and a frequency override,
+ * and the firmware then names the node after the call sign and turns encryption off, so
+ * the consequences are spelled out here rather than left to the toggle.
+ */
 @Composable
 private fun OwnerDialog(
     initialLong: String,
     initialShort: String,
+    initialUnmessagable: Boolean,
+    initialLicensed: Boolean,
     onDismiss: () -> Unit,
-    onSave: (String, String) -> Unit,
+    onSave: (String, String, Boolean) -> Unit,
+    onSaveLicensed: (String, String, String, Int, Float) -> Unit,
 ) {
     var longName by remember { mutableStateOf(initialLong) }
     var shortName by remember { mutableStateOf(initialShort) }
+    var unmessagable by remember { mutableStateOf(initialUnmessagable) }
+    var licensed by remember { mutableStateOf(initialLicensed) }
+    var callSign by remember { mutableStateOf("") }
+    var txPower by remember { mutableStateOf("30") }
+    var frequency by remember { mutableStateOf("0") }
+
+    val power = txPower.toIntOrNull()
+    val freq = frequency.toFloatOrNull()
+    val canSave = longName.isNotBlank() && shortName.isNotBlank() &&
+        (!licensed || (callSign.isNotBlank() && power != null && freq != null))
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Radio owner") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+            ) {
                 OutlinedTextField(
                     value = longName,
                     onValueChange = { if (it.length <= 39) longName = it },
@@ -521,16 +555,91 @@ private fun OwnerDialog(
                     label = { Text("Short name (max 4)") },
                     singleLine = true,
                 )
+                ToggleRow(
+                    title = "Unmessagable",
+                    detail = "Identifies unmonitored or infrastructure nodes, so other " +
+                        "clients do not offer to message a node that will never answer.",
+                    checked = unmessagable,
+                    onCheckedChange = { unmessagable = it },
+                )
+                ToggleRow(
+                    title = "Licensed operator",
+                    detail = "Names the node after your call sign, broadcasts node info " +
+                        "every 10 minutes, overrides frequency, duty cycle and TX power, " +
+                        "and disables encryption. Check your local regulations first.",
+                    checked = licensed,
+                    onCheckedChange = { licensed = it },
+                )
+                if (licensed) {
+                    OutlinedTextField(
+                        value = callSign,
+                        onValueChange = { if (it.length <= 8) callSign = it.uppercase() },
+                        label = { Text("Call sign") },
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = txPower,
+                        onValueChange = { txPower = it.filter { c -> c.isDigit() } },
+                        label = { Text("TX power (dBm)") },
+                        isError = power == null,
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = frequency,
+                        onValueChange = { frequency = it.filter { c -> c.isDigit() || c == '.' } },
+                        label = { Text("Frequency override (MHz, 0 for none)") },
+                        isError = freq == null,
+                        singleLine = true,
+                    )
+                    Text(
+                        "The radio saves and reboots.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         },
         confirmButton = {
             TextButton(
-                enabled = longName.isNotBlank() && shortName.isNotBlank(),
-                onClick = { onSave(longName.trim(), shortName.trim()) },
+                enabled = canSave,
+                onClick = {
+                    if (licensed) {
+                        onSaveLicensed(
+                            callSign.trim(),
+                            longName.trim(),
+                            shortName.trim(),
+                            power ?: 30,
+                            freq ?: 0f,
+                        )
+                    } else {
+                        onSave(longName.trim(), shortName.trim(), unmessagable)
+                    }
+                },
             ) { Text("Save") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
+}
+
+/** A switch with the explanatory caption the iOS toggles carry underneath them. */
+@Composable
+private fun ToggleRow(
+    title: String,
+    detail: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
 }

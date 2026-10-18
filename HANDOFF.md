@@ -9,6 +9,54 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## User Config was missing Unmessagable and Licensed Operator (unreleased, 2026-10-18, NOT verified)
+
+Both live on the **owner record**, not in any `Config` section, which is why neither had a
+home in the radio configuration forms and why the Settings > User dialog only ever offered
+the two names. Ported from `UserConfig.swift`'s User Details section.
+
+`User.is_unmessagable` tells other clients not to offer a DM to an unattended node. Firmware
+sets it when the role becomes an infrastructure one (ROUTER_LATE among them) and **does not
+clear it when the role changes back**, so without a control there is no way out of it from
+the app. Seen live on Spanky Ham: role returned to CLIENT_BASE, flag stuck true.
+`RadioManager.setOwner` now carries it, which also fixes a latent bug: set_owner replaces
+the owner record, so sending only the two names wrote the flag away rather than leaving it
+alone.
+
+Licensed Operator is deliberately a separate admin call, not a flag on that save. iOS
+branches at the confirm button: clear sends a `User` through `saveUser`, set sends
+`HamParameters` through `saveLicensedUser`. `RadioManager.setHamMode` is the second,
+carrying call sign, TX power and frequency override; the firmware then names the node after
+the call sign and **disables encryption**, so the dialog spells that out rather than leaving
+it to a toggle.
+
+Note the app writes to the *connected* radio. Clearing the flag on Spanky means connecting
+to Spanky (TCP 192.168.20.129) first.
+
+## Two live reports that the logs could not answer (unreleased, 2026-10-18)
+
+A channel broadcast reporting "Failed to deliver to mesh" left **nothing** in the log: only
+a PKI nak on a DM was ever logged, by `healPkiFailure`. `PacketIngest.routing` now names
+every send outcome with the firmware's error name, the channel and the relaying node. Those
+two fields are what explain a broadcast, because a broadcast is acked implicitly by hearing
+a neighbour rebroadcast it.
+
+"Node table is completely empty" was the **Signed filter chip** left on, cutting a 119-node
+store to the connected radio while the header read "Nodes (1)". The header now reads
+"Nodes (1 of 119)" whenever a filter hides any. The filters live in the ViewModel, not
+DataStore, so a stray tap survives until the process dies, which is long enough to be
+mistaken for data loss.
+
+### Hardware gotcha found the hard way
+
+**Spanky Ham (HELTEC_V4) must be reached at `--host 192.168.20.129`, never `--port COM6`.**
+It is an ESP32: opening its USB serial asserts DTR/RTS and drives the auto-reset circuit, so
+it reboots on *every* serial call, read-only `--info` included. Measured by `rebootCount`,
+which rose one per serial call (8, 13, 18) and then held at 19 across two consecutive TCP
+reads. This is not cosmetic: Spanky is the only prompt local relay, so each reset leaves the
+mesh with nothing to rebroadcast and every broadcast reports non-delivery until it returns.
+Several confusing minutes of "it got worse" were self-inflicted this way.
+
 ## Node-targeted traffic always went out on channel 0 (0.2.34, 2026-10-18, VERIFIED on the phone)
 
 Reported: a node seen only on a private channel messaged the user, the user replied, then

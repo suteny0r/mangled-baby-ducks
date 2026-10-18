@@ -1390,14 +1390,26 @@ class RadioManager(
     /**
      * Rename this radio's owner via AdminMessage.set_owner, with an optimistic
      * local user update (the radio re-broadcasts NodeInfo on its own schedule).
+     *
+     * [unmessagable] is `User.is_unmessagable` (UserConfig.swift's Unmessagable toggle),
+     * the flag that tells other clients not to offer a DM to an unattended node. It is
+     * carried here because set_owner replaces the owner record: sending only the two
+     * names, as this did, writes the flag away rather than leaving it alone. Firmware
+     * sets it when the role becomes an infrastructure one and does not clear it when the
+     * role changes back, so an explicit way to clear it is the only way out.
      */
-    suspend fun setOwner(longName: String, shortName: String): Boolean {
+    suspend fun setOwner(
+        longName: String,
+        shortName: String,
+        unmessagable: Boolean = false,
+    ): Boolean {
         val myNum = _myNodeNum.value
         if (myNum == 0L) return false
         val me = db.userDao().get(myNum)
         val owner = MeshProtos.User.newBuilder()
             .setLongName(longName.take(39))
             .setShortName(shortName.take(4))
+            .setIsUnmessagable(unmessagable)
             .build()
         val admin = AdminProtos.AdminMessage.newBuilder()
             .setSetOwner(owner)
@@ -1413,8 +1425,45 @@ class RadioManager(
             .build()
         val sent = runCatching { send { it.setPacket(packet) } }.isSuccess
         if (sent && me != null) {
-            db.userDao().upsert(me.copy(longName = longName.take(39), shortName = shortName.take(4)))
+            db.userDao().upsert(
+                me.copy(
+                    longName = longName.take(39),
+                    shortName = shortName.take(4),
+                    unmessagable = unmessagable,
+                )
+            )
         }
+        return sent
+    }
+
+    /**
+     * Turn on licensed-operator (ham) mode via AdminMessage.set_ham_mode. Port of
+     * UserConfig.swift's `saveLicensedUser`, which sends HamParameters rather than a
+     * User: the firmware sets the node name from the call sign, overrides frequency,
+     * duty cycle and TX power, and **disables encryption**, so this is deliberately a
+     * separate call from [setOwner] and not a flag on it.
+     *
+     * The radio saves and reboots, as it does for any config write.
+     */
+    suspend fun setHamMode(
+        callSign: String,
+        longName: String,
+        shortName: String,
+        txPower: Int,
+        frequency: Float,
+    ): Boolean {
+        val myNum = _myNodeNum.value
+        if (myNum == 0L) return false
+        if (callSign.isBlank()) return false
+        val ham = AdminProtos.HamParameters.newBuilder()
+            .setCallSign(callSign.take(8))
+            .setLongName(longName.take(39))
+            .setShortName(shortName.take(4))
+            .setTxPower(txPower)
+            .setFrequency(frequency)
+            .build()
+        val sent = runCatching { sendAdmin { it.setSetHamMode(ham) } }.getOrDefault(false)
+        Log.i(TAG, "Ham mode requested for $callSign: sent=$sent")
         return sent
     }
 
