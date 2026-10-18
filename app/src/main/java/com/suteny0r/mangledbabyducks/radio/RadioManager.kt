@@ -240,6 +240,24 @@ class RadioManager(
         get() = attemptLock.isLocked
 
     /**
+     * The LAN host the app is linked to or reaching for, else null. Anything that opens its
+     * own socket to a radio has to skip it: the firmware serves one TCP client, so a second
+     * connect takes the slot and the live session gets an EOF.
+     *
+     * It reads [lastAddress], which [connect] sets before the first attempt, so it covers
+     * the handshake as well as a finished link. That is the window that matters: the LAN
+     * sweep stole the slot mid-handshake and cost the user a whole failed attempt.
+     *
+     * A BLE address is a MAC and comes back null rather than a leading octet pair.
+     */
+    val activeHost: String?
+        get() {
+            if (!isConnected && !isAttempting) return null
+            val host = lastAddress?.substringBeforeLast(':') ?: return null
+            return host.takeIf { !it.contains(':') }
+        }
+
+    /**
      * One automatic connect per process. Callers such as MainActivity fire from
      * onCreate, the permission result and onResume, so the guard is a CAS rather than
      * a state check: once the automatic attempt has been spent, a radio that is off

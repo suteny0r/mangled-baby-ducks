@@ -151,7 +151,6 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
 
     // iOS scans (BLE + Bonjour) for the whole time the tab is up and no radio is linked.
     DisposableEffect(Unit) {
-        vm.startLanScan()
         onDispose {
             vm.stopLanScan()
             vm.stopScan()
@@ -159,6 +158,12 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
     }
     LaunchedEffect(idle, bluetoothOff) {
         if (idle && !bluetoothOff) vm.startScan() else vm.stopScan()
+    }
+    // The LAN sweep follows the same rule as the BLE scan rather than running for the
+    // life of the tab. Once a radio is linked the lists are hidden anyway, and the sweep
+    // was still opening sockets to every host on the subnet behind the live session.
+    LaunchedEffect(idle) {
+        if (idle) vm.startLanScan() else vm.stopLanScan()
     }
 
     LazyColumn(

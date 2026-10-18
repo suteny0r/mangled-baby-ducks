@@ -40,6 +40,13 @@ import kotlin.coroutines.resume
  *    FromRadio packets back, which also yields the radio's long name. The sweep skips
  *    [exclude] hosts: the firmware allows one TCP client, so probing the radio the app
  *    is currently linked to would drop that session.
+ *
+ * [exclude] is a function, not a set, and is asked again for every host. A set captured
+ * when the scan started was a snapshot of a link that had not been made yet: the Connect
+ * screen starts the scan, the user then taps a LAN radio, and the sweep that was already
+ * running had no idea the host it was about to probe was now the live one. Measured on the
+ * tester's phone: the probe landed 9 s into the handshake, the radio handed the slot over,
+ * and the app logged "Link lost: Stream ended", losing an attempt before the retry got in.
  */
 class LanScanner(context: Context) {
     data class LanDevice(
@@ -62,7 +69,7 @@ class LanScanner(context: Context) {
      * Emits the current set of radios whenever it changes; stops when cancelled. [exclude]
      * are hosts the sweep must not touch (the live TCP link).
      */
-    fun discover(exclude: Set<String> = emptySet()): Flow<Map<String, LanDevice>> = callbackFlow {
+    fun discover(exclude: () -> Set<String> = { emptySet() }): Flow<Map<String, LanDevice>> = callbackFlow {
         val found = ConcurrentHashMap<String, LanDevice>()
         val lock = wifi.createMulticastLock("meshtastic-mdns").apply {
             setReferenceCounted(false)
@@ -161,7 +168,7 @@ class LanScanner(context: Context) {
             .firstOrNull { !it.isLoopbackAddress }
     }
 
-    private suspend fun sweep(exclude: Set<String>, onFound: (LanDevice) -> Unit) {
+    private suspend fun sweep(exclude: () -> Set<String>, onFound: (LanDevice) -> Unit) {
         val own = ownIpv4() ?: return
         val base = own.address.copyOf()
         val ownHost = own.hostAddress
@@ -171,7 +178,9 @@ class LanScanner(context: Context) {
                 launch {
                     gate.withPermit {
                         val host = "${base[0].toUByte()}.${base[1].toUByte()}.${base[2].toUByte()}.$last"
-                        if (host == ownHost || host in exclude) return@withPermit
+                        // Asked per host rather than per sweep: a sweep takes seconds, and
+                        // the user can tap Connect in the middle of one.
+                        if (host == ownHost || host in exclude()) return@withPermit
                         probe(host)?.let(onFound)
                     }
                 }

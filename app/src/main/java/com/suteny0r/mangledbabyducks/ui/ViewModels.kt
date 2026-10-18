@@ -140,11 +140,12 @@ class ConnectViewModel(app: Application) : AndroidViewModel(app) {
         _lanScanning.value = true
         lanJob = viewModelScope.launch {
             // Never probe the radio we are talking to over TCP: the firmware takes one
-            // client, and the sweep's handshake would steal that slot.
-            val live = remembered.value?.takeIf { it.type == "tcp" && radio.isConnected }
-                ?.address?.substringBefore(':')
+            // client, and the sweep's handshake would steal that slot. Read live, not
+            // captured here: the usual order is scan first, connect second, and the
+            // remembered radio is only written once a connect has succeeded.
             try {
-                container.lanScanner.discover(exclude = setOfNotNull(live)).collect { _lanDevices.value = it }
+                container.lanScanner.discover(exclude = { setOfNotNull(radio.activeHost) })
+                    .collect { _lanDevices.value = it }
             } catch (_: Exception) {
             } finally {
                 _lanScanning.value = false
