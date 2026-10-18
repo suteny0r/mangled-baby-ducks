@@ -1,0 +1,7 @@
+﻿<en-US>
+Settings > User now has the two switches that were missing: Unmessagable and Licensed Operator. Unmessagable is the flag that tells other clients not to offer to message a node. A radio sets it for itself when you give it an infrastructure role and does not clear it when you change the role back, so until now there was no way to turn it off from the app.
+
+The node list header now says "Nodes (3 of 119)" when a filter is hiding nodes, instead of showing only the filtered count. A filter chip left on looked exactly like an empty node list.
+
+Message delivery failures are now recorded in the diagnostic log with the radio's own error name, the channel and the node that relayed, so a message that says "Failed to deliver to mesh" can actually be explained.
+</en-US>
