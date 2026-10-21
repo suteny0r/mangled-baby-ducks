@@ -674,7 +674,7 @@ class RadioManager(
             }
             Portnums.PortNum.NODEINFO_APP -> ingest.userPacket(packet)
             Portnums.PortNum.NODE_STATUS_APP -> ingest.nodeStatusPacket(packet)
-            Portnums.PortNum.POSITION_APP -> ingest.positionPacket(packet)
+            Portnums.PortNum.POSITION_APP -> ingest.positionPacket(packet, myNum)
             Portnums.PortNum.TELEMETRY_APP -> ingest.telemetryPacket(packet, myNum)
             Portnums.PortNum.ADMIN_APP -> ingest.adminResponse(packet)
             Portnums.PortNum.ROUTING_APP -> ingest.routing(packet, myNum)?.let { healPkiFailure(it) }

@@ -302,7 +302,19 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
         if (from == 0L || from == myNum) return
         val isImplicitAck =
             packet.decoded.portnum == Portnums.PortNum.ROUTING_APP && packet.rxTime == 0
-        val existing = db.nodeDao().get(from)
+        // Update only; never insert. This is the port's single biggest divergence from
+        // UpdateSwiftData.updateAnyPacketFrom, which fetches and returns when there is no
+        // row ("existing remote nodes only"). Minting a row here made every node the radio
+        // has ever overheard, however briefly, appear in the list as Unknown, because a
+        // row with no user renders as one. iOS shows nothing at all until something with
+        // an identity arrives, which is why the two clients beside each other on the same
+        // traffic disagreed so visibly.
+        //
+        // It compounded: those nameless rows spend slots against the radio's node cap, so
+        // real named nodes were evicted to hold placeholders for nodes nothing was known
+        // about. Rows are created instead by the handlers that have something to attribute
+        // to a node (identity, position, telemetry, a message), the way the Swift does.
+        val existing = db.nodeDao().get(from) ?: return
         val lastHeard = when {
             isImplicitAck -> existing?.lastHeard
             packet.rxTime != 0 -> packet.rxTime.uint() * 1000
@@ -314,31 +326,47 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
             existing?.hopsAway ?: -1
         }
         db.nodeDao().upsert(
-            (existing ?: NodeEntity(num = from, firstHeard = System.currentTimeMillis())).copy(
-                snr = if (packet.rxSnr != 0f) packet.rxSnr else existing?.snr ?: 0f,
-                rssi = if (packet.rxRssi != 0) packet.rxRssi else existing?.rssi ?: 0,
+            existing.copy(
+                snr = if (packet.rxSnr != 0f) packet.rxSnr else existing.snr,
+                rssi = if (packet.rxRssi != 0) packet.rxRssi else existing.rssi,
                 viaMqtt = packet.viaMqtt,
                 lastHeard = lastHeard,
                 hopsAway = hopsAway,
-                hasXeddsaSigned = (existing?.hasXeddsaSigned ?: false) || packet.xeddsaSigned,
+                hasXeddsaSigned = existing.hasXeddsaSigned || packet.xeddsaSigned,
                 // The channel this node was actually decoded on. Until now the field was
                 // written only by a NodeInfo, so a node whose NodeInfo had never arrived
                 // read as channel 0, and anything RadioManager.channelFor sent it went to
                 // a channel it holds no key for. Every packet already carries the answer.
                 // Zero is kept as "no information": a PKI direct message decodes on the
                 // PKC channel and reports 0, which must not erase a known private channel.
-                channel = if (packet.channel > 0) packet.channel else existing?.channel ?: 0,
+                channel = if (packet.channel > 0) packet.channel else existing.channel,
             )
         )
-        // A brand-new row is the app-side counterpart of a firmware NodeDB insert, which
-        // is exactly when the firmware would evict; keep step with it.
-        if (existing == null) enforceNodeCapacity(myNum, justInserted = from)
+    }
+
+    /**
+     * The row a handler needs before it can attribute something to a node. Port of the
+     * Swift `findOrCreateNode` calls that sit at the top of the position, telemetry,
+     * device-metadata and text-message handlers: a reading or a message from a node whose
+     * NodeInfo has not arrived yet would otherwise be stored as an orphan, or dropped.
+     *
+     * This, not [updateFromAnyPacket], is where a new row and its eviction belong. The
+     * node is spared from the eviction it triggers, as it always was: the radio plainly
+     * holds a node it is hearing right now.
+     */
+    private suspend fun ensureNode(num: Long, myNum: Long) {
+        if (num == 0L || db.nodeDao().get(num) != null) return
+        db.nodeDao().upsert(NodeEntity(num = num, firstHeard = System.currentTimeMillis()))
+        enforceNodeCapacity(myNum, justInserted = num)
     }
 
     /** TEXT_MESSAGE_APP inbound. Returns the stored message, or null when deduped/skipped. */
     suspend fun textMessage(packet: MeshProtos.MeshPacket, myNum: Long): MessageEntity? {
         val text = packet.decoded.payload.toStringUtf8()
         if (text.isEmpty()) return null
+        // A sender we have heard from by name deserves a row even before its NodeInfo, or
+        // the thread has nothing to hang a name, a distance or a detail screen off.
+        if (packet.from.uint() != myNum) ensureNode(packet.from.uint(), myNum)
         val messageId = packet.id.uint()
         val from = packet.from.uint()
         val to = packet.to.uint()
@@ -482,10 +510,14 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
     }
 
     /** POSITION_APP. */
-    suspend fun positionPacket(packet: MeshProtos.MeshPacket) {
+    suspend fun positionPacket(packet: MeshProtos.MeshPacket, myNum: Long) {
         val pos = runCatching {
             MeshProtos.Position.parseFrom(packet.decoded.payload)
         }.getOrNull() ?: return
+        if (!pos.hasValidCoordinates()) return
+        // The map joins positions to nodes, so a fix with no node row would never draw.
+        // Swift creates the stub here for the same reason, and says so in a comment.
+        ensureNode(packet.from.uint(), myNum)
         position(packet.from.uint(), pos, packet.rxTime)
     }
 
@@ -562,6 +594,9 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
             TelemetryProtos.Telemetry.parseFrom(packet.decoded.payload)
         }.getOrNull() ?: return
         val nodeNum = packet.from.uint()
+        // Telemetry is genuine RF contact and is stored against the node, so the row has
+        // to exist or the reading is an orphan. Same rule as the Swift telemetryPacket.
+        ensureNode(nodeNum, myNum)
         val timeSec = if (telemetry.time != 0) telemetry.time.uint()
         else if (packet.rxTime != 0) packet.rxTime.uint()
         else System.currentTimeMillis() / 1000
