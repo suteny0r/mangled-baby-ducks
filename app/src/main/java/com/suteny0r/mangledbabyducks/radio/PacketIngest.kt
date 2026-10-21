@@ -360,13 +360,43 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
         enforceNodeCapacity(myNum, justInserted = num)
     }
 
+    /**
+     * Port of UserEntityExtension.createUser: a sender nothing is known about still gets an
+     * identity, built the way the firmware builds its own defaults.
+     *
+     * Without it a message from a node whose NodeInfo has not arrived reads as "Unknown"
+     * until it does, which on a busy mesh is minutes or hours. iOS shows "Meshtastic 1278"
+     * from the first packet, because the node number is already enough to name it the way
+     * every other client will name it. The real NodeInfo overwrites this later:
+     * [upsertUser] prefers any non-empty inbound name, and the placeholder carries no
+     * public key, so the first-wins key policy still takes the node's real key when it
+     * arrives rather than treating this as the established identity.
+     */
+    private suspend fun ensureUser(num: Long, myNum: Long) {
+        if (num == 0L || num == myNum) return
+        ensureNode(num, myNum)
+        if (db.userDao().get(num) != null) return
+        val userId = "!%08x".format(num)
+        val last4 = userId.takeLast(4)
+        db.userDao().upsert(
+            UserEntity(
+                num = num,
+                userId = userId,
+                longName = "Meshtastic $last4",
+                shortName = last4,
+                hwModel = "UNSET",
+            )
+        )
+    }
+
     /** TEXT_MESSAGE_APP inbound. Returns the stored message, or null when deduped/skipped. */
     suspend fun textMessage(packet: MeshProtos.MeshPacket, myNum: Long): MessageEntity? {
         val text = packet.decoded.payload.toStringUtf8()
         if (text.isEmpty()) return null
-        // A sender we have heard from by name deserves a row even before its NodeInfo, or
-        // the thread has nothing to hang a name, a distance or a detail screen off.
-        if (packet.from.uint() != myNum) ensureNode(packet.from.uint(), myNum)
+        // A first-time sender gets a node and a default identity here, which is the path
+        // updateFromAnyPacket (existing nodes only) deliberately does not cover. Without
+        // it the thread shows Unknown until the node's NodeInfo turns up.
+        ensureUser(packet.from.uint(), myNum)
         val messageId = packet.id.uint()
         val from = packet.from.uint()
         val to = packet.to.uint()
