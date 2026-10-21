@@ -1,0 +1,7 @@
+﻿<en-US>
+A message from a node you have not met before now shows the sender's name straight away, as "Meshtastic" followed by the last four of its id, which is what the radios themselves call a node that has not been given a name. Until now it said Unknown, sometimes for hours, until that node happened to introduce itself.
+
+The node list no longer fills up with nameless entries for nodes your radio merely overheard relaying someone else's traffic. Those entries had no name and no distance, and they were taking up room that real nodes needed, so named nodes were being dropped to make space for them.
+
+Android Auto: the node list no longer shows your own radio twice. It appeared both as the Radio row at the top and as a node below it, and the two disagreed, with the lower one always claiming to be connected.
+</en-US>
