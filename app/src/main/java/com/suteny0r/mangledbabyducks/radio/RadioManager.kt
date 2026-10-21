@@ -324,8 +324,35 @@ class RadioManager(
                 // connect the user asked for is worth a 5 s timeout to find out.
                 absentIsTerminal = false,
                 attemptWhenAbsent = true,
+                diagnoseExhaustion = true,
                 exhaustedReason = "Could not reach ${name ?: "the radio"}",
             )
+        }
+    }
+
+    /**
+     * What to tell the user when a connect they asked for has run out of attempts.
+     *
+     * A Meshtastic radio serves one BLE client, and the second one to arrive is simply
+     * refused. Android reports that as GATT status 133, the same generic failure it
+     * reports for a radio that is switched off, so the code is no help. What does help is
+     * whether the scan saw it: a radio that is out of range or powered down is not
+     * advertising, so advertising plus a refusal on every attempt means it is busy with
+     * somebody else, and that is worth saying outright.
+     *
+     * When it never advertised, the honest answer is the list of possibilities, in the
+     * order they are worth checking. The app does not know which, and saying so beats
+     * picking one and being confidently wrong.
+     */
+    private fun exhaustionDiagnosis(name: String?, sawAdvertising: Boolean): String {
+        val radio = name ?: "The radio"
+        Log.w(TAG, "Connect to ${name ?: "radio"} exhausted; saw it advertising: $sawAdvertising")
+        return if (sawAdvertising) {
+            "$radio is in range but refused the connection. A radio accepts one app at a " +
+                "time, so another phone or computer is probably connected to it."
+        } else {
+            "Could not reach $radio. It may be out of range or switched off, or another " +
+                "phone or computer may be connected to it."
         }
     }
 
@@ -378,9 +405,22 @@ class RadioManager(
          * behind the user's back.
          */
         attemptWhenAbsent: Boolean = false,
+        /**
+         * Replace [exhaustedReason] with a diagnosis when the attempts run out. Only the
+         * user-initiated connect wants this: a reconnect's card already says what it was
+         * doing, and a guess belongs where somebody is waiting to act on it.
+         */
+        diagnoseExhaustion: Boolean = false,
         exhaustedReason: String,
     ) {
         var settled = false
+        // Whether any attempt's scan actually saw the radio advertising. This is the one
+        // fact that separates "nobody is home" from "it will not let me in": a radio that
+        // is out of range or powered off does not advertise, so advertising plus a GATT
+        // refusal every time is a radio that is busy with another client. Android has no
+        // status code for that (it is status 133, the generic failure), so the scan is the
+        // only evidence available.
+        var sawAdvertising = false
         try {
             for (attempt in 0 until attempts) {
                 if (gen != requestGeneration) { settled = true; return }
@@ -397,6 +437,7 @@ class RadioManager(
                     _state.value = searchingFor(attempt)
                     val visible = presence.isVisible(PRESENCE_TIMEOUT_MS)
                     if (gen != requestGeneration) { settled = true; return }
+                    if (visible) sawAdvertising = true
                     if (!visible) {
                         Log.w(TAG, "${name ?: "Radio"} not advertising (attempt ${attempt + 1}/$attempts)")
                         if (absentIsTerminal) {
@@ -428,7 +469,12 @@ class RadioManager(
                     Log.w(TAG, "Attempt ${attempt + 1}/$attempts failed: ${e.message}")
                 }
             }
-            if (gen == requestGeneration) _state.value = RadioState.Failed(exhaustedReason)
+            if (gen == requestGeneration) {
+                _state.value = RadioState.Failed(
+                    if (diagnoseExhaustion) exhaustionDiagnosis(name, sawAdvertising)
+                    else exhaustedReason
+                )
+            }
             settled = true
         } finally {
             // Anything else escaping (including this coroutine being cancelled while a
