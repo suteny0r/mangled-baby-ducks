@@ -584,7 +584,12 @@ class CarNodesScreen(carContext: CarContext) : MeshCarScreen(carContext) {
         // It also means the list is never empty, so the host's no-items message can no
         // longer appear and the empty case has to say so in a row of its own.
         list.addItem(radioRow(state, deviceName))
-        val visible = nodes.filter { !it.node.ignored }
+        // Our own node is dropped, as the Map list has always dropped it: the Radio row
+        // above already is this radio, and showing it twice put two disagreeing statuses
+        // on screen. The second was never a status at all, just the literal "connected"
+        // keyed on the node being ours, so it read "connected" directly under
+        // "Reconnecting (attempt 2)". The Radio row is the one that tracks the link.
+        val visible = nodes.filter { !it.node.ignored && it.node.num != myNum }
         if (visible.isEmpty()) {
             list.addItem(Row.Builder().setTitle("No nodes yet").build())
         }
@@ -596,7 +601,7 @@ class CarNodesScreen(carContext: CarContext) : MeshCarScreen(carContext) {
                 val detail = SpannableStringBuilder(
                     buildList {
                         entry.user?.shortName?.takeIf { it.isNotBlank() }?.let { add(it) }
-                        if (num == myNum) add("connected") else entry.node.lastHeard?.let { add(relativeTime(it)) }
+                        entry.node.lastHeard?.let { add(relativeTime(it)) }
                         if (entry.node.hopsAway > 0) add("${entry.node.hopsAway} hops")
                     }.joinToString(" · ").ifEmpty { nodeNumString(num) }
                 )
