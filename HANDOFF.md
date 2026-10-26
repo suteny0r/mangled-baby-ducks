@@ -9,6 +9,50 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## Long messages are accepted and sent as several packets (unreleased, 2026-10-26, NOT verified on the phone)
+
+The composer used to clamp the draft at `MeshProtocol.MAX_TEXT_BYTES` (200), dropping code
+points off the end until it fit, which is what the Swift original does. It now accepts
+whatever is typed or pasted, and the sender cuts it up.
+
+`MeshProtocol.splitForWire(text, limit)` is the whole of the policy and has no Android
+dependencies, which is what made it testable (see below):
+
+- Breaks land on whitespace, so a word is never cut in half, and the whitespace broken on
+  is consumed rather than sent as a leading space on the next piece.
+- Whitespace *inside* a piece is left as typed. Only the break point is swallowed.
+- One exception, unavoidable: a run with no whitespace longer than a whole packet (a long
+  URL) is cut on a code point boundary. The alternative is a message that can never be
+  sent at all. Surrogate pairs are never split.
+- Sizing is UTF-8 bytes, not characters, as the wire limit is.
+
+`RadioManager.sendTextMessage` splits, then loops `sendOnePart` (the old single-packet
+body, unchanged apart from its name). Each piece gets its own packet id, its own
+`MessageEntity` and its own ack, because that is what actually travelled; `replyId` goes on
+the first piece only. Pieces are spaced `PART_GAP_MS` (500 ms) apart: the radio queues them
+in order either way, but the thread is ordered by timestamp and a millisecond tie showed
+them shuffled. The split sits inside `sendTextMessage`, so every caller inherits it: the
+phone composer, Android Auto quick replies, voice replies through `MessageActionReceiver`,
+and Retry.
+
+The byte gauge no longer turns red at 200. Past the limit it fills the *current* packet
+(`(bytes - 1) % limit + 1`) and a line under it says "N messages", so the cost is visible
+before the send button is pressed. There is no upper bound and no confirmation: a 10 KB
+paste will go out as fifty-odd packets and hold the channel for minutes. If that turns out
+to matter, a confirm above some count is the place to put it.
+
+**How this was tested, with no test infrastructure in the repo.** `MeshProtocol.kt` imports
+only `java.util.UUID`, so it compiles outside the Android toolchain. Android Studio bundles
+a Kotlin compiler at
+`C:\Program Files\Android\Android Studio\plugins\Kotlin\kotlinc\bin\kotlinc.bat` (set
+`JAVA_HOME` to the JBR first). Compiling the real source file together with a scratchpad
+`SplitTest.kt` and running it with the bundled `kotlin.bat` exercises the shipped function,
+not a copy of it. 39 assertions pass: prose, newlines, multiple spaces, accents, emoji, a
+tiny limit, a wall of surrogate pairs, a 400-character URL, exactly at the limit, one byte
+over. Worth reusing for any other logic that can be kept free of Android imports. Note the
+`kotlin-compiler-embeddable` jar out of the Gradle cache does *not* work standalone; it
+wants coroutines and the rest of its own runtime on the classpath.
+
 ## Two port divergences that made new senders show as Unknown (0.2.36, 2026-10-20, NOT verified)
 
 Found by the right method: two GAT562s side by side on the same traffic, one running the

@@ -1099,20 +1099,6 @@ private fun Bubble(
     }
 }
 
-/**
- * TextMessageField.onChange: drop characters from the end until the UTF-8 size fits the
- * 200-byte wire limit. The cursor lands at the end of the kept text, like dropLast() leaves it.
- */
-private fun clampToWireLimit(value: TextFieldValue): TextFieldValue {
-    if (value.text.encodeToByteArray().size <= MeshProtocol.MAX_TEXT_BYTES) return value
-    var text = value.text
-    while (text.encodeToByteArray().size > MeshProtocol.MAX_TEXT_BYTES) {
-        // Drop a whole code point so a surrogate pair is never split.
-        text = text.substring(0, text.offsetByCodePoints(text.length, -1))
-    }
-    return value.copy(text = text, selection = TextRange(text.length))
-}
-
 /** One corner badge: the glyph knocked out of a filled green disc, as the SF palette style draws it. */
 @Composable
 private fun CornerBadge(icon: ImageVector, label: String) {
@@ -1346,6 +1332,10 @@ private fun Composer(
     val context = LocalContext.current
     val text = draft.text
     val bytes = text.encodeToByteArray().size
+    // Only ask the splitter when there is something to split; it walks the whole draft.
+    val packets = remember(text) {
+        if (bytes <= MeshProtocol.MAX_TEXT_BYTES) 1 else MeshProtocol.splitForWire(text).size
+    }
     var focused by remember { mutableStateOf(false) }
     var showToolbar by remember { mutableStateOf(false) }
     var linkDialog by remember { mutableStateOf<TextRange?>(null) }
@@ -1361,13 +1351,9 @@ private fun Composer(
         }
     }
 
-    /** Apply a new draft if it fits the wire limit, else say so. */
+    /** Apply a new draft. Length is no longer a reason to refuse one; the sender splits. */
     fun apply(result: FormattingResult) {
-        if (result.text.encodeToByteArray().size <= MeshProtocol.MAX_TEXT_BYTES) {
-            onDraftChange(TextFieldValue(result.text, result.selection))
-        } else {
-            Toast.makeText(context, "That would exceed ${MeshProtocol.MAX_TEXT_BYTES} bytes", Toast.LENGTH_SHORT).show()
-        }
+        onDraftChange(TextFieldValue(result.text, result.selection))
     }
     fun append(suffix: String) {
         val joined = text + suffix
@@ -1469,13 +1455,10 @@ private fun Composer(
                 }
                 OutlinedTextField(
                     value = draft,
-                    onValueChange = { candidate ->
-                        // Enforce the 200-byte wire limit on UTF-8 size, not char count. An edit
-                        // that overflows (a paste) is trimmed from the end until it fits, as
-                        // TextMessageField does with dropLast(); refusing it outright made a
-                        // long paste look like paste was broken.
-                        onDraftChange(clampToWireLimit(candidate))
-                    },
+                    // No wire-limit clamp here any more. The original truncates the draft at
+                    // 200 bytes; this one accepts the whole thing and the sender cuts it into
+                    // packets on whitespace, with the gauge below saying how many that will be.
+                    onValueChange = onDraftChange,
                     modifier = Modifier.weight(1f).onFocusChanged { focused = it.isFocused },
                     placeholder = { Text("Message") },
                     maxLines = 6,
@@ -1549,18 +1532,29 @@ private fun Composer(
                         apply(FormattingResult(next, TextRange(next.length)))
                     }
                 }
-                // TextMessageSize: "Bytes: n" over a gauge of the 200-byte limit.
-                Column(Modifier.padding(start = 6.dp).width(84.dp)) {
+                // TextMessageSize: "Bytes: n" over a gauge of the 200-byte limit. Past that
+                // limit the gauge fills the current packet rather than pinning at full, and
+                // a line under it says how many packets this will be sent as.
+                Column(Modifier.padding(start = 6.dp).width(92.dp)) {
                     Text(
                         "Bytes: $bytes",
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (bytes >= MeshProtocol.MAX_TEXT_BYTES) IosRed else MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                     )
+                    val filled = if (bytes == 0) 0 else (bytes - 1) % MeshProtocol.MAX_TEXT_BYTES + 1
                     LinearProgressIndicator(
-                        progress = { bytes.toFloat() / MeshProtocol.MAX_TEXT_BYTES },
+                        progress = { filled.toFloat() / MeshProtocol.MAX_TEXT_BYTES },
                         modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
                     )
+                    if (packets > 1) {
+                        Text(
+                            "$packets messages",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                        )
+                    }
                 }
             }
         }

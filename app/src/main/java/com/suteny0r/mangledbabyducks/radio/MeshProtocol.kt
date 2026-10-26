@@ -34,6 +34,49 @@ object MeshProtocol {
 
     const val WRITE_ATTEMPT_LIMIT = 4
     const val HEARTBEAT_INTERVAL_MS = 15_000L
+
+    /**
+     * Not in the Swift app, which simply refuses the 201st byte: cut a long message into
+     * packet-sized pieces to be sent one after another.
+     *
+     * Breaks land on whitespace, so a word is never split and the whitespace that was
+     * broken on is dropped rather than sent as a leading space. The one exception is an
+     * unbroken run longer than a whole packet (a long URL): it is cut on a code point
+     * boundary, because the alternative is a message that can never be sent at all.
+     *
+     * Sizing is UTF-8 bytes, not characters; the limit is what the radio accepts.
+     */
+    fun splitForWire(text: String, limit: Int = MAX_TEXT_BYTES): List<String> {
+        var rest = text.trim()
+        if (rest.isEmpty()) return emptyList()
+        if (rest.encodeToByteArray().size <= limit) return listOf(rest)
+
+        val parts = mutableListOf<String>()
+        while (rest.isNotEmpty()) {
+            if (rest.encodeToByteArray().size <= limit) {
+                parts += rest
+                break
+            }
+            // Every char costs at least one byte, so `limit` chars is never short of the
+            // true cut; walk down from there instead of from the whole remaining length,
+            // which would re-encode a long message once per character.
+            var cut = minOf(rest.length, limit)
+            if (cut < rest.length && Character.isLowSurrogate(rest[cut])) cut--
+            while (cut > 0 && rest.substring(0, cut).encodeToByteArray().size > limit) {
+                cut = rest.offsetByCodePoints(cut, -1)
+            }
+            var brk = cut
+            while (brk > 0 && !rest[brk - 1].isWhitespace()) brk--
+            if (brk == 0) {
+                parts += rest.substring(0, cut)
+                rest = rest.substring(cut)
+            } else {
+                parts += rest.substring(0, brk).trimEnd()
+                rest = rest.substring(brk).trimStart()
+            }
+        }
+        return parts.filter { it.isNotEmpty() }
+    }
 }
 
 /** uint32 proto field (Java int) to unsigned Long. */

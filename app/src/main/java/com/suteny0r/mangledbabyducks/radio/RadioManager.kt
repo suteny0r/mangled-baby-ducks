@@ -852,6 +852,12 @@ class RadioManager(
     /**
      * Send a text message. Port of AccessoryManager.sendMessage: the MessageEntity is
      * stored optimistically before the radio write, acks arrive later via ROUTING_APP.
+     *
+     * Divergence from the original, which refuses anything over the wire limit: a message
+     * too long for one packet is cut on whitespace by [MeshProtocol.splitForWire] and sent
+     * as several packets in order. Each piece is a real message of its own, with its own
+     * id, row and ack, because that is what actually travelled. The reply link belongs to
+     * the first piece only; the rest are plain follow-ons.
      */
     suspend fun sendTextMessage(
         text: String,
@@ -868,9 +874,44 @@ class RadioManager(
         val myNum = _myNodeNum.value
         if (myNum == 0L) return false
         val onChannel = channel ?: toNum?.let { channelFor(it) } ?: 0
-        // Curly-quote normalization from the iOS sender.
+        // Curly-quote normalization from the iOS sender. Done before the split so the
+        // substitutions, which can change the byte count, cannot push a piece over.
         val normalized = text.replace('’', '\'').replace('“', '"').replace('”', '"')
-        val payload = normalized.encodeToByteArray()
+        val parts = MeshProtocol.splitForWire(normalized)
+        if (parts.isEmpty()) return false
+        if (parts.size > 1) {
+            Log.i(TAG, "Message of ${normalized.encodeToByteArray().size} bytes split into ${parts.size} packets")
+        }
+        var allSent = true
+        parts.forEachIndexed { index, part ->
+            if (index > 0) {
+                // Space the pieces out. The radio queues them either way, but the thread
+                // is ordered by timestamp, and a millisecond tie would show them shuffled.
+                delay(PART_GAP_MS)
+            }
+            val sent = sendOnePart(
+                text = part,
+                myNum = myNum,
+                toNum = toNum,
+                onChannel = onChannel,
+                replyId = if (index == 0) replyId else 0,
+                isEmoji = isEmoji,
+            )
+            if (!sent) allSent = false
+        }
+        return allSent
+    }
+
+    /** One packet's worth of text: the body of the original single-packet sendTextMessage. */
+    private suspend fun sendOnePart(
+        text: String,
+        myNum: Long,
+        toNum: Long?,
+        onChannel: Int,
+        replyId: Long,
+        isEmoji: Boolean,
+    ): Boolean {
+        val payload = text.encodeToByteArray()
         if (payload.size > MeshProtocol.MAX_TEXT_BYTES) return false
 
         val messageId = Random.nextLong(255L, 0xFFFFFFFFL)
@@ -884,7 +925,7 @@ class RadioManager(
                 toNum = toNum,
                 channel = onChannel,
                 portNum = Portnums.PortNum.TEXT_MESSAGE_APP_VALUE,
-                payload = normalized,
+                payload = text,
                 timestamp = System.currentTimeMillis(),
                 read = true,
                 isEmoji = isEmoji,
@@ -1666,6 +1707,8 @@ class RadioManager(
         private const val KEY_EXCHANGE_COOLDOWN_MS = 5 * 60_000L
         /** Floor between automatic NodeInfo broadcasts; the whole mesh hears these. */
         private const val KEY_BROADCAST_COOLDOWN_MS = 15 * 60_000L
+        /** Gap between the pieces of a split text message. */
+        private const val PART_GAP_MS = 500L
         private const val CONNECT_ATTEMPTS = 3
         private const val MAX_RECONNECT_ATTEMPTS = 10
         private const val RECONNECT_DELAY_MS = 2_000L
