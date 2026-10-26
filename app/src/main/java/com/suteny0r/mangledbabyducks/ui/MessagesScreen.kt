@@ -1308,6 +1308,12 @@ private fun DeliveryDialog(status: Delivery, onRetry: () -> Unit, onDismiss: () 
     )
 }
 
+/**
+ * Above this many packets the composer asks before sending. A long message split in two or
+ * three is ordinary; fifty is a paste nobody meant to put on the air.
+ */
+private const val CONFIRM_PACKETS_ABOVE = 5
+
 /** TextMessageField: a capsule text field, an up-arrow send button once there is text. */
 /**
  * TextMessageField.swift's FormattingComposeArea: the markdown preview above the field,
@@ -1337,6 +1343,7 @@ private fun Composer(
         if (bytes <= MeshProtocol.MAX_TEXT_BYTES) 1 else MeshProtocol.splitForWire(text).size
     }
     var focused by remember { mutableStateOf(false) }
+    var confirmLong by remember { mutableStateOf(false) }
     var showToolbar by remember { mutableStateOf(false) }
     var linkDialog by remember { mutableStateOf<TextRange?>(null) }
     var sharePosition by rememberSaveable { mutableStateOf(false) }
@@ -1354,6 +1361,11 @@ private fun Composer(
     /** Apply a new draft. Length is no longer a reason to refuse one; the sender splits. */
     fun apply(result: FormattingResult) {
         onDraftChange(TextFieldValue(result.text, result.selection))
+    }
+    fun send() {
+        onSend(text.trim(), sharePosition)
+        sharePosition = false
+        confirmLong = false
     }
     fun append(suffix: String) {
         val joined = text + suffix
@@ -1472,8 +1484,9 @@ private fun Composer(
                 )
                 if (text.isNotBlank()) {
                     IconButton(onClick = {
-                        onSend(text.trim(), sharePosition)
-                        sharePosition = false
+                        // A handful of packets is the user's business; a paste that would
+                        // hold the channel for minutes is worth one question first.
+                        if (packets > CONFIRM_PACKETS_ABOVE) confirmLong = true else send()
                     }) {
                         Icon(
                             Icons.Filled.ArrowCircleUp,
@@ -1558,6 +1571,26 @@ private fun Composer(
                 }
             }
         }
+    }
+
+    // The one case where splitting is worth a question: enough packets that the send will
+    // take a visible while and hold the channel against everyone else on it. The count is
+    // the real cost, so the dialog leads with it, and the airtime estimate is deliberately
+    // vague because it depends on the modem preset.
+    if (confirmLong) {
+        AlertDialog(
+            onDismissRequest = { confirmLong = false },
+            title = { Text("Send $packets Messages?") },
+            text = {
+                Text(
+                    "This is too long for one packet, so it will be sent as $packets " +
+                        "separate messages, a few seconds apart. That takes a while and " +
+                        "uses the channel the whole time."
+                )
+            },
+            confirmButton = { TextButton(onClick = { send() }) { Text("Send $packets") } },
+            dismissButton = { TextButton(onClick = { confirmLong = false }) { Text("Cancel") } },
+        )
     }
 
     // Camera or gallery, plus the one thing the user has to know before choosing either:

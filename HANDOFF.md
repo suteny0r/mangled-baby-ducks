@@ -37,9 +37,14 @@ and Retry.
 
 The byte gauge no longer turns red at 200. Past the limit it fills the *current* packet
 (`(bytes - 1) % limit + 1`) and a line under it says "N messages", so the cost is visible
-before the send button is pressed. There is no upper bound and no confirmation: a 10 KB
-paste will go out as fifty-odd packets and hold the channel for minutes. If that turns out
-to matter, a confirm above some count is the place to put it.
+before the send button is pressed. Above `CONFIRM_PACKETS_ABOVE` (5) the send button opens
+a confirmation naming the count, because a 10 KB paste would otherwise go out as fifty-odd
+packets and hold the channel for minutes. Two or three packets send without a question.
+There is still no hard ceiling: the user can say yes to any count.
+
+The confirmation is composer-only. Android Auto quick replies are canned and short, but a
+free-form voice reply through `MessageActionReceiver` has no UI to ask in and will send
+whatever it is dictated. Worth knowing before dictating an essay from the car.
 
 **How this was tested, with no test infrastructure in the repo.** `MeshProtocol.kt` imports
 only `java.util.UUID`, so it compiles outside the Android toolchain. Android Studio bundles
