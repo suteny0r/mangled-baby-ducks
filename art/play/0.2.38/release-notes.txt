@@ -1,0 +1,3 @@
+<en-US>
+You can now type or paste a message of any length. A radio can only carry about 200 characters in one go, so anything longer is split and sent as several messages, one after another. Splits only ever happen at a space or a line break, so a word is never cut in half. The byte counter under the message box tells you how many messages it will take before you send. If it would take more than five, the app asks first, because a long message occupies the channel for a while.
+</en-US>
