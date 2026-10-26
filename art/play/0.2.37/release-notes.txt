@@ -1,0 +1,3 @@
+﻿<en-US>
+When a radio will not accept a connection, the app now says why instead of just failing. A radio only accepts one app at a time, so if another phone or computer is already connected to it, yours cannot be. If the app can see the radio nearby but it keeps refusing, it now tells you that is probably what is happening. If it cannot see the radio at all, it says what the possibilities are rather than guessing between them.
+</en-US>
