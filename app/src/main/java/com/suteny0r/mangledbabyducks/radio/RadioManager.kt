@@ -240,6 +240,9 @@ class RadioManager(
     // Kept so a dropped link can be re-established with a fresh connection object.
     private var connectionFactory: (() -> RadioConnection)? = null
     private var lastAddress: String? = null
+
+    /** The address of the link now up or last tried, for callers that key saved state on it. */
+    val currentAddress: String? get() = lastAddress
     private var lastName: String? = null
 
     val isConnected: Boolean

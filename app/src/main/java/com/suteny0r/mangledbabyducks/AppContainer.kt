@@ -37,9 +37,13 @@ import com.suteny0r.mangledbabyducks.ui.Router
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -79,9 +83,18 @@ data class RememberedRadio(
     val address: String,
     val name: String?,
     val lastConnectedMs: Long = 0L,
+    /**
+     * The owner name the radio reported over the link, which is the name the user actually
+     * set. Kept apart from [name], which is whatever the radio was advertising or the host
+     * it answers on, because the two disagree and only one of them is the user's choice.
+     */
+    val ownerName: String? = null,
 ) {
     /** What the UI calls this radio; the address is the fallback when no name was saved. */
-    val label: String get() = name?.takeIf { it.isNotBlank() } ?: address
+    val label: String get() =
+        ownerName?.takeIf { it.isNotBlank() }
+            ?: name?.takeIf { it.isNotBlank() }
+            ?: address
 }
 
 /** The radio the app reaches for on launch, or null once auto-connect has been cleared. */
@@ -120,6 +133,7 @@ private fun encodeRadios(radios: List<RememberedRadio>): String {
                 put("type", radio.type)
                 put("address", radio.address)
                 radio.name?.let { put("name", it) }
+                radio.ownerName?.let { put("ownerName", it) }
                 put("lastConnected", radio.lastConnectedMs)
             }
         )
@@ -138,6 +152,7 @@ private fun decodeRadios(json: String): List<RememberedRadio> {
             address = address,
             name = entry.optString("name").ifEmpty { null },
             lastConnectedMs = entry.optLong("lastConnected"),
+            ownerName = entry.optString("ownerName").ifEmpty { null },
         )
     }
 }
@@ -178,6 +193,22 @@ class AppContainer(context: Context) {
                     runCatching { MeshPicCache.get(context, picture.shortId) }
                 }
             }
+        }
+        // Keep the saved radio's name in step with the owner record. Keyed on the owner
+        // row rather than on connect alone, so renaming the radio in Settings updates the
+        // list straight away instead of waiting for the next session.
+        @OptIn(ExperimentalCoroutinesApi::class)
+        appScope.launch {
+            radioManager.myNodeNum
+                .flatMapLatest { num ->
+                    if (num == 0L) flowOf(null) else database.userDao().observe(num)
+                }
+                .distinctUntilChangedBy { it?.longName }
+                .collect { owner ->
+                    val num = owner?.num ?: return@collect
+                    runCatching { refreshOwnerName(num) }
+                        .onFailure { Log.w(TAG, "Could not record the radio's owner name", it) }
+                }
         }
     }
 
@@ -253,9 +284,46 @@ class AppContainer(context: Context) {
             prefs[PrefKeys.RADIO_TYPE] = type
             prefs[PrefKeys.RADIO_ADDRESS] = address
             if (name.isNullOrBlank()) prefs.remove(PrefKeys.RADIO_NAME) else prefs[PrefKeys.RADIO_NAME] = name
-            val entry = RememberedRadio(type, address, name, System.currentTimeMillis())
-            val others = prefs.knownRadios().filterNot { it.address == address }
+            val known = prefs.knownRadios()
+            // Carried over rather than rebuilt: this runs on every connect, and the owner
+            // name is learned later in the session than the row is written.
+            val entry = RememberedRadio(
+                type = type,
+                address = address,
+                name = name,
+                lastConnectedMs = System.currentTimeMillis(),
+                ownerName = known.firstOrNull { it.address == address }?.ownerName,
+            )
+            val others = known.filterNot { it.address == address }
             prefs[PrefKeys.KNOWN_RADIOS] = encodeRadios((listOf(entry) + others).take(MAX_KNOWN_RADIOS))
+        }
+    }
+
+    /**
+     * Record what the connected radio calls itself, so the saved list can show the name the
+     * user chose rather than the one the radio advertises.
+     *
+     * They are not the same string and on some hardware they never converge. A Meshtastic
+     * radio advertises `<short name>_<last 4 of its MAC>`, but the GAT562s advertise
+     * `GAT562_xxxx` whatever the owner is renamed to, which the iOS client shows too, so it
+     * is the firmware's doing and not something a client can argue with. Even where the
+     * advertisement does follow the short name, it carries the short name and the MAC tail,
+     * never the long name the user typed.
+     *
+     * So the owner record is the authority here. It is also live: renaming the radio in
+     * Settings writes the users row, and this follows it without needing a reconnect.
+     */
+    private suspend fun refreshOwnerName(nodeNum: Long) {
+        val address = radioManager.currentAddress ?: return
+        val owner = database.userDao().get(nodeNum)?.longName?.takeIf { it.isNotBlank() } ?: return
+        prefs.edit { prefs ->
+            val known = prefs.knownRadios()
+            val entry = known.firstOrNull { it.address == address } ?: return@edit
+            if (entry.ownerName == owner) return@edit
+            Log.i(TAG, "Saved radio $address is \"$owner\" (advertised \"${entry.name}\")")
+            val updated = entry.copy(ownerName = owner)
+            prefs[PrefKeys.KNOWN_RADIOS] =
+                encodeRadios(listOf(updated) + known.filterNot { it.address == address })
         }
     }
 

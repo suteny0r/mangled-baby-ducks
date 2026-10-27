@@ -100,6 +100,10 @@ interface UserDao {
     @Query("SELECT * FROM users WHERE num = :num")
     suspend fun get(num: Long): UserEntity?
 
+    /** The same row, watched: used to follow our own radio's name as the owner is edited. */
+    @Query("SELECT * FROM users WHERE num = :num")
+    fun observe(num: Long): Flow<UserEntity?>
+
     @Query("SELECT * FROM users WHERE num = :num")
     fun userFlow(num: Long): Flow<UserEntity?>
 

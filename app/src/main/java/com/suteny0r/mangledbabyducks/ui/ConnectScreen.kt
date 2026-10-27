@@ -224,14 +224,18 @@ fun ConnectScreen(vm: ConnectViewModel = viewModel()) {
         val savedAddresses = knownRadios.map { it.address }.toSet()
         val available = buildList {
             knownRadios.filter { it.type == "ble" }.forEach { radio ->
-                // iOS lists live scan results, so a row always wears the name the radio
-                // advertises now. A saved row shows the saved name only while the radio
-                // is out of range.
+                // Once we have connected to a radio we know what it calls itself, and that
+                // beats what it advertises. The advertisement is the short name plus the
+                // tail of the MAC at best, and on the GAT562s it is the hardware model
+                // whatever the owner is renamed to, so a renamed radio kept showing a name
+                // the user had replaced. Falls back to the advertisement for a radio in
+                // range we have never been connected to, which is all there is to go on.
                 val live = devices[radio.address]?.name?.takeIf { it.isNotBlank() }
+                val known = radio.ownerName?.takeIf { it.isNotBlank() }
                 add(
                     AvailableRadio(
                         key = radio.address,
-                        name = live ?: radio.label,
+                        name = known ?: live ?: radio.label,
                         tcp = false,
                         rssi = devices[radio.address]?.rssi,
                         saved = radio,
