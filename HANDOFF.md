@@ -9,7 +9,7 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
-## Split messages: pieces two and three went into a deaf relay (unreleased, 2026-10-26, measured on the phone)
+## Split messages: pieces two and three went into a deaf relay (unreleased, 2026-10-26, VERIFIED on the phone)
 
 First real test of the 0.2.38 splitter, on channel 1. Three pieces, all sent, the first
 delivered, the other two stuck on "sending" for over a minute. The log says what happened:
@@ -56,6 +56,29 @@ acked, which is another way to sit on "sending" forever. It is now parsed: refus
 logged with the queue depth and mark the row failed, and acceptances log the depth at debug.
 In this capture all three were accepted, so the queue was not the problem here, but it was
 indistinguishable from the problem until now.
+
+**Verified on the phone**, same 471-byte message, same channel, same relay, debug build:
+
+```
+21:42:43.095  Message of 471 bytes split into 3 packets
+21:42:43.282  Queued 0x259c6641: 15/16 free
+21:42:45.316  Send 0x259c6641 acked on channel 1, relay …ae
+21:42:45.983  Queued 0x2ccb920e: 15/16 free
+21:42:48.598  Send 0x2ccb920e acked on channel 1, relay …ae
+21:42:49.448  Queued 0x636e0d5e: 15/16 free
+21:42:50.847  Send 0x636e0d5e acked on channel 1, relay …ae
+```
+
+Three for three, 7.8 s end to end. Two things the numbers settle:
+
+- **The ack latency is 1.4 to 2.6 s.** That is how long the relay spends rebroadcasting and
+  deaf, measured rather than guessed. The old 500 ms gap was three to five times too short,
+  which is why the second and third pieces were never heard.
+- **The queue never goes below 15/16 free.** One packet in flight at a time, which is the
+  whole point: the previous run put three in the queue inside 1.4 s and got one ack.
+
+Compare the failing capture at 21:22, which is in this same log: three QueueStatus replies
+within 1.4 s, one ack, and nothing ever again for the other two.
 
 ## A map thumbnail outlived its snapshotter and segfaulted (unreleased, 2026-10-26, NOT verified)
 
