@@ -1,0 +1,3 @@
+<en-US>
+Fixes a crash. A message with a shared location draws a small map behind it, and if you scrolled past one while that map was still loading, the app could close itself without warning some time later. The crash did not depend on opening the Map tab and could happen minutes after the message went by, which made it look random. Map handling has also been tidied up so the app no longer holds on to map resources after you leave the Map tab.
+</en-US>
