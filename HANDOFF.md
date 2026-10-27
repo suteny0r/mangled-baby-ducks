@@ -22,16 +22,27 @@ radio in range. Stock Meshtastic builds that from the short name and the last tw
 the MAC, so even at its best it is not the long name the user typed, and on this hardware it
 does not follow the short name either.
 
-We already know better: once connected, the owner record says what the radio calls itself.
-`RememberedRadio` now carries `ownerName` beside `name`, deliberately a separate field
-because the advertised name and the owner name are different strings that disagree, and the
-Connect row prefers it. A radio in range that has never been connected to still shows the
-advertisement, which is all there is to go on for one.
+We already know better: once connected, the owner record carries the short name the user
+chose. `RememberedRadio` keeps it as `ownerShort`, deliberately a separate field from
+`name` because the advertised name and the owner's are different strings that disagree, and
+`label` rebuilds the form the radio *ought* to advertise around it:
+`<short>_<last two bytes of the MAC, lowercase>`. A radio in range that has never been
+connected to still shows the advertisement, which is all there is to go on for one.
+
+The MAC tail is kept deliberately, not decoration. A short name is often a single emoji,
+and a BLE row on this screen shows no address underneath, so with two GAT562s the tail is
+the only thing separating `👀_xxxx` from `🏕_xxxx`. A TCP entry has no MAC, so it gets no
+rebuilt form and keeps its host: "Connecting to 👀" with the host discarded would be worse
+than what it says now.
+
+The first cut of this used the owner's **long** name, which was a wider change than the
+report: the complaint was that the GAT562s do not follow the `<icon>_xxxx` pattern the other
+radios do, not that the pattern was wrong. Match the existing format; do not invent one.
 
 It follows a rename without a reconnect: the refresh is keyed on the owner row
 (`UserDao.observe(num)` keyed off `myNodeNum`), not on the connect event, so editing the
 owner in Settings updates the list immediately. `rememberRadio` carries the existing
-`ownerName` forward, because it runs on every connect and would otherwise wipe a name that
+`ownerShort` forward, because it runs on every connect and would otherwise wipe a name that
 is learned later in the session than the row is written.
 
 Not verified on the phone yet; the GAT562 row is the one to look at.

@@ -84,17 +84,39 @@ data class RememberedRadio(
     val name: String?,
     val lastConnectedMs: Long = 0L,
     /**
-     * The owner name the radio reported over the link, which is the name the user actually
-     * set. Kept apart from [name], which is whatever the radio was advertising or the host
-     * it answers on, because the two disagree and only one of them is the user's choice.
+     * The short name from the radio's owner record: the icon or initials the user chose.
+     * Kept apart from [name], which is whatever the radio was advertising or the host it
+     * answers on, because the two disagree and only one of them is the user's choice.
      */
-    val ownerName: String? = null,
+    val ownerShort: String? = null,
 ) {
-    /** What the UI calls this radio; the address is the fallback when no name was saved. */
+    /** What the UI calls this radio; the address is the fallback when nothing else is known. */
     val label: String get() =
-        ownerName?.takeIf { it.isNotBlank() }
-            ?: name?.takeIf { it.isNotBlank() }
-            ?: address
+        advertisedForm() ?: name?.takeIf { it.isNotBlank() } ?: address
+
+    /**
+     * The name the radio ought to be advertising, rebuilt from what it told us over the
+     * link: the owner's short name and the last two bytes of its MAC, lowercase, which is
+     * what stock Meshtastic puts in its advertisement.
+     *
+     * Rebuilt rather than read off the air because some hardware does not follow its own
+     * owner: the GAT562s advertise `GAT562_xxxx` however they are renamed. Keeping the
+     * MAC tail matters as much as the short name does, because a short name is often a
+     * single emoji and these rows show no address underneath to tell two of them apart.
+     */
+    private fun advertisedForm(): String? {
+        val short = ownerShort?.takeIf { it.isNotBlank() } ?: return null
+        // No tail, no form: a TCP radio is addressed by host, and "Connecting to 👀" with
+        // the host thrown away would be worse than what it says today.
+        return macTail(address)?.let { "${short}_$it" }
+    }
+}
+
+/** The last two bytes of a BLE MAC, lowercase; null for anything not shaped like one. */
+private fun macTail(address: String): String? {
+    val parts = address.split(':')
+    if (parts.size != 6 || parts.any { it.length != 2 }) return null
+    return (parts[4] + parts[5]).lowercase()
 }
 
 /** The radio the app reaches for on launch, or null once auto-connect has been cleared. */
@@ -133,7 +155,7 @@ private fun encodeRadios(radios: List<RememberedRadio>): String {
                 put("type", radio.type)
                 put("address", radio.address)
                 radio.name?.let { put("name", it) }
-                radio.ownerName?.let { put("ownerName", it) }
+                radio.ownerShort?.let { put("ownerShort", it) }
                 put("lastConnected", radio.lastConnectedMs)
             }
         )
@@ -152,7 +174,7 @@ private fun decodeRadios(json: String): List<RememberedRadio> {
             address = address,
             name = entry.optString("name").ifEmpty { null },
             lastConnectedMs = entry.optLong("lastConnected"),
-            ownerName = entry.optString("ownerName").ifEmpty { null },
+            ownerShort = entry.optString("ownerShort").ifEmpty { null },
         )
     }
 }
@@ -203,7 +225,7 @@ class AppContainer(context: Context) {
                 .flatMapLatest { num ->
                     if (num == 0L) flowOf(null) else database.userDao().observe(num)
                 }
-                .distinctUntilChangedBy { it?.longName }
+                .distinctUntilChangedBy { it?.shortName }
                 .collect { owner ->
                     val num = owner?.num ?: return@collect
                     runCatching { refreshOwnerName(num) }
@@ -292,7 +314,7 @@ class AppContainer(context: Context) {
                 address = address,
                 name = name,
                 lastConnectedMs = System.currentTimeMillis(),
-                ownerName = known.firstOrNull { it.address == address }?.ownerName,
+                ownerShort = known.firstOrNull { it.address == address }?.ownerShort,
             )
             val others = known.filterNot { it.address == address }
             prefs[PrefKeys.KNOWN_RADIOS] = encodeRadios((listOf(entry) + others).take(MAX_KNOWN_RADIOS))
@@ -300,28 +322,26 @@ class AppContainer(context: Context) {
     }
 
     /**
-     * Record what the connected radio calls itself, so the saved list can show the name the
-     * user chose rather than the one the radio advertises.
+     * Record the connected radio's short name, so the saved list can name it from the owner
+     * record instead of from what it advertises. [RememberedRadio.label] rebuilds the
+     * advertised form around it.
      *
-     * They are not the same string and on some hardware they never converge. A Meshtastic
-     * radio advertises `<short name>_<last 4 of its MAC>`, but the GAT562s advertise
-     * `GAT562_xxxx` whatever the owner is renamed to, which the iOS client shows too, so it
-     * is the firmware's doing and not something a client can argue with. Even where the
-     * advertisement does follow the short name, it carries the short name and the MAC tail,
-     * never the long name the user typed.
+     * The two are not the same string and on some hardware they never converge: the GAT562s
+     * advertise `GAT562_xxxx` whatever the owner is renamed to, which the iOS client shows
+     * too, so it is the firmware's doing and not something a client can argue with.
      *
-     * So the owner record is the authority here. It is also live: renaming the radio in
-     * Settings writes the users row, and this follows it without needing a reconnect.
+     * Live, not just per connect: renaming the radio in Settings writes the users row, and
+     * this follows it without needing a reconnect.
      */
     private suspend fun refreshOwnerName(nodeNum: Long) {
         val address = radioManager.currentAddress ?: return
-        val owner = database.userDao().get(nodeNum)?.longName?.takeIf { it.isNotBlank() } ?: return
+        val short = database.userDao().get(nodeNum)?.shortName?.takeIf { it.isNotBlank() } ?: return
         prefs.edit { prefs ->
             val known = prefs.knownRadios()
             val entry = known.firstOrNull { it.address == address } ?: return@edit
-            if (entry.ownerName == owner) return@edit
-            Log.i(TAG, "Saved radio $address is \"$owner\" (advertised \"${entry.name}\")")
-            val updated = entry.copy(ownerName = owner)
+            if (entry.ownerShort == short) return@edit
+            val updated = entry.copy(ownerShort = short)
+            Log.i(TAG, "Saved radio $address is \"${updated.label}\" (advertised \"${entry.name}\")")
             prefs[PrefKeys.KNOWN_RADIOS] =
                 encodeRadios(listOf(updated) + known.filterNot { it.address == address })
         }
