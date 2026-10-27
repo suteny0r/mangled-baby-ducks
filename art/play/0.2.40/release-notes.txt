@@ -1,0 +1,5 @@
+<en-US>
+Long messages now send reliably. A message too long for one packet is split, and each piece now waits for the mesh to confirm the one before it. Previously the pieces went out half a second apart, which is faster than a relay can repeat them, so the second and third were often never passed on and sat on "sending" forever. A long message takes a little longer to go out now, and all of it arrives.
+
+Saved radios in the connection list are named from the radio itself rather than from what it broadcasts over Bluetooth, so renaming a radio or changing its short name icon now shows up in the list. Some radios broadcast their hardware model no matter what you call them, and those were the ones stuck with the wrong name.
+</en-US>

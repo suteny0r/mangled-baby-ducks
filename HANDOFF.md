@@ -9,7 +9,7 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
-## The saved radio list wore the advertised name, not the user's (unreleased, 2026-10-26, NOT verified)
+## The saved radio list wore the advertised name, not the user's (0.2.40, 2026-10-26, VERIFIED on the phone)
 
 Reported from the phone: rename a radio and pick a short-name icon, and every surface shows
 the new name except the radio list on the Connect screen. Other radios there read
@@ -45,9 +45,9 @@ owner in Settings updates the list immediately. `rememberRadio` carries the exis
 `ownerShort` forward, because it runs on every connect and would otherwise wipe a name that
 is learned later in the session than the row is written.
 
-Not verified on the phone yet; the GAT562 row is the one to look at.
+Verified on the phone: the GAT562 row reads its icon and MAC tail instead of `GAT562_xxxx`.
 
-## Split messages: pieces two and three went into a deaf relay (unreleased, 2026-10-26, VERIFIED on the phone)
+## Split messages: pieces two and three went into a deaf relay (0.2.40, 2026-10-26, VERIFIED on the phone)
 
 First real test of the 0.2.38 splitter, on channel 1. Three pieces, all sent, the first
 delivered, the other two stuck on "sending" for over a minute. The log says what happened:
