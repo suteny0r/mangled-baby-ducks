@@ -9,6 +9,66 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## A native crash in MapLibre, and the map lifecycle bugs found looking for it (unreleased, 2026-10-26, NOT verified)
+
+**The crash.** 2026-10-26 20:19:13 on the Note 20, 0.2.38 installed from Play (versionCode
+40, updated 19:08), 70 minutes into the process:
+
+```
+F libc : Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x676c6962523f41
+  pid 11500, tid 11500, name angledbabyducks  >>> com.suteny0r.mangledbabyducks <<<
+  #00..#08  split_config.arm64_v8a.apk!libmaplibre.so
+  #09 libutils.so (android::Looper::pollInner)
+  #10 libutils.so (android::Looper::pollOnce)
+  #11 libandroid_runtime.so (android_os_MessageQueue_nativePollOnce)
+  #12..#16 MessageQueue.next / Looper.loop / ActivityThread.main
+```
+
+Facts, not inference: it is a native segfault, not a Kotlin exception; there is **no app
+code in the stack**; it is on the main thread, dispatched from MapLibre's run loop as the
+looper drains its queue. The fault address `0x00676c6962523f41` is seven bytes of ASCII
+plus a NUL, so a string was used as a pointer. `x6`/`x7` held `"https://"` and `"tiles.op"`
+(little-endian), that is, a tile or style URL. This is the shape of a use after free in the
+resource path, not a null dereference. It is the only crash of this app in the device's
+crash buffer, which reaches back to 10-25.
+
+The frames cannot be symbolicated. The shipped `libmaplibre.so` is stripped: its build id
+(`bfa9838e4f515076aebd8b1c06642b4acb3f8fa0`) matches the `org.maplibre.gl:android-sdk:11.8.5`
+AAR in the Gradle cache exactly, but that binary exports one `FUNC` symbol anywhere near
+those addresses, so every frame resolves to `AndroidGLRenderableResource::swap+0x3xxxxx`,
+which is noise. Symbolicating this properly needs an unstripped build of MapLibre.
+
+**What was found by reading our side.** Decompiling `MapView` out of the AAR with `javap -c`
+settled what the lifecycle calls actually do, and turned up two real bugs regardless of
+whether either caused this crash:
+
+- `onDispose` called `mapView.onDestroy()` and nothing else. Leaving the Map tab destroys
+  the view while the activity is still RESUMED, so the lifecycle observer never delivers
+  the pause and stop, and `onDestroy` does not do them itself. `onStop()` is the *only*
+  thing that calls `FileSource.deactivate()` and `ConnectivityReceiver.deactivate()`
+  (verified in the bytecode), so every visit to the Map tab leaked one file-source
+  activation and one registered connectivity receiver. Now `onPause()`, `onStop()`,
+  `onDestroy()`; the first two are guarded internally against a second call.
+- `getMapAsync` has **no destroyed guard**: if the map object exists it invokes the
+  callback immediately, destroyed or not. Nor is a pending `setStyle` callback cancelled;
+  it fires from native code when the tiles arrive, which may be after the tab was switched
+  away. All four deferred callbacks in `MapScreen` now check an `AtomicBoolean alive` that
+  `onDispose` clears first. Touching a destroyed map is a use after free in exactly the
+  library the tombstone names.
+
+Also fixed in passing: the map click and long-click listeners were registered inside
+`LaunchedEffect(satellite)`, so flipping the satellite toggle five times left five
+listeners all answering the same tap. They are registered once now.
+
+**This is not a confirmed fix.** The crash was not reproduced, the stack has no app frames,
+and none of the three bugs above is *proven* to be the one. What can be said is that they
+are real, that the guard closes the one path where our code can hand a destroyed native map
+to MapLibre, and that the leak closes the one where our code accumulates native state across
+tab switches. If it recurs, the next step is a MapLibre build with symbols.
+
+The message-splitting work in 0.2.38 is not implicated: it is Kotlin only and is not in this
+stack.
+
 ## Long messages are accepted and sent as several packets (unreleased, 2026-10-26, NOT verified on the phone)
 
 The composer used to clamp the draft at `MeshProtocol.MAX_TEXT_BYTES` (200), dropping code

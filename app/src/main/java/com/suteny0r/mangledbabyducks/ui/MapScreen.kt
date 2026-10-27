@@ -106,6 +106,7 @@ import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
 import org.maplibre.geojson.LineString
 import org.maplibre.geojson.Point
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Streets: keyless openfreemap vector style. Shared with the message map thumbnails. */
 internal const val STREETS_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
@@ -312,10 +313,19 @@ fun MapScreen(vm: MapViewModel = viewModel(), focusNode: Long? = null, tracerout
     // Per-MapView fit flag: the view is destroyed and recreated on tab switches,
     // so a file-level flag would suppress the re-fit forever.
     val fitState = remember { FitState() }
+    // The gate on every deferred map callback below. MapLibre does not cancel these when
+    // the view goes away, and `getMapAsync` has no guard of its own: once the map object
+    // exists it runs the callback immediately, destroyed or not. Touching a destroyed map
+    // is a use after free down in libmaplibre.so, which arrives as SIGSEGV with no Java
+    // stack, not as an exception. A style that is still loading when the tab is switched
+    // away is the easy way to hit it, because that callback fires from native code
+    // whenever the tiles happen to arrive.
+    val alive = remember { AtomicBoolean(true) }
 
     // Re-apply the style (and our layers on top of it) whenever the toggle flips.
     LaunchedEffect(satellite) {
         mapView.getMapAsync { map ->
+            if (!alive.get()) return@getMapAsync
             // The attribution chip below replaces MapLibre's bottom-start logo and "i"
             // button, which it would otherwise overlap. MapLibre itself is credited in
             // Settings > About and licenses.
@@ -327,29 +337,37 @@ fun MapScreen(vm: MapViewModel = viewModel(), focusNode: Long? = null, tracerout
                 Style.Builder().fromUri(STREETS_STYLE_URL)
             }
             map.setStyle(builder) { style ->
+                if (!alive.get()) return@setStyle
                 addNodeLayers(style, satellite)
                 addRouteLayers(style)
                 renderNodes(map, currentNodes.value, fitState)
                 renderWaypoints(map, currentWaypoints.value)
             }
-            // The node map is one node with no waypoint editing, so neither gesture applies.
-            if (focusNode == null) {
-                map.addOnMapLongClickListener { latLng ->
-                    newWaypointAt = latLng.latitude to latLng.longitude
-                    true
-                }
-                map.addOnMapClickListener { latLng ->
-                    // Only a tap on a node circle or its label opens the detail
-                    // screen; a tap on empty space returns false (not our gesture).
-                    val point = map.projection.toScreenLocation(latLng)
-                    val hit = map.queryRenderedFeatures(point, CIRCLE_LAYER_ID, LABEL_LAYER_ID)
-                        .firstOrNull { it.hasProperty("nodeNum") }
-                        ?: return@addOnMapClickListener false
-                    val num = hit.getNumberProperty("nodeNum")?.toLong()
-                        ?: return@addOnMapClickListener false
-                    detailNode = num
-                    true
-                }
+        }
+    }
+
+    // Gestures are registered once per map, not once per style: keyed on the satellite
+    // toggle they were added again on every flip, and five flips meant five listeners all
+    // answering the same tap.
+    // The node map is one node with no waypoint editing, so neither gesture applies.
+    if (focusNode == null) LaunchedEffect(Unit) {
+        mapView.getMapAsync { map ->
+            if (!alive.get()) return@getMapAsync
+            map.addOnMapLongClickListener { latLng ->
+                newWaypointAt = latLng.latitude to latLng.longitude
+                true
+            }
+            map.addOnMapClickListener { latLng ->
+                // Only a tap on a node circle or its label opens the detail
+                // screen; a tap on empty space returns false (not our gesture).
+                val point = map.projection.toScreenLocation(latLng)
+                val hit = map.queryRenderedFeatures(point, CIRCLE_LAYER_ID, LABEL_LAYER_ID)
+                    .firstOrNull { it.hasProperty("nodeNum") }
+                    ?: return@addOnMapClickListener false
+                val num = hit.getNumberProperty("nodeNum")?.toLong()
+                    ?: return@addOnMapClickListener false
+                detailNode = num
+                true
             }
         }
     }
@@ -361,6 +379,7 @@ fun MapScreen(vm: MapViewModel = viewModel(), focusNode: Long? = null, tracerout
         val target = nodes.firstOrNull { it.nodeNum == num } ?: return@LaunchedEffect
         router.pendingMapNode.value = null
         mapView.getMapAsync { map ->
+            if (!alive.get()) return@getMapAsync
             map.animateCamera(
                 CameraUpdateFactory.newLatLngZoom(
                     LatLng(target.latitudeI / 1e7, target.longitudeI / 1e7),
@@ -384,6 +403,16 @@ fun MapScreen(vm: MapViewModel = viewModel(), focusNode: Long? = null, tracerout
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            // Nothing deferred may touch the map from here on.
+            alive.set(false)
+            // Leaving the Map tab destroys this view while the activity is still
+            // RESUMED, so the observer above never delivers the pause and stop, and
+            // onDestroy does not do them itself: onStop is the only thing that releases
+            // MapLibre's FileSource activation and unregisters its connectivity
+            // receiver, so every visit to the tab leaked one of each. Both are guarded
+            // against a second call, so this is safe when the stop already arrived.
+            mapView.onPause()
+            mapView.onStop()
             mapView.onDestroy()
         }
     }
@@ -400,6 +429,7 @@ fun MapScreen(vm: MapViewModel = viewModel(), focusNode: Long? = null, tracerout
                 val currentWaypointList = waypoints
                 val currentRouteView = route
                 view.getMapAsync { map ->
+                    if (!alive.get()) return@getMapAsync
                     renderNodes(map, currentDisplayNodes, fitState)
                     renderWaypoints(map, currentWaypointList)
                     renderRoutePath(map, currentRouteView)
