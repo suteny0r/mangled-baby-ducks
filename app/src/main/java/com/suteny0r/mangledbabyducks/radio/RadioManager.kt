@@ -28,6 +28,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.meshtastic.proto.AdminProtos
 import org.meshtastic.proto.AppOnlyProtos
 import org.meshtastic.proto.ChannelProtos
@@ -187,6 +188,15 @@ class RadioManager(
     val incomingMessages = MutableSharedFlow<MessageEntity>(extraBufferCapacity = 64)
 
     private val configCompleteIds = MutableSharedFlow<Long>(extraBufferCapacity = 16)
+
+    /**
+     * Routing outcomes, for callers that want to wait on one (see [awaitAck]). Replayed,
+     * because a subscriber that asks after the ack has already landed would otherwise wait
+     * out the whole timeout for news that has been and gone; packet ids are random 32-bit,
+     * so a replayed outcome can only ever match the packet it belongs to.
+     */
+    private val ackOutcomes =
+        MutableSharedFlow<PacketIngest.AckResult>(replay = 16, extraBufferCapacity = 64)
     /** When the last NodeInfo of the dump landed, to time the radio's trailing CONFIG_COMPLETE. */
     private var lastNodeInfoAt = 0L
     /**
@@ -705,6 +715,37 @@ class RadioManager(
                     send { it.setWantConfigId(MeshProtocol.NONCE_ONLY_CONFIG) }
                 }
             }
+            // The radio's verdict on the last packet we handed it. It was being logged as
+            // "Unhandled" and thrown away, which hid the one case where a send is dead on
+            // arrival: a full transmit queue. A rejected packet is never transmitted and
+            // never acked, so the row sat on "sending" for good.
+            MeshProtos.FromRadio.PayloadVariantCase.QUEUESTATUS -> {
+                val status = fromRadio.queueStatus
+                val id = status.meshPacketId.uint()
+                if (status.res != 0) {
+                    Log.w(
+                        TAG,
+                        "Radio refused ${"0x%08x".format(id)}: res=${status.res} " +
+                            "queue ${status.free}/${status.maxlen} free",
+                    )
+                    if (id != 0L) {
+                        db.messageDao().applyAck(
+                            messageId = id,
+                            receivedAck = false,
+                            realAck = false,
+                            ackError = status.res,
+                            ackSnr = 0f,
+                            ackTimestamp = System.currentTimeMillis(),
+                            relayNode = 0L,
+                        )
+                    }
+                } else {
+                    Log.d(
+                        TAG,
+                        "Queued ${"0x%08x".format(id)}: ${status.free}/${status.maxlen} free",
+                    )
+                }
+            }
             else -> Log.d(TAG, "Unhandled FromRadio: ${fromRadio.payloadVariantCase}")
         }
     }
@@ -723,7 +764,12 @@ class RadioManager(
             Portnums.PortNum.POSITION_APP -> ingest.positionPacket(packet, myNum)
             Portnums.PortNum.TELEMETRY_APP -> ingest.telemetryPacket(packet, myNum)
             Portnums.PortNum.ADMIN_APP -> ingest.adminResponse(packet)
-            Portnums.PortNum.ROUTING_APP -> ingest.routing(packet, myNum)?.let { healPkiFailure(it) }
+            Portnums.PortNum.ROUTING_APP -> ingest.routing(packet, myNum)?.let {
+                // tryEmit, never emit: this is the radio's event loop, and it must not be
+                // parked behind a waiter. A dropped outcome costs a waiter its timeout.
+                ackOutcomes.tryEmit(it)
+                healPkiFailure(it)
+            }
             Portnums.PortNum.TRACEROUTE_APP -> ingest.traceroute(packet)
             Portnums.PortNum.WAYPOINT_APP -> ingest.waypointPacket(packet)
             else -> Log.d(TAG, "Unhandled port ${packet.decoded.portnum}")
@@ -884,12 +930,8 @@ class RadioManager(
         }
         var allSent = true
         parts.forEachIndexed { index, part ->
-            if (index > 0) {
-                // Space the pieces out. The radio queues them either way, but the thread
-                // is ordered by timestamp, and a millisecond tie would show them shuffled.
-                delay(PART_GAP_MS)
-            }
-            val sent = sendOnePart(
+            if (index > 0) delay(PART_GAP_MS)
+            val id = sendOnePart(
                 text = part,
                 myNum = myNum,
                 toNum = toNum,
@@ -897,12 +939,52 @@ class RadioManager(
                 replyId = if (index == 0) replyId else 0,
                 isEmoji = isEmoji,
             )
-            if (!sent) allSent = false
+            if (id == null) {
+                allSent = false
+            } else if (index < parts.lastIndex) {
+                // Wait for this piece to be acked before handing over the next one.
+                //
+                // Measured, not assumed: three pieces 500 ms apart, all three accepted by
+                // the radio, and only the first ever acked. The other two were never heard
+                // again, in either direction.
+                //
+                // A radio is half duplex, and a channel broadcast is acked only by hearing
+                // a neighbour rebroadcast it. The relay spends a second or two rebroadcasting
+                // piece one, and it is deaf for every bit of that. Pieces two and three were
+                // transmitted straight into those deaf seconds, so nobody relayed them,
+                // nothing came back, and they sat on "sending" for good.
+                //
+                // The ack is therefore the exact signal we need: it means a neighbour has
+                // finished rebroadcasting and is listening again. On a timeout we send the
+                // rest anyway, because a message half delivered is worse than one sent into
+                // a mesh that may simply be quiet.
+                val acked = awaitAck(id, PART_ACK_TIMEOUT_MS)
+                if (!acked) {
+                    Log.w(
+                        TAG,
+                        "Part ${index + 1}/${parts.size} (${"0x%08x".format(id)}) not acked " +
+                            "in ${PART_ACK_TIMEOUT_MS}ms; sending the rest anyway",
+                    )
+                }
+            }
         }
         return allSent
     }
 
-    /** One packet's worth of text: the body of the original single-packet sendTextMessage. */
+    /**
+     * Wait for the routing outcome of one packet. True for an ack, false for a nak or a
+     * timeout: both mean the next piece should go without waiting any longer.
+     */
+    private suspend fun awaitAck(packetId: Long, timeoutMs: Long): Boolean =
+        withTimeoutOrNull(timeoutMs) {
+            ackOutcomes.first { it.messageId == packetId }.errorReason == 0
+        } ?: false
+
+    /**
+     * One packet's worth of text: the body of the original single-packet sendTextMessage.
+     * Returns the packet id it was sent under, which is what [awaitAck] waits on, or null
+     * if it never reached the radio.
+     */
     private suspend fun sendOnePart(
         text: String,
         myNum: Long,
@@ -910,9 +992,9 @@ class RadioManager(
         onChannel: Int,
         replyId: Long,
         isEmoji: Boolean,
-    ): Boolean {
+    ): Long? {
         val payload = text.encodeToByteArray()
-        if (payload.size > MeshProtocol.MAX_TEXT_BYTES) return false
+        if (payload.size > MeshProtocol.MAX_TEXT_BYTES) return null
 
         val messageId = Random.nextLong(255L, 0xFFFFFFFFL)
         // AccessoryManager+ToRadio: our own DM row is marked encrypted when we hold the
@@ -951,7 +1033,7 @@ class RadioManager(
             .build()
         return runCatching {
             send { it.setPacket(packet) }
-        }.isSuccess
+        }.fold(onSuccess = { messageId }, onFailure = { null })
     }
 
     private suspend fun sendAdmin(build: (AdminProtos.AdminMessage.Builder) -> AdminProtos.AdminMessage.Builder): Boolean {
@@ -1707,8 +1789,16 @@ class RadioManager(
         private const val KEY_EXCHANGE_COOLDOWN_MS = 5 * 60_000L
         /** Floor between automatic NodeInfo broadcasts; the whole mesh hears these. */
         private const val KEY_BROADCAST_COOLDOWN_MS = 15 * 60_000L
-        /** Gap between the pieces of a split text message. */
+        /** Settling gap between the pieces of a split text message, on top of the ack wait. */
         private const val PART_GAP_MS = 500L
+
+        /**
+         * How long one piece of a split message may wait for its ack before the next goes
+         * anyway. Long enough for a relay to rebroadcast and for the firmware's own
+         * retransmits of a wantAck broadcast, short enough that a quiet mesh does not
+         * strand the rest of the message.
+         */
+        private const val PART_ACK_TIMEOUT_MS = 30_000L
         private const val CONNECT_ATTEMPTS = 3
         private const val MAX_RECONNECT_ATTEMPTS = 10
         private const val RECONNECT_DELAY_MS = 2_000L

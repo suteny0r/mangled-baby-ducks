@@ -9,6 +9,54 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## Split messages: pieces two and three went into a deaf relay (unreleased, 2026-10-26, measured on the phone)
+
+First real test of the 0.2.38 splitter, on channel 1. Three pieces, all sent, the first
+delivered, the other two stuck on "sending" for over a minute. The log says what happened:
+
+```
+21:22:05.957 RadioManager: Message of 471 bytes split into 3 packets
+21:22:06.144 RadioManager: Unhandled FromRadio: QUEUESTATUS
+21:22:06.775 RadioManager: Unhandled FromRadio: QUEUESTATUS
+21:22:07.360 RadioManager: Unhandled FromRadio: QUEUESTATUS
+21:22:07.773 PacketIngest: Send 0x8c5c2b77 acked on channel 1, relay …ae
+```
+
+Three QueueStatus replies, so the radio accepted all three packets. Exactly one ack. The
+other two produced no routing packet at all, not even a nak, ever.
+
+**Why.** A radio is half duplex, and a channel broadcast is acked only by hearing a
+neighbour rebroadcast it. The relay spends a second or two rebroadcasting piece one and is
+deaf for every bit of that. `PART_GAP_MS` was 500 ms, so pieces two and three were
+transmitted straight into those deaf seconds. Nobody relayed them, so nothing came back,
+and the rows sat on "sending" for good. The gap was picked to keep the thread's timestamps
+in order, with no thought for airtime, and the mesh charged for it.
+
+**The fix is to pace on the ack, not on a clock.** The ack *is* the signal that a neighbour
+has finished rebroadcasting and is listening again, which is precisely the condition the
+next piece needs. `sendTextMessage` now waits for each piece's routing outcome before
+handing over the next (`awaitAck`, fed by a replayed `ackOutcomes` SharedFlow), with
+`PART_ACK_TIMEOUT_MS` = 30 s after which the rest goes anyway: a message half delivered is
+worse than one sent into a mesh that is merely quiet. `PART_GAP_MS` stays as a 500 ms
+settling gap on top.
+
+The flow is replayed (16) because a waiter that subscribes after its ack has already landed
+would otherwise sit out the full timeout for news that had been and gone. Packet ids are
+random 32-bit, so a replayed outcome can only match its own packet. Emission is `tryEmit`:
+that code path is the radio's event loop and must never park behind a waiter.
+
+Consequence worth knowing: the pieces now appear in the thread one at a time as each is
+acked, rather than all at once. That is honest about what is on the air, but it does mean
+a long message takes as long as the mesh takes.
+
+**`QUEUESTATUS` was being logged as "Unhandled" and discarded.** It carries `res`, the
+radio's verdict on the packet just handed over, plus the free/max queue depth and the
+packet id. A non-zero `res` means the packet was refused and will never be transmitted or
+acked, which is another way to sit on "sending" forever. It is now parsed: refusals are
+logged with the queue depth and mark the row failed, and acceptances log the depth at debug.
+In this capture all three were accepted, so the queue was not the problem here, but it was
+indistinguishable from the problem until now.
+
 ## A map thumbnail outlived its snapshotter and segfaulted (unreleased, 2026-10-26, NOT verified)
 
 **The crash.** 2026-10-26 20:19:13 on the Note 20, 0.2.38 installed from Play (versionCode
