@@ -6,6 +6,7 @@ import android.graphics.PointF
 import android.util.Log
 import android.util.LruCache
 import com.suteny0r.mangledbabyducks.db.MapNode
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -66,45 +67,80 @@ object MapThumbnail {
         val target = LatLng(latitude, longitude)
         val bounds = frame(target, meshNodes) ?: return null
         return runCatching {
-            // The snapshotter talks to the native renderer and must be driven from the main
-            // thread; only the waiting happens off it.
+            // Every native call here happens on the main thread, including reading the
+            // projection back out of the finished snapshot; only the waiting happens off it.
             withContext(Dispatchers.Main) {
                 MapLibre.getInstance(context)
-                snapshot(context, bounds, widthPx, heightPx)
-            }?.let { snapshot ->
-                val rendered = Rendered(
+                val snapshot = snapshot(context, bounds, widthPx, heightPx)
+                    ?: return@withContext null
+                Rendered(
                     bitmap = snapshot.bitmap,
                     pin = snapshot.pixelForLatLng(target),
                     nodes = meshNodes.map { snapshot.pixelForLatLng(LatLng(it.latitude, it.longitude)) },
                 )
-                cache.put(key, rendered)
-                rendered
-            }
-        }.getOrElse {
-            Log.w(TAG, "Snapshot failed: ${it.message}")
+            }?.also { cache.put(key, it) }
+        }.getOrElse { failure ->
+            // runCatching catches CancellationException too, and swallowing that turns a
+            // cancelled thumbnail into a coroutine that will not die.
+            if (failure is CancellationException) throw failure
+            Log.w(TAG, "Snapshot failed: ${failure.message}")
             null
         }
     }
 
+    /**
+     * A snapshot, with the snapshotter released deterministically afterwards.
+     *
+     * [MapSnapshotter.cancel] is the only orderly way to shut one down. Without it the
+     * object is eventually collected and its native peer destroyed by `finalize()` on the
+     * GC's thread, which is how a crash arrives:
+     *
+     * ```
+     * mbgl::MapSnapshotter::Impl::onDidFinishLoadingStyle
+     *   mbgl::Map::Impl::onStyleLoaded
+     *     mbgl::style::Style::Impl::parse
+     *       mbgl::FileSourceRequest::setResponse
+     *         mbgl::Mailbox::receive ... mbgl::util::RunLoop::process
+     * ```
+     *
+     * The style response comes back after the Impl is gone and calls into freed memory:
+     * SIGSEGV on the main thread, no Java frames, nothing to catch. Scrolling a thread
+     * away from a map link while its style is still loading is all it takes.
+     *
+     * The cancel is in a `finally` so it covers the success, the error and the cancelled
+     * path alike, and it runs on the main thread because the caller confines this whole
+     * function there: [MapSnapshotter.cancel] checks the thread and throws otherwise.
+     * [MapSnapshot] owns a separate native handle with its own finalizer, so the returned
+     * snapshot stays usable after its snapshotter is gone.
+     */
     private suspend fun snapshot(
         context: Context,
         bounds: LatLngBounds,
         widthPx: Int,
         heightPx: Int,
-    ): MapSnapshot? = suspendCancellableCoroutine { continuation ->
+    ): MapSnapshot? {
         val options = MapSnapshotter.Options(widthPx, heightPx)
             .withRegion(bounds)
             .withStyle(STREETS_STYLE_URL)
             .withLogo(false)
         val snapshotter = MapSnapshotter(context, options)
-        continuation.invokeOnCancellation { runCatching { snapshotter.cancel() } }
-        snapshotter.start(
-            { snapshot -> if (continuation.isActive) continuation.resume(snapshot) },
-            { error ->
-                Log.w(TAG, "Snapshotter error: $error")
-                if (continuation.isActive) continuation.resume(null)
-            },
-        )
+        try {
+            return suspendCancellableCoroutine { continuation ->
+                snapshotter.start(
+                    { snapshot -> if (continuation.isActive) continuation.resume(snapshot) },
+                    { error ->
+                        Log.w(TAG, "Snapshotter error: $error")
+                        if (continuation.isActive) continuation.resume(null)
+                    },
+                )
+            }
+        } finally {
+            // Never from inside the callback above: that would destroy the object native
+            // code is still returning through. The continuation resumes through the main
+            // dispatcher, so by here the native call has unwound.
+            runCatching { snapshotter.cancel() }
+                .onFailure { Log.w(TAG, "Snapshotter cancel failed: ${it.message}") }
+        }
     }
 
     /**

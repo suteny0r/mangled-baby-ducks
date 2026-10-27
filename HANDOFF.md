@@ -9,7 +9,7 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
-## A native crash in MapLibre, and the map lifecycle bugs found looking for it (unreleased, 2026-10-26, NOT verified)
+## A map thumbnail outlived its snapshotter and segfaulted (unreleased, 2026-10-26, NOT verified)
 
 **The crash.** 2026-10-26 20:19:13 on the Note 20, 0.2.38 installed from Play (versionCode
 40, updated 19:08), 70 minutes into the process:
@@ -32,11 +32,77 @@ plus a NUL, so a string was used as a pointer. `x6`/`x7` held `"https://"` and `
 resource path, not a null dereference. It is the only crash of this app in the device's
 crash buffer, which reaches back to 10-25.
 
-The frames cannot be symbolicated. The shipped `libmaplibre.so` is stripped: its build id
-(`bfa9838e4f515076aebd8b1c06642b4acb3f8fa0`) matches the `org.maplibre.gl:android-sdk:11.8.5`
-AAR in the Gradle cache exactly, but that binary exports one `FUNC` symbol anywhere near
-those addresses, so every frame resolves to `AndroidGLRenderableResource::swap+0x3xxxxx`,
-which is noise. Symbolicating this properly needs an unstripped build of MapLibre.
+**Symbolicating it: where the symbols actually are.** The shipped `libmaplibre.so` is
+stripped to 5275 exported symbols, none near the crash, so every frame first resolved to
+`AndroidGLRenderableResource::swap+0x3xxxxx`, which is noise. This has **nothing to do with
+release builds**: the `lib/arm64-v8a/libmaplibre.so` in our debug APK is byte identical to
+the release one (SHA-256 `F65E9B77…`, both straight out of the AAR), and
+`isMinifyEnabled = false` on release anyway. Building debug to get native symbols is wasted
+effort.
+
+MapLibre publishes the unstripped libraries as GitHub release assets, not on Maven Central:
+
+```
+gh release view android-v11.8.5 --repo maplibre/maplibre-native --json assets
+  debug-symbols-maplibre-android-opengl-android-v11.8.5.tar.gz   (210 MB, this is the one)
+  debug-symbols-maplibre-android-vulkan-android-v11.8.5.tar.gz
+```
+
+Take the **opengl** archive (the stack names `AndroidGLRenderableResource`), pull
+`./arm64-v8a/libmaplibre.so` out of it, and confirm its build id matches the tombstone's
+(`bfa9838e4f515076aebd8b1c06642b4acb3f8fa0`) before trusting a single address. That file has
+26045 function symbols. No NDK is needed: `tools/elfsym.py` (kept in the repo) is an ELF64 reader
+that prints the build id and the nearest preceding `STT_FUNC` symbol for each address, which
+is all a tombstone's `pc` offsets need. Keep it.
+
+**What the symbols said.** Bottom to top:
+
+```
+looperCallbackDefault
+ mbgl::util::RunLoop::process
+  mbgl::WorkTaskImpl<...>::operator()
+   mbgl::Mailbox::scheduleToRecieve lambda
+    mbgl::Mailbox::receive
+     mbgl::FileSourceRequest::setResponse          <- a style/tile response arrives
+      mbgl::style::Style::Impl::parse(string)
+       mbgl::Map::Impl::onStyleLoaded
+        mbgl::MapSnapshotter::Impl::onDidFinishLoadingStyle+0x8   <- SIGSEGV
+```
+
+**The snapshotter, not the map view.** It faults 8 bytes into the function, on the first
+dereference of `this`. The style finished loading for a `MapSnapshotter::Impl` that had
+already been freed.
+
+That is `MapThumbnail`, which renders the still map behind a shared location in a message
+thread, so it runs on the **Messages** tab. The user confirmed they were not on the Map tab,
+which fits exactly.
+
+`MapThumbnail.snapshot` created a `MapSnapshotter`, called `start`, and never called
+`cancel()` on either the success or the error path; `cancel()` is the only orderly shutdown.
+The object then became unreachable and its native peer was destroyed by `finalize()` (it has
+a `protected native void finalize()`, confirmed by `javap`) on the GC's thread, at an
+arbitrary later moment, while a style request was still in flight. The response came back on
+the main run loop and called into freed memory. Scrolling a map link out of view while its
+style loads is enough; nothing user-visible marks the moment, which is why it took 70
+minutes to land.
+
+The fix holds the snapshotter in a `try`/`finally` and cancels it there, covering success,
+error and cancellation alike. Three details that matter:
+
+- The cancel must not happen inside the snapshot callback: that destroys the object native
+  code is still returning through. The continuation resumes through the main dispatcher, so
+  by the time `finally` runs the native call has unwound.
+- `MapSnapshotter.cancel()` calls `checkThread()` and throws off the main thread. The whole
+  function is confined to `Dispatchers.Main` by its caller, so `finally` lands there too.
+  The old `invokeOnCancellation { runCatching { snapshotter.cancel() } }` ran on whichever
+  thread did the cancelling and swallowed that throw silently, which is likely how the
+  cancellation path missed it as well.
+- `MapSnapshot` owns a *separate* native handle with its own finalizer, so cancelling the
+  snapshotter does not invalidate the returned snapshot. `pixelForLatLng` was also being
+  called off the main thread after `withContext` returned; it is inside now.
+
+Also fixed there: `runCatching` around the whole render swallowed `CancellationException`,
+which keeps a cancelled coroutine alive. It is rethrown now.
 
 **What was found by reading our side.** Decompiling `MapView` out of the AAR with `javap -c`
 settled what the lifecycle calls actually do, and turned up two real bugs regardless of
@@ -60,11 +126,13 @@ Also fixed in passing: the map click and long-click listeners were registered in
 `LaunchedEffect(satellite)`, so flipping the satellite toggle five times left five
 listeners all answering the same tap. They are registered once now.
 
-**This is not a confirmed fix.** The crash was not reproduced, the stack has no app frames,
-and none of the three bugs above is *proven* to be the one. What can be said is that they
-are real, that the guard closes the one path where our code can hand a destroyed native map
-to MapLibre, and that the leak closes the one where our code accumulates native state across
-tab switches. If it recurs, the next step is a MapLibre build with symbols.
+The two `MapScreen` bugs above were found while the crash was still unsymbolicated, and the
+symbols then pointed somewhere else entirely. They are real and worth keeping, but they are
+**not** what crashed: do not record them as the cause.
+
+Still not reproduced. The snapshotter diagnosis rests on the symbolicated stack plus the
+missing `cancel()`, which is a strong chain but not a repro. If it recurs, re-symbolicate
+before theorising; the recipe above takes about ten minutes.
 
 The message-splitting work in 0.2.38 is not implicated: it is Kotlin only and is not in this
 stack.
