@@ -1,0 +1,3 @@
+<en-US>
+Fixes a crash in message threads that contain map links. Opening a thread with several map links and scrolling away before the small map previews finished loading could take the whole app down, sometimes within a second of the first tap. The preview renderer now stays alive for the life of the app instead of being torn down mid-load, and a preview that was interrupted is simply drawn again when you scroll back.
+</en-US>
