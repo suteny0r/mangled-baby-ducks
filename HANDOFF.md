@@ -118,7 +118,80 @@ Three for three, 7.8 s end to end. Two things the numbers settle:
 Compare the failing capture at 21:22, which is in this same log: three QueueStatus replies
 within 1.4 s, one ack, and nothing ever again for the other two.
 
-## A map thumbnail outlived its snapshotter and segfaulted (unreleased, 2026-10-26, NOT verified)
+## The snapshotter crash is MapLibre's finalizer, and cancel() made it worse (0.2.41, 2026-11-07, NOT verified)
+
+Supersedes the 2026-10-26 section below. That diagnosis (snapshotter freed by the GC while
+its style loads) was right; the fix (cancel it in a `finally`) was wrong, and shipped in
+0.2.39 and 0.2.40.
+
+**What happened.** The Note 20 on 0.2.40 (Play, versionCode 42) crashed at 09:14:49 and
+09:18:34 on 2026-11-07, both within a second of `libmaplibre.so` being loaded for the first
+time in that process, both right after a tap, with the style request logged as cancelled in
+between. A second user's report (`mangled-baby-ducks-log-20261107-083556.zip`, Galaxy S20
+FE, 0.2.40) carries five more between 10-28 and 11-06. Every one has the same frames 1 to 8:
+
+```
+looperCallbackDefault / RunLoop::process / Mailbox::receive
+ FileSourceRequest::setResponse -> style::Style::Impl::parse
+  Map::Impl::onStyleLoaded+0x74                       <- virtual call on the observer
+   MapSnapshotter::Impl::onDidFinishLoadingStyle+0x8  <- or the jump lands in garbage
+```
+
+Frame 0 varies (`+0x8` of that function, `BasicComparison::eachChild`, `Match::eachChild`,
+or a non-executable page of the APK) because it is a virtual call through a freed object:
+whatever the heap put there decides where the jump goes. Symbolicated with the 11.8.5 opengl
+debug symbols exactly as the section below describes (`tools/elfsym.py`; the tarball is a
+`gh release download`, about a minute).
+
+**The mechanism, from the 11.8.5 sources** (`platform/default/src/mbgl/map/map_snapshotter.cpp`
+and `platform/android/MapLibreAndroid/src/cpp/snapshotter/map_snapshotter.cpp`):
+
+- `MapSnapshotter::Impl::cancel()` is `renderStillCallback.reset();`. Nothing else. The
+  style request, the `Map`, and its observer chain all carry on after a cancel.
+- The Java object has no destroy. The native peer dies in `finalize()`, on the finalizer
+  thread. The JNI destructor frees the JNI wrapper right there and *schedules* the native
+  snapshotter's deletion onto the main run loop. The wrapper is the `MapSnapshotterObserver`
+  that `MapSnapshotter::Impl` holds by reference.
+- A style that finishes, or fails, between those two moments arrives on the main loop and
+  goes `Map::Impl::onStyleLoaded` -> `Impl::onDidFinishLoadingStyle` -> `observer.…()`
+  through freed memory. Failing counts: the other user is offline a lot ("Unable to resolve
+  host") and that path is `onDidFailLoadingMap` -> `observer.onDidFailLoadingStyle()`.
+
+So `cancel()` is precisely the moment the Java object becomes unreachable, with the style
+still loading. Before it, a snapshotter lived until the GC got round to it; after it, a
+thread of map links scrolled away mid-load (the other user's 10-28 log shows six "left the
+composition" cancellations inside 20 ms, then the segfault) handed the GC a batch at once.
+That is why 0.2.38 took 70 minutes to crash and 0.2.40 takes a second.
+
+Upstream `android-v13.7.1` has the identical destructor; upgrading would not fix it.
+
+**The fix** (`MapThumbnail.kt`, builds, not yet on a phone): one `MapSnapshotter` for the
+life of the process, never cancelled, never released. Renders are serialized through it
+(`Mutex`) in an app-owned `CoroutineScope(SupervisorJob() + Dispatchers.Main)`, so a caller
+leaving composition stops its wait and nothing else; the render finishes and lands in the
+cache for the next composition. Identical concurrent keys share one render. A failed render
+sets a flag that reloads the style URL before the next one. A render that has not called
+back in 45 s is written off and its snapshotter parked in a list that is never emptied: a
+parked one leaks a render thread, a released one crashes the app. Side benefit: the style
+and tiles load once per process instead of once per bubble.
+
+Two details that matter if this is touched again:
+
+- `Dispatchers.Main`, not `.immediate`. MapLibre resumes our continuation from inside its
+  own callback and calls `reset()` (which clears the "Snapshotter was already started"
+  guard) only after that callback returns. A posting dispatcher puts the next `start` on a
+  later loop turn; `immediate` would run it inside the callback and trip the guard.
+- `MapSnapshot` has its own native handle and finalizer, so the returned snapshot is fine
+  to keep after the snapshotter has moved on to the next render.
+
+**Verification owed.** Shipped as 0.2.41 for the Play internal testing track (upload set in
+`art/play/0.2.41/`), which is how a build lands over the Play-signed install without wiping
+the node store. The repro on 0.2.40 is cheap: open a thread with several map links and
+scroll it away before the thumbnails appear. With the fix, the same thread should render
+every thumbnail, scroll-away included, and `MapThumbnail` should log nothing but the
+occasional "Snapshotter error" when offline.
+
+## A map thumbnail outlived its snapshotter and segfaulted (2026-10-26; diagnosis right, fix wrong, see above)
 
 **The crash.** 2026-10-26 20:19:13 on the Note 20, 0.2.38 installed from Play (versionCode
 40, updated 19:08), 70 minutes into the process:
