@@ -107,9 +107,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        container.locationSharer.ensureTracking()
+        // Passive only: picks up fixes the phone already has, never starts the GPS.
+        container.locationSharer.onForeground()
         // A deliberate Disconnect forgets the radio, so this stays a no-op then.
         autoConnectIfRemembered()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        container.locationSharer.onBackground()
     }
 
     private fun handleIntent(intent: Intent?) {

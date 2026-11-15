@@ -805,7 +805,7 @@ private fun ThreadView(
             onCancelReply = { replyTo = null },
             isDirect = target is ThreadTarget.Direct,
             myName = names[myNum] ?: "Unknown",
-            here = here,
+            locate = { vm.positionForLink() },
             users = allUsers.filter { it.num != myNum },
             names = names,
             onSend = { text, sharePosition ->
@@ -1320,7 +1320,7 @@ private const val CONFIRM_PACKETS_ABOVE = 5
  * the @mention autocomplete, the field itself with cancel-reply and send, and, while the
  * field has focus, the toolbar: formatting styles (once there are three characters),
  * Alert, Request Position, and the byte gauge. One item is this port's own: a Google Maps
- * link of where we are (the radio's fix, else the phone's).
+ * link of where we are (the radio's fix, else a one-shot phone fix taken on the tap).
  */
 @Composable
 private fun Composer(
@@ -1330,7 +1330,7 @@ private fun Composer(
     onCancelReply: () -> Unit,
     isDirect: Boolean,
     myName: String,
-    here: Pair<Double, Double>?,
+    locate: suspend () -> Pair<Double, Double>?,
     users: List<UserEntity>,
     names: Map<Long, String>,
     onSend: (text: String, sharePosition: Boolean) -> Unit,
@@ -1347,6 +1347,11 @@ private fun Composer(
     var showToolbar by remember { mutableStateOf(false) }
     var linkDialog by remember { mutableStateOf<TextRange?>(null) }
     var sharePosition by rememberSaveable { mutableStateOf(false) }
+    // The map link may have to wait on a phone fix, so it lands on whatever the draft is
+    // by then rather than on the text that was there at the tap.
+    val latestDraft by rememberUpdatedState(draft)
+    var locating by remember { mutableStateOf(false) }
+    val locateScope = rememberCoroutineScope()
     val mentionQuery = remember(text) { MentionParser.activeMentionQuery(text) }
     // The toolbar follows focus, with the original's short grace so a tap on one of its
     // buttons (which takes focus for an instant) does not fold it away.
@@ -1527,8 +1532,24 @@ private fun Composer(
                         append("\uD83D\uDD14 Alert Bell Character! \u0007")
                     }
                     // Not in the original: a map link of where we are, readable by any client.
-                    ToolbarButton(Icons.Outlined.Map, "Map link", enabled = here != null) {
-                        here?.let { (lat, lon) -> append((if (text.isEmpty()) "" else " ") + mapsLink(lat, lon)) }
+                    // The radio's position when it has one. Only when it does not is the
+                    // phone's GPS switched on, for this one fix.
+                    ToolbarButton(Icons.Outlined.Map, if (locating) "Getting position" else "Map link", enabled = !locating) {
+                        locating = true
+                        locateScope.launch {
+                            val fix = try { locate() } finally { locating = false }
+                            if (fix == null) {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "No position: neither the radio nor the phone has a fix",
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            } else {
+                                val now = latestDraft.text
+                                val joined = now + (if (now.isEmpty()) "" else " ") + mapsLink(fix.first, fix.second)
+                                onDraftChange(TextFieldValue(joined, TextRange(joined.length)))
+                            }
+                        }
                     }
                     // Not in the original either: a picture, shared as a link.
                     ToolbarButton(

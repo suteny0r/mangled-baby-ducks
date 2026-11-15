@@ -9,6 +9,42 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## Background GPS drained the phone (0.2.42, 2026-11-15, builds, NOT yet verified on the phone)
+
+Reported: the app accounted for 25% of the phone's battery over 24 hours, with "Share phone
+location" off the whole time.
+
+`LocationSharer.ensureTracking()` requested `GPS_PROVIDER` updates every 60 s as soon as
+permission existed and never called `removeUpdates`. It was not tied to the sharing switch.
+The foreground service is typed `connectedDevice|location`, so the request stayed live
+behind a dark screen for as long as a radio session did.
+
+The rule, as the user states it: a node's position comes from the radio. The phone's GPS is
+an exception path.
+
+- `lastFix` is now passive: the system's last known location, refreshed on resume and by
+  the `PASSIVE_PROVIDER` while `MainActivity` is resumed (`onForeground` / `onBackground`).
+  It never starts a receiver. Distance and bearing still use the radio's position first and
+  this second. Share position, Exchange Positions and Set Fixed Position read the same
+  value, so they do not start the GPS either.
+- `currentFix()` is the one active request: a single fix (GPS up to 20 s, then network up
+  to 5 s), used only by the composer's Map link when the radio has no position
+  (`MessagesViewModel.positionForLink`). The button is now always enabled and shows a toast
+  when neither side has a fix.
+- "Share phone location" (off by default, for radios without GPS hardware) is the only
+  continuous request, and only while the radio is subscribed. It now removes its listener
+  when either condition ends.
+
+To verify: `adb shell dumpsys batterystats --reset`, run a day connected, then
+`adb shell dumpsys batterystats com.suteny0r.mangledbabyducks` and read the GPS line.
+`dumpsys location` should list no request from the package while the screen is off.
+
+Not addressed, and the next suspects if the drain is still high: no screen uses
+`collectAsStateWithLifecycle`, so every Room flow for the composed screen re-queries on
+each inbound packet while the activity is stopped; the 5 s RSSI poll in `BleConnection`;
+the indefinite low-power scan in `watchForReturn`; the Connect tab's low-latency BLE scan
+and 30 s LAN sweep, which keep running when the activity is stopped with no radio linked.
+
 ## The saved radio list wore the advertised name, not the user's (0.2.40, 2026-10-26, VERIFIED on the phone)
 
 Reported from the phone: rename a radio and pick a short-name icon, and every surface shows

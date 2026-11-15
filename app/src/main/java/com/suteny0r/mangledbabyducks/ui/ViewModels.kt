@@ -508,6 +508,15 @@ class MessagesViewModel(app: Application) : AndroidViewModel(app) {
             ?: fix?.let { it.latitudeI / 1e7 to it.longitudeI / 1e7 }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    /**
+     * Where we are, for the composer's map link: the radio's position, and a one-shot
+     * phone fix only when the radio has none. The one place the phone's GPS is switched
+     * on outside the opt-in sharing switch; see LocationSharer.
+     */
+    suspend fun positionForLink(): Pair<Double, Double>? =
+        positionByNode.value[myNodeNum.value]?.let { it.latitude to it.longitude }
+            ?: container.locationSharer.currentFix()?.let { it.latitudeI / 1e7 to it.longitudeI / 1e7 }
+
     /** Row previews: newest message per channel and per DM peer, unread flags per thread. */
     val channelPreviews: StateFlow<Map<Int, MessageEntity>> = db.messageDao().channelPreviews()
         .map { list -> list.associateBy { it.channel } }

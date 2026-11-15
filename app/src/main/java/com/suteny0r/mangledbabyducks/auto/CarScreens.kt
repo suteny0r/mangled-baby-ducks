@@ -226,6 +226,8 @@ abstract class MeshCarScreen(carContext: CarContext) : Screen(carContext) {
      */
     protected fun carLocation(myNum: Long, positions: List<MapNode>): Pair<Double, Double>? {
         positions.firstOrNull { it.nodeNum == myNum }?.let { return it.latitude to it.longitude }
+        // The fix the phone already holds; this does not start the GPS.
+        container.locationSharer.refreshLastKnown()
         return container.locationSharer.lastFix.value?.let { it.latitudeI / 1e7 to it.longitudeI / 1e7 }
     }
 }
