@@ -1,0 +1,3 @@
+<en-US>
+Fixes heavy battery use. The app was keeping the phone's GPS running in the background for as long as a radio was connected, even with "Share phone location" turned off. The GPS is now used only when you ask for it: for a map link in a message when the radio has no position of its own, or continuously if you turn on "Share phone location". Distances in the node and message lists use the radio's position, or the location the phone already has.
+</en-US>
