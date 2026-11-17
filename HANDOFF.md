@@ -34,6 +34,17 @@ flag in `Router`:
 Not run on a device: the phone carries the Play-signed build, so a local APK cannot
 install over it.
 
+**Follow-up, 0.2.45 (user report: a channel does not open at the end of its
+messages; builds, NOT verified).** The thread now has a `pinned` flag in
+`ThreadView`. Opening a thread or a new message pins it and does
+`scrollToItem(last, END_OFFSET)`, which lands on the very end instead of the last item's
+top edge. While pinned, anything that leaves room to scroll forward (a picture or map
+finishing its load, the keyboard, the composer growing) scrolls back to the end. Where a
+scroll comes to rest sets the flag: at the end is pinned, anywhere else is the user reading
+history and nothing moves them. The 0.2.44 scroll-by-lost-height now only applies when not
+pinned. The cause of the report was not isolated: the old `animateScrollToItem(last)` could
+be cancelled by the 0.2.44 `scrollBy`, and it never accounted for late-growing bubbles.
+
 ## A long absence still needed a manual reconnect (0.2.43, 2026-11-17, builds, NOT verified)
 
 Reported by a user: away from the radio for an extended period, back beside it, and the app

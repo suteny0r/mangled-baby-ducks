@@ -173,7 +173,13 @@ private const val ACCENT_NUM = 0x2855A8L
 /** MessageEntity.sendAckTimeout: generous so a slow multi-hop mesh does not trip it. */
 private const val SEND_ACK_TIMEOUT_MS = 5 * 60 * 1000L
 
-private val ThreadSaver = Saver<ThreadTarget?, String>(
+/**
+ * A scroll offset past the end of any item. The list clamps it, so scrolling to the last
+ * item with this offset lands on the very end rather than on that item's top edge.
+ */
+private const val END_OFFSET = 1_000_000
+
+private val ThreadSaver =Saver<ThreadTarget?, String>(
     save = {
         when (it) {
             null -> ""
@@ -650,21 +656,46 @@ private fun ThreadView(
     LaunchedEffect(Unit) { onOpened() }
     // Only a thread that actually grew scrolls to the end, so coming back from a node
     // detail leaves the list where it was.
+    //
+    // "Pinned" means the thread is parked on its newest message. Scrolling to the last
+    // item once is not enough to stay there: the scroll puts that item's top in view, and
+    // then pictures and maps in the last few bubbles finish loading and grow, the keyboard
+    // opens, or the composer gains a line, and the end drifts out of sight. While pinned,
+    // anything that leaves room to scroll forward is answered by going back to the end.
+    var pinned by remember { mutableStateOf(true) }
+    val searching by rememberUpdatedState(query.isNotBlank())
     LaunchedEffect(list.size) {
         if (list.isNotEmpty() && query.isBlank() && list.size != lastScrolled) {
             lastScrolled = list.size
-            listState.animateScrollToItem(list.size - 1)
+            pinned = true
+            listState.scrollToItem(list.size - 1, END_OFFSET)
         }
     }
-    // When the list loses height (the keyboard opens, the composer grows a line, the
-    // toolbar appears) a LazyColumn keeps its top row where it was and lets the newest
-    // messages slide under the keyboard. Scroll by what was lost so the bottom edge shows
-    // the same message as before.
     LaunchedEffect(listState) {
-        var last = 0
-        snapshotFlow { listState.layoutInfo.viewportSize.height }.collect { height ->
-            if (last > 0 && height < last) listState.scrollBy((last - height).toFloat())
-            last = height
+        var lastHeight = 0
+        var wasScrolling = false
+        snapshotFlow {
+            Triple(listState.isScrollInProgress, listState.canScrollForward, listState.layoutInfo.viewportSize.height)
+        }.collect { (scrolling, canForward, height) ->
+            val lost = if (lastHeight > 0) lastHeight - height else 0
+            lastHeight = height
+            when {
+                scrolling -> wasScrolling = true
+                // Where a scroll came to rest decides it: at the end is pinned, anywhere
+                // else the user is reading history and is left alone.
+                wasScrolling -> {
+                    wasScrolling = false
+                    pinned = !canForward
+                }
+                searching -> Unit
+                pinned && canForward -> {
+                    val count = listState.layoutInfo.totalItemsCount
+                    if (count > 0) listState.scrollToItem(count - 1, END_OFFSET)
+                }
+                // Not at the end, and the list lost height (keyboard, toolbar): scroll by
+                // what was lost so the bottom edge shows the same message as before.
+                !pinned && lost > 0 -> listState.scrollBy(lost.toFloat())
+            }
         }
     }
     // Delivery status is derived from the send time, so re-evaluate it every half minute
