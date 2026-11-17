@@ -426,6 +426,10 @@ interface TelemetryDao {
     @Query("SELECT * FROM telemetry WHERE nodeNum = :nodeNum AND metricsType = 0 ORDER BY time DESC LIMIT 1")
     fun latestDeviceMetrics(nodeNum: Long): Flow<TelemetryEntity?>
 
+    /** Nodes with any environment telemetry (NodeListFilterLookup.fetchEnvironmentNodeNums). */
+    @Query("SELECT DISTINCT nodeNum FROM telemetry WHERE metricsType = 1")
+    fun environmentNodeNums(): Flow<List<Long>>
+
     /** Latest battery reading per node: rows in time-desc order, first per node wins. */
     @Query(
         "SELECT * FROM telemetry WHERE nodeNum IN (:nums) AND metricsType = 0 " +

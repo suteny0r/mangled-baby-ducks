@@ -80,6 +80,9 @@ object PrefKeys {
      */
     val PURGE_STALE_NODE_DAYS = androidx.datastore.preferences.core.intPreferencesKey("purge_stale_node_days")
 
+    /** NodeFilterParameters: the node list's filter set, as the JSON of a NodeFilter. */
+    val NODE_FILTER = stringPreferencesKey("node_filter")
+
     /** UnheardOnCurrentLoraOffer.key(forNode:): "Keep" on the unheard-nodes banner, per radio. */
     fun unheardDismissed(nodeNum: Long) = booleanPreferencesKey("unheardOnCurrentLoraDismissed.$nodeNum")
 }
@@ -313,6 +316,28 @@ class AppContainer(context: Context) {
 
     suspend fun setPinFavorites(pin: Boolean) {
         prefs.edit { it[PrefKeys.PIN_FAVORITES] = pin }
+    }
+
+    /**
+     * The node list's filters ([PrefKeys.NODE_FILTER]). Held in memory and written through,
+     * not read back from the store on every change: the hops slider moves faster than a
+     * DataStore round trip. Loaded here, at process start, so the list never shows
+     * unfiltered first.
+     */
+    private val nodeFilterState = kotlinx.coroutines.flow.MutableStateFlow(com.suteny0r.mangledbabyducks.ui.NodeFilter())
+    val nodeFilter: StateFlow<com.suteny0r.mangledbabyducks.ui.NodeFilter> = nodeFilterState
+
+    fun setNodeFilter(filter: com.suteny0r.mangledbabyducks.ui.NodeFilter) {
+        nodeFilterState.value = filter
+        appScope.launch { prefs.edit { it[PrefKeys.NODE_FILTER] = filter.toJson() } }
+    }
+
+    init {
+        appScope.launch {
+            prefs.data.first()[PrefKeys.NODE_FILTER]?.let {
+                nodeFilterState.value = com.suteny0r.mangledbabyducks.ui.NodeFilter.fromJson(it)
+            }
+        }
     }
 
     init {

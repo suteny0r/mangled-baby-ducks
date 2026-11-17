@@ -28,7 +28,10 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.FilterAlt
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Pets
@@ -133,9 +136,8 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
         return
     }
 
-    val showIgnored by vm.showIgnored.collectAsState()
-    val favoritesOnly by vm.favoritesOnly.collectAsState()
-    val signedOnly by vm.signedOnly.collectAsState()
+    val filter by vm.filter.collectAsState()
+    var editingFilters by rememberSaveable { mutableStateOf(false) }
     val pinFavorites by vm.pinFavorites.collectAsState()
     val search by vm.searchText.collectAsState()
     val batteryByNode by vm.batteryByNode.collectAsState()
@@ -162,35 +164,10 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
             onValueChange = { vm.searchText.value = it },
             placeholder = "Find a node",
         )
-        // Four chips no longer fit a phone width, so the row scrolls.
         Row(
-            Modifier.fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp)
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            // NodeListFilter "Signed" toggle, ahead of Favorites as on iOS.
-            FilterChip(
-                selected = signedOnly,
-                onClick = { vm.signedOnly.value = !signedOnly },
-                label = { Text("Signed") },
-                leadingIcon = { Icon(NodeSecurityIndicator.SIGNED.icon, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                modifier = Modifier.padding(vertical = 4.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            FilterChip(
-                selected = favoritesOnly,
-                onClick = { vm.favoritesOnly.value = !favoritesOnly },
-                label = { Text("Favorites") },
-                modifier = Modifier.padding(vertical = 4.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            FilterChip(
-                selected = showIgnored,
-                onClick = { vm.showIgnored.value = !showIgnored },
-                label = { Text("Show ignored") },
-                modifier = Modifier.padding(vertical = 4.dp),
-            )
-            Spacer(Modifier.width(8.dp))
             // Ordering, not filtering: off leaves the list in plain most-recently-heard
             // order. Android Auto's node list follows this too.
             FilterChip(
@@ -198,6 +175,33 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
                 onClick = { vm.setPinFavorites(!pinFavorites) },
                 label = { Text("Favorites on top") },
                 modifier = Modifier.padding(vertical = 4.dp),
+            )
+            Spacer(Modifier.weight(1f))
+            // NodeList.swift bottom bar: a reset button while any filter is on, then the
+            // filter button, filled while filtering.
+            if (filter.isFiltering) {
+                IconButton(onClick = vm::resetFilter) {
+                    Icon(
+                        Icons.Filled.RestartAlt,
+                        contentDescription = "Reset node filters",
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+            IconButton(onClick = { editingFilters = true }) {
+                Icon(
+                    if (filter.isFiltering) Icons.Filled.FilterAlt else Icons.Filled.FilterList,
+                    contentDescription = "Show node filters",
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+        if (editingFilters) {
+            NodeFilterSheet(
+                filter = filter,
+                hasLocation = myLocation != null,
+                onChange = vm::setFilter,
+                onDismiss = { editingFilters = false },
             )
         }
         val unheard by vm.unheard.collectAsState()
@@ -225,7 +229,7 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
         if (nodes.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    if (search.isNotEmpty() || favoritesOnly || signedOnly || showIgnored) "No matching nodes"
+                    if (search.isNotEmpty() || filter.isFiltering) "No matching nodes"
                     else "No nodes yet. Connect a radio.",
                     style = MaterialTheme.typography.bodyLarge,
                 )

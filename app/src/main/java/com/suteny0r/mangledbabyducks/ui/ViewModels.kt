@@ -36,6 +36,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -343,12 +345,51 @@ fun nodeOrder(myNum: Long, pinFavorites: Boolean): Comparator<NodeWithUser> =
 class NodesViewModel(app: Application) : AndroidViewModel(app) {
     private val container = app.container
 
-    /** Mirrors the iOS node list: ignored nodes are hidden unless shown, favorites can be isolated. */
-    val showIgnored = MutableStateFlow(false)
-    val favoritesOnly = MutableStateFlow(false)
-    /** NodeFilterParameters.isSigned: only nodes whose NodeInfo signature the radio verified. */
-    val signedOnly = MutableStateFlow(false)
+    /** NodeFilterParameters: the saved filter set, edited from the Node Filters sheet. */
+    val filter: StateFlow<NodeFilter> = container.nodeFilter
+
+    fun setFilter(filter: NodeFilter) = container.setNodeFilter(filter)
+
+    /** NodeFilterParameters.reset: every filter back to its default, and the search cleared. */
+    fun resetFilter() {
+        searchText.value = ""
+        container.setNodeFilter(NodeFilter())
+    }
+
+    /** Not saved: relaunching into a stale search that hides most nodes is confusing. */
     val searchText = MutableStateFlow("")
+
+    val myNodeNum: StateFlow<Long> = container.radioManager.myNodeNum
+
+    /** Latest position per node (NodeListItem's latestNodeCoordinate). */
+    val positionByNode: StateFlow<Map<Long, MapNode>> = container.mapNodes
+        .map { list -> list.associateBy { it.nodeNum } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+    /**
+     * Where we are, for distance and bearing: the connected radio's own position once it
+     * has one (that is the node whose distances these are), and the phone's fix until
+     * then. Radios without a GPS, or still waiting for a lock, would otherwise leave the
+     * lists without a reference point; the switch happens on its own when the radio's
+     * first position lands. Also the centre the distance filter measures from.
+     */
+    val myLocation: StateFlow<Pair<Double, Double>?> = combine(
+        container.locationSharer.lastFix,
+        positionByNode,
+        myNodeNum,
+    ) { fix, positions, me ->
+        positions[me]?.let { it.latitude to it.longitude }
+            ?: fix?.let { it.latitudeI / 1e7 to it.longitudeI / 1e7 }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    /** Nodes with environment telemetry; only queried while the Environment filter is on. */
+    private val environmentNums: Flow<Set<Long>> = filter
+        .map { it.isEnvironment }
+        .distinctUntilChanged()
+        .flatMapLatest { on ->
+            if (on) container.database.telemetryDao().environmentNodeNums().map { it.toSet() }
+            else flowOf(emptySet())
+        }
 
     /** Persisted, because Android Auto's node list follows it and has no toggle of its own. */
     val pinFavorites: StateFlow<Boolean> = container.pinFavorites
@@ -357,28 +398,38 @@ class NodesViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { container.setPinFavorites(pin) }
     }
 
-    private data class NodeFilters(
-        val showIgnored: Boolean,
-        val favoritesOnly: Boolean,
-        val signedOnly: Boolean,
+    private data class ListOptions(
+        val filter: NodeFilter,
         val pinFavorites: Boolean,
+        val search: String,
+        val myNum: Long,
+    )
+
+    private data class FilterLookups(
+        val environmentNums: Set<Long>,
+        val positions: Map<Long, MapNode>,
+        val here: Pair<Double, Double>?,
     )
 
     // iOS NodeList display order: connected node first, then favorites,
     // then most-recently-heard. The favorites step is the one [pinFavorites] drops.
+    // The "Online" cut is taken when the list is rebuilt, which every heard packet causes.
     val nodes: StateFlow<List<NodeWithUser>> = combine(
-        combine(showIgnored, favoritesOnly, signedOnly, pinFavorites, ::NodeFilters),
-        searchText, container.radioManager.myNodeNum,
+        combine(filter, pinFavorites, searchText, myNodeNum, ::ListOptions),
+        combine(environmentNums, positionByNode, myLocation, ::FilterLookups),
         container.nodesWithUsers
-    ) { filters, search, myNum, list ->
-        val needle = search.trim().lowercase()
+    ) { options, lookups, list ->
+        val needle = options.search.trim().lowercase()
+        val now = System.currentTimeMillis()
+        val bounds = if (options.filter.distanceFilter) {
+            NodeDistanceFilterBounds.around(lookups.here, options.filter.maxDistance)
+        } else null
         list.asSequence()
-            .filter { (filters.showIgnored || !it.node.ignored) && (!filters.favoritesOnly || it.node.favorite) }
-            .filter { !filters.signedOnly || it.node.hasXeddsaSigned }
+            .filter { options.filter.matches(it, now, lookups.environmentNums, lookups.positions, bounds) }
             .filter {
                 needle.isEmpty() || nodeMatches(it, needle)
             }
-            .sortedWith(nodeOrder(myNum, filters.pinFavorites))
+            .sortedWith(nodeOrder(options.myNum, options.pinFavorites))
             .toList()
     }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -389,9 +440,10 @@ class NodesViewModel(app: Application) : AndroidViewModel(app) {
      * "Signed" alone reduced a 119-node store to the connected radio, and the header's
      * count said 1 with nothing to say where the rest had gone.
      */
-    val totalNodeCount: StateFlow<Int> = container.nodesWithUsers
-        .map { list -> list.count { !it.node.ignored } }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+    val totalNodeCount: StateFlow<Int> = combine(filter, container.nodesWithUsers) { filter, list ->
+        // Ignored nodes are outside the count until the Ignored filter is what is on show.
+        if (filter.isIgnored) list.size else list.count { !it.node.ignored }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
     // ---------------------------------------------------------------- UnheardNodesBanner
 
@@ -530,32 +582,11 @@ class NodesViewModel(app: Application) : AndroidViewModel(app) {
             user?.longName,
             user?.shortName,
             user?.hwModel,
+            user?.hwDisplayName,
             "!%08x".format(entry.node.num),
+            entry.node.num.toString(),
         ).any { it?.trim()?.lowercase()?.contains(needle) == true }
     }
-
-    val myNodeNum: StateFlow<Long> = container.radioManager.myNodeNum
-
-    /** Latest position per node (NodeListItem's latestNodeCoordinate). */
-    val positionByNode: StateFlow<Map<Long, MapNode>> = container.mapNodes
-        .map { list -> list.associateBy { it.nodeNum } }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
-
-    /**
-     * Where we are, for distance and bearing: the connected radio's own position once it
-     * has one (that is the node whose distances these are), and the phone's fix until
-     * then. Radios without a GPS, or still waiting for a lock, would otherwise leave the
-     * lists without a reference point; the switch happens on its own when the radio's
-     * first position lands.
-     */
-    val myLocation: StateFlow<Pair<Double, Double>?> = combine(
-        container.locationSharer.lastFix,
-        positionByNode,
-        myNodeNum,
-    ) { fix, positions, me ->
-        positions[me]?.let { it.latitude to it.longitude }
-            ?: fix?.let { it.latitudeI / 1e7 to it.longitudeI / 1e7 }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     /** Latest battery % per node for the list rows (empty for nodes without telemetry). */
     val batteryByNode: StateFlow<Map<Long, Int>> = nodes

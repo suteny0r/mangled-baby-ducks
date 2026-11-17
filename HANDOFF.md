@@ -9,6 +9,29 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## Node Filters sheet, as on iOS (0.2.48, 2026-11-17, builds, NOT verified)
+
+Port of `NodeFilterParameters.swift` and `NodeListFilter.swift` (Apple clone at `9a78e472`).
+
+- `ui/NodeFilter.kt` (new): `NodeFilter` (the filter set, its `matches`, JSON codec),
+  `NodeDistanceFilterBounds`, and the `NodeFilterSheet` bottom sheet. Filters: Via Lora,
+  Via Mqtt (never both off), Online (heard within 2 h), Hide Not Heard on Current LoRa,
+  Signed, Encrypted, Favorites, Ignored, Environment, Distance with the eleven iOS
+  distances, Hops Away slider (All, Direct, 1 to 7), Roles multi-select.
+- Saved as one JSON preference, `PrefKeys.NODE_FILTER`, held hot in
+  `AppContainer.nodeFilter` and written through by `setNodeFilter`. Search text is not saved.
+- The Nodes screen lost its Signed, Favorites and Show ignored chips. "Favorites on top"
+  stays (ordering, not a filter), with a reset button (only while filtering) and the filter
+  button at the right of the same row.
+- Behaviour changes that follow iOS: "Ignored" now shows only ignored nodes instead of
+  adding them to the list; search also matches the hardware display name and the decimal
+  node number.
+- Departures: the distance centre is `NodesViewModel.myLocation` (radio position first,
+  then the phone's passive fix) where iOS uses the phone first; the default distance is
+  804 672 m because the iOS default of 800 000 is not one of its own picker values.
+- Not ported: iOS applies the same filter object to the map and the contact list. Here it
+  filters the node list only.
+
 ## Sent text stayed in the composer after a reply (0.2.47, 2026-11-17, VERIFIED by the user on the phone)
 
 User report on 0.2.46: after sending a reply the keyboard closed but the text stayed in
