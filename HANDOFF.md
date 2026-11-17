@@ -9,7 +9,7 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
-## Sent text stayed in the composer after a reply (0.2.47, 2026-11-17, builds, NOT verified)
+## Sent text stayed in the composer after a reply (0.2.47, 2026-11-17, VERIFIED by the user on the phone)
 
 User report on 0.2.46: after sending a reply the keyboard closed but the text stayed in
 the field, so the send arrow repeated the message. Not reproduced here (no device build).
@@ -20,12 +20,12 @@ carrying the old text after the draft was emptied. Two changes in `MessagesScree
 equal to the just-sent text for 1.5 s (`justSent`). If the report persists the cause is
 something else; why it showed on a reply in particular is not explained by this.
 
-Also in 0.2.47, both user reports on 0.2.46, both NOT verified: the Ack SNR line in Message
+Also in 0.2.47, both user reports on 0.2.46, both verified by the user on the phone: the Ack SNR line in Message
 Details was a size smaller than Ack Time beside it (copied from iOS caption2; now the same
 size), and the Tapback picker left the keyboard up after sending (the dialog now hides it
 on pick, cancel and dismiss, and `ThreadView` hides it once more after the dialog closes).
 
-## Message Details named relays that could not have been involved (0.2.46, 2026-11-17, builds, NOT verified)
+## Message Details named relays that could not have been involved (0.2.46, 2026-11-17, VERIFIED by the user on the phone)
 
 User report: details on sent messages were inaccurate and inconsistent ("relayed",
 a hex byte, or a node name), and while travelling 1500 miles from home the name was a
@@ -54,7 +54,7 @@ departs from it on purpose.
   `hopsAway` is unknown, shows as unidentified even though it is known. That is the
   intended trade: a missing name over a wrong one.
 
-### Per-message hop count and two more tapbacks (0.2.46, NOT verified)
+### Per-message hop count and two more tapbacks (0.2.46, VERIFIED by the user on the phone)
 
 - `messages.hops` (same `MIGRATION_9_10`): `hop_start - hop_limit` as the message arrived,
   -1 when the packet did not say. Message Details now shows this instead of the sender's
@@ -70,7 +70,7 @@ departs from it on purpose.
   with `hops` in 0..9. Messages stored before this build have no count and do not offer it.
 - The fixed eight-emoji strip is unchanged.
 
-### Message Details lines the port had dropped (0.2.46, NOT verified)
+### Message Details lines the port had dropped (0.2.46, VERIFIED by the user on the phone)
 
 Compared against `MessageContextMenuItems.swift` at Meshtastic-Apple `9a78e472`. Added:
 
@@ -85,7 +85,7 @@ Compared against `MessageContextMenuItems.swift` at Meshtastic-Apple `9a78e472`.
 Left as deliberate departures from iOS, at the user's direction: neighbour-only relay
 naming, the single relay line, per-message hops, and "Hops Away unknown" instead of 0.
 
-### Node table cleaning, three ports from iOS (0.2.46, NOT verified)
+### Node table cleaning, three ports from iOS (0.2.46, VERIFIED by the user on the phone)
 
 Sources at Meshtastic-Apple `9a78e472`. The app already had `reconcileNodeDb` and the node
 cap, which drop nodes the radio evicted; these three are additional.
@@ -121,7 +121,7 @@ cap, which drop nodes the radio evicted; these three are additional.
   Not ported: the per-row "Not heard on current LoRa" marker, the node-detail line and
   the "hide unheard" filter.
 
-### Inline map of a shared pin is now a fixed ten miles across (0.2.46, NOT verified)
+### Inline map of a shared pin is now a fixed ten miles across (0.2.46, VERIFIED by the user on the phone)
 
 User direction. Pin drops are a coverage survey tool first (drive around, drop a link at
 each spot, review later which ones got through) and a "here I am" second. The old frame
@@ -134,7 +134,7 @@ note here that describes the thumbnail as spanning the whole mesh.
 Discussed and not built: colouring the pin by delivery result, and a per-conversation
 coverage map of all pin drops.
 
-## Composer takes the bottom edge while typing (0.2.44, 2026-11-17, builds, NOT verified)
+## Composer takes the bottom edge while typing (0.2.44, 2026-11-17, VERIFIED by the user on the phone)
 
 User request, four parts, all in `MessagesScreen.kt` `Composer` / `ThreadView` plus one
 flag in `Router`:
@@ -160,7 +160,7 @@ Not run on a device: the phone carries the Play-signed build, so a local APK can
 install over it.
 
 **Follow-up, 0.2.45 (user report: a channel does not open at the end of its
-messages; builds, NOT verified).** The thread now has a `pinned` flag in
+messages; VERIFIED by the user on the phone).** The thread now has a `pinned` flag in
 `ThreadView`. Opening a thread or a new message pins it and does
 `scrollToItem(last, END_OFFSET)`, which lands on the very end instead of the last item's
 top edge. While pinned, anything that leaves room to scroll forward (a picture or map
