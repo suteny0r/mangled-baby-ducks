@@ -57,13 +57,16 @@ class MainActivity : ComponentActivity() {
                     TabSpec("Connect", Icons.Filled.Link),
                 )
                 val selected by router.selectedTab.collectAsState()
+                val composing by router.composing.collectAsState()
                 val unread by remember {
                     container.database.messageDao().unreadCount()
                 }.collectAsState(initial = 0)
                 Scaffold(
                     containerColor = MaterialTheme.colorScheme.background,
                     bottomBar = {
-                        FloatingTabBar(
+                        // The composer takes the whole bottom edge while a message is
+                        // being written; its X button gives the bar back.
+                        if (!(composing && selected == com.suteny0r.mangledbabyducks.ui.Router.TAB_MESSAGES)) FloatingTabBar(
                             tabs = tabs,
                             selected = selected,
                             onSelect = { router.selectedTab.value = it },

@@ -143,6 +143,16 @@ import androidx.compose.ui.text.LinkInteractionListener
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import android.view.ViewTreeObserver
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 
 /*
  * Port of the iOS Messages stack: Messages.swift (two-row sidebar), ChannelList.swift and
@@ -644,6 +654,17 @@ private fun ThreadView(
         if (list.isNotEmpty() && query.isBlank() && list.size != lastScrolled) {
             lastScrolled = list.size
             listState.animateScrollToItem(list.size - 1)
+        }
+    }
+    // When the list loses height (the keyboard opens, the composer grows a line, the
+    // toolbar appears) a LazyColumn keeps its top row where it was and lets the newest
+    // messages slide under the keyboard. Scroll by what was lost so the bottom edge shows
+    // the same message as before.
+    LaunchedEffect(listState) {
+        var last = 0
+        snapshotFlow { listState.layoutInfo.viewportSize.height }.collect { height ->
+            if (last > 0 && height < last) listState.scrollBy((last - height).toFloat())
+            last = height
         }
     }
     // Delivery status is derived from the send time, so re-evaluate it every half minute
@@ -1362,6 +1383,36 @@ private fun Composer(
             if (!focused && linkDialog == null) showToolbar = false
         }
     }
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val router = context.container.router
+    /** Leave composing: keyboard down, toolbar folded, tab bar back. */
+    fun stopComposing() {
+        focusManager.clearFocus()
+        keyboard?.hide()
+        showToolbar = false
+    }
+    // The tab bar is hidden for as long as the composer is in use. It follows the toolbar
+    // as well as focus, so the toolbar's grace period cannot flash the bar back in.
+    SideEffect { router.composing.value = focused || showToolbar }
+    DisposableEffect(Unit) { onDispose { router.composing.value = false } }
+    // System Back closes the keyboard without taking focus from the field, which would
+    // leave the tab bar hidden with nothing on screen to explain why. Treat the keyboard
+    // going away as the end of composing. The link dialog has its own field and keyboard.
+    val view = LocalView.current
+    val isFocused by rememberUpdatedState(focused)
+    val linkOpen by rememberUpdatedState(linkDialog != null)
+    DisposableEffect(view) {
+        var wasVisible = false
+        val listener = ViewTreeObserver.OnGlobalLayoutListener {
+            val visible = ViewCompat.getRootWindowInsets(view)
+                ?.isVisible(WindowInsetsCompat.Type.ime()) == true
+            if (wasVisible && !visible && isFocused && !linkOpen) stopComposing()
+            wasVisible = visible
+        }
+        view.viewTreeObserver.addOnGlobalLayoutListener(listener)
+        onDispose { view.viewTreeObserver.removeOnGlobalLayoutListener(listener) }
+    }
 
     /** Apply a new draft. Length is no longer a reason to refuse one; the sender splits. */
     fun apply(result: FormattingResult) {
@@ -1371,6 +1422,8 @@ private fun Composer(
         onSend(text.trim(), sharePosition)
         sharePosition = false
         confirmLong = false
+        // TextMessageField.send: isFocused = false.
+        stopComposing()
     }
     fun append(suffix: String) {
         val joined = text + suffix
@@ -1464,11 +1517,23 @@ private fun Composer(
         }
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (replyTo != null) {
-                    IconButton(onClick = onCancelReply) {
-                        Icon(Icons.Filled.Cancel, contentDescription = "Cancel reply", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(32.dp))
+                // TextMessageField: the x.circle.fill button is there for a reply or while
+                // the field has focus. It drops the reply and ends composing.
+                if (replyTo != null || focused) {
+                    IconButton(onClick = {
+                        onCancelReply()
+                        stopComposing()
+                    }) {
+                        Icon(
+                            Icons.Filled.Cancel,
+                            contentDescription = if (replyTo != null) "Cancel reply" else "Close keyboard",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(32.dp),
+                        )
                     }
-                    Text("Reply", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(end = 8.dp))
+                    if (replyTo != null) {
+                        Text("Reply", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(end = 8.dp))
+                    }
                 }
                 OutlinedTextField(
                     value = draft,

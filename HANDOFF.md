@@ -9,6 +9,31 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## Composer takes the bottom edge while typing (0.2.44, 2026-11-17, builds, NOT verified)
+
+User request, four parts, all in `MessagesScreen.kt` `Composer` / `ThreadView` plus one
+flag in `Router`:
+
+- `Router.composing` is true while the message field has focus or its toolbar is showing.
+  `MainActivity` leaves `FloatingTabBar` out of the Scaffold while it is true on the
+  Messages tab.
+- The `x.circle.fill` button of `TextMessageField.swift` now shows for a reply **or** while
+  the field has focus, as on iOS. It drops the reply, clears focus, hides the keyboard and
+  folds the toolbar (`stopComposing`), which brings the tab bar back.
+- Sending calls `stopComposing` too (iOS `send`: `isFocused = false`).
+- `ThreadView` watches the list's viewport height and scrolls by whatever height was lost,
+  so the newest messages stay above the keyboard. The window is `adjustResize` and not edge
+  to edge, so the list shrinks; a LazyColumn anchors on its top row and used to let the
+  bottom slide under the keyboard.
+- System Back closes the keyboard without clearing Compose focus. A global-layout listener
+  reads `ViewCompat.getRootWindowInsets(view).isVisible(ime())` and calls `stopComposing`
+  on a visible-to-hidden transition, unless the link dialog is open (it has its own field).
+  This is the part most worth checking on the phone: if the IME visibility read is wrong on
+  this non-edge-to-edge window, Back would leave the tab bar hidden until the X is tapped.
+
+Not run on a device: the phone carries the Play-signed build, so a local APK cannot
+install over it.
+
 ## A long absence still needed a manual reconnect (0.2.43, 2026-11-17, builds, NOT verified)
 
 Reported by a user: away from the radio for an extended period, back beside it, and the app

@@ -15,6 +15,8 @@ sealed interface ThreadTarget {
 class Router {
     val selectedTab = MutableStateFlow(0)
     val pendingThread = MutableStateFlow<ThreadTarget?>(null)
+    /** True while the message composer is in use; the tab bar steps aside for it. */
+    val composing = MutableStateFlow(false)
     /** One-shot node detail request; consumed by whichever tab should show it. */
     val pendingNode = MutableStateFlow<Long?>(null)
     /** One-shot: the top-left logo opens Settings > About (iOS deep link settings/about). */
