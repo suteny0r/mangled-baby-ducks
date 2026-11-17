@@ -1,0 +1,7 @@
+<en-US>
+Message Details names a relay only when it can be identified, and adds relay and hop count for received messages, ack time and ack signal.
+Tapback with any emoji, or send a message's hop count as a reaction.
+New App Data settings: clear nodes not heard for a set number of days, or erase all app data.
+The Nodes list offers to remove nodes not heard on the current LoRa settings.
+Shared location maps show a fixed 10 miles around the pin.
+</en-US>
