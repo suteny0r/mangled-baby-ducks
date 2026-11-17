@@ -1,0 +1,3 @@
+<en-US>
+Node list filters: a filter button on the Nodes screen opens a Node Filters sheet with Via Lora, Via Mqtt, Online, Hide Not Heard on Current LoRa, Signed, Encrypted, Favorites, Ignored, Environment, Distance, Hops Away and Roles. A reset button appears while any filter is on. Filters are remembered between launches.
+</en-US>
