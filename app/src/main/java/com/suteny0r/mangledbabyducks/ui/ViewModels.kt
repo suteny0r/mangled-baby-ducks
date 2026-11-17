@@ -20,6 +20,7 @@ import com.suteny0r.mangledbabyducks.db.MessageEntity
 import com.suteny0r.mangledbabyducks.db.MyInfoEntity
 import com.suteny0r.mangledbabyducks.db.NodeEntity
 import com.suteny0r.mangledbabyducks.db.NodeWithUser
+import com.suteny0r.mangledbabyducks.db.nodeNumString
 import com.suteny0r.mangledbabyducks.db.UserEntity
 import com.suteny0r.mangledbabyducks.radio.ChannelCodec
 import com.suteny0r.mangledbabyducks.radio.DiscoveredDevice
@@ -392,6 +393,136 @@ class NodesViewModel(app: Application) : AndroidViewModel(app) {
         .map { list -> list.count { !it.node.ignored } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
+    // ---------------------------------------------------------------- UnheardNodesBanner
+
+    /** What the unheard-nodes banner needs: who would be removed, and whether to offer. */
+    data class UnheardOffer(
+        val nums: List<Long> = emptyList(),
+        val show: Boolean = false,
+        /** "Keep" is stored but most of the list is heard again, so the next change offers anew. */
+        val staleDismissal: Boolean = false,
+    )
+
+    private data class DumpSession(
+        val connected: Boolean,
+        val reports: Boolean,
+        val savedAt: Long?,
+        val awaiting: Boolean,
+    )
+
+    /**
+     * UnheardNodesBanner.isRemovable: the radio reports the node unheard on its current
+     * settings, or the app alone still has it (the radio gave no answer in this session's
+     * dump). One guard is this port's own: a node heard since that dump is not app-only,
+     * it is new, and its row simply has no answer yet.
+     */
+    private fun isRemovable(node: NodeEntity, savedAt: Long?): Boolean {
+        if (node.viaMqtt) return false
+        if (node.heardOnCurrentLora == false) return true
+        return savedAt != null && node.heardOnCurrentLora == null && (node.lastHeard ?: 0L) < savedAt
+    }
+
+    val unheard: StateFlow<UnheardOffer> = combine(
+        container.nodesWithUsers,
+        container.radioManager.myNodeNum,
+        combine(
+            container.radioManager.state,
+            container.radioManager.deviceMetadata,
+            container.radioManager.nodeDatabaseSavedAt,
+            container.radioManager.awaitingNodeDbAfterLoRaChange,
+        ) { state, metadata, savedAt, awaiting ->
+            DumpSession(
+                connected = state is RadioState.Subscribed,
+                reports = com.suteny0r.mangledbabyducks.radio.RadioManager
+                    .reportsHeardOnCurrentLora(metadata?.firmwareVersion),
+                savedAt = savedAt,
+                awaiting = awaiting,
+            )
+        },
+        container.prefs.data,
+    ) { list, myNum, session, prefs ->
+        if (!session.connected || !session.reports || myNum == 0L) return@combine UnheardOffer()
+        // Favorites and the radio itself are never offered.
+        val candidates = list.map { it.node }.filter { !it.favorite && it.num != myNum }
+        // The denominator is the nodes the radio answered for; the rest are unknown.
+        val reported = candidates.count { !it.viaMqtt && it.heardOnCurrentLora != null }
+        val reportedUnheard = candidates.count { !it.viaMqtt && it.heardOnCurrentLora == false }
+        // UnheardOnCurrentLoraOffer.isMostOfList: what a settings change does all at once.
+        val mostOfList = reportedUnheard > 0 && reportedUnheard * 2 >= reported
+        val dismissed = prefs[PrefKeys.unheardDismissed(myNum)] ?: false
+        val removable = candidates.filter { isRemovable(it, session.savedAt) }.map { it.num }
+        UnheardOffer(
+            nums = removable,
+            show = removable.isNotEmpty() && !session.awaiting && mostOfList && !dismissed,
+            staleDismissal = dismissed && session.savedAt != null && !mostOfList,
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), UnheardOffer())
+
+    val removingUnheard = MutableStateFlow(false)
+    val unheardRemovalResult = MutableStateFlow<String?>(null)
+
+    /**
+     * UnheardOnCurrentLoraOffer.clearDismissal. Called from the screen rather than from a
+     * collector here, so the node list is not kept under observation while the Nodes tab
+     * is off screen.
+     */
+    fun clearUnheardDismissal() {
+        val myNum = container.radioManager.myNodeNum.value
+        viewModelScope.launch { container.prefs.edit { it.remove(PrefKeys.unheardDismissed(myNum)) } }
+    }
+
+    /** "Keep": holds until most of the list is heard again. */
+    fun keepUnheard() {
+        val myNum = container.radioManager.myNodeNum.value
+        viewModelScope.launch { container.prefs.edit { it[PrefKeys.unheardDismissed(myNum)] = true } }
+    }
+
+    /**
+     * UnheardNodesBanner.removeUnheardNodes: one admin message per node, each re-checked
+     * first, because a node can be heard again between the banner and the confirmation.
+     */
+    fun removeUnheard() {
+        if (removingUnheard.value) return
+        removingUnheard.value = true
+        viewModelScope.launch {
+            val db = container.database
+            val myNum = container.radioManager.myNodeNum.value
+            val savedAt = container.radioManager.nodeDatabaseSavedAt.value
+            var removed = 0
+            var failed = 0
+            var recovered = 0
+            for (num in unheard.value.nums) {
+                val node = db.nodeDao().get(num) ?: continue
+                if (node.favorite || !isRemovable(node, savedAt)) {
+                    recovered++
+                    continue
+                }
+                val ok = if (node.heardOnCurrentLora == null) {
+                    // The radio does not have it, so there is nothing to remove there.
+                    runCatching { container.ingest.deleteNodeLocally(num) }.isSuccess
+                } else {
+                    runCatching { container.radioManager.removeNode(myNum, num) }.getOrDefault(false)
+                }
+                if (ok) removed++ else failed++
+            }
+            android.util.Log.i(
+                "NodesViewModel",
+                "Removed $removed nodes not heard on the current LoRa settings, $failed failed, $recovered heard again",
+            )
+            if (recovered > 0 || failed > 0) {
+                unheardRemovalResult.value = buildList {
+                    add("Removed $removed nodes.")
+                    if (recovered > 0) add("$recovered were heard on the current settings before they were removed and were kept.")
+                    if (failed > 0) add("$failed could not be removed.")
+                }.joinToString(" ")
+            }
+            // Only stand the offer down once nothing is left; after a partial failure
+            // hiding the banner would take the retry with it.
+            if (failed == 0) container.prefs.edit { it[PrefKeys.unheardDismissed(myNum)] = true }
+            removingUnheard.value = false
+        }
+    }
+
     private fun nodeMatches(entry: NodeWithUser, needle: String): Boolean {
         val user = entry.user
         return listOfNotNull(
@@ -651,25 +782,25 @@ class MessagesViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun nodeFor(num: Long): NodeEntity? = db.nodeDao().get(num)
 
     /**
-     * MessageEntityExtension.relayDisplay(): `relayNode` carries only the low byte of the
-     * relaying node's number, so every known user whose number ends in that byte is a
-     * candidate. One candidate names it outright; several are ranked by fewest hops away,
-     * with nodes of unknown hops unrankable and only used as a fallback; none at all
-     * leaves the hex byte.
+     * Who relayed a send, in one fixed shape: "Name (…a7)" when the relay was identified
+     * as the ack arrived, "unidentified node (…a7)" when it was not, null when the radio
+     * reported no relay at all.
+     *
+     * This departs from MessageEntityExtension.relayDisplay() on purpose. That one takes
+     * the single byte the radio reports and, at display time, picks a name from every
+     * node ever known whose number ends in it. With a few hundred nodes most bytes fit
+     * somebody, so it named nodes that could not have been involved (a node at home, for
+     * a message sent 1500 miles away), and the answer changed as the node list did. The
+     * match is now made once, in PacketIngest.routing, against current direct neighbours
+     * only, and stored in [MessageEntity.relayNum].
      */
     suspend fun relayDisplay(message: MessageEntity): String? {
         if (message.relayNode == 0L) return null
-        val suffix = message.relayNode and 0xFF
-        val hexFallback = "Node 0x%02X".format(suffix)
-        val matching = db.userDao().all().filter { (it.num and 0xFF) == suffix }
-        if (matching.size == 1) {
-            return matching[0].longName?.takeIf { it.isNotEmpty() } ?: hexFallback
-        }
-        val rankable = matching.mapNotNull { user ->
-            db.nodeDao().get(user.num)?.hopsAway?.takeIf { it >= 0 }?.let { user to it }
-        }
-        val closest = rankable.minByOrNull { it.second }?.first ?: matching.firstOrNull()
-        return closest?.longName?.takeIf { it.isNotEmpty() } ?: hexFallback
+        val byte = "…%02x".format(message.relayNode and 0xFF)
+        if (message.relayNum == 0L) return "unidentified node ($byte)"
+        val name = db.userDao().get(message.relayNum)?.longName?.takeIf { it.isNotEmpty() }
+            ?: nodeNumString(message.relayNum)
+        return "$name ($byte)"
     }
 
     /**
@@ -838,6 +969,22 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             container.radioManager.setHamMode(callSign, longName, shortName, txPower, frequency)
         }
+    }
+
+    /** AppSettings.swift purgeStaleNodeDays; 0 is off. */
+    val purgeStaleNodeDays: StateFlow<Int> = container.prefs.data
+        .map { it[PrefKeys.PURGE_STALE_NODE_DAYS] ?: 0 }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    fun setPurgeStaleNodeDays(days: Int) {
+        viewModelScope.launch {
+            container.prefs.edit { it[PrefKeys.PURGE_STALE_NODE_DAYS] = days.coerceIn(0, 180) }
+        }
+    }
+
+    /** AppSettings.swift "Clear App Data". */
+    fun clearAppData() {
+        viewModelScope.launch { container.clearAppData(getApplication()) }
     }
 
     val shareLocation: StateFlow<Boolean> = container.prefs.data

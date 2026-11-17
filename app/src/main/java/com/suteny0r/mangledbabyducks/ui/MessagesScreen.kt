@@ -153,6 +153,10 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.compose.material.icons.outlined.AddReaction
+import androidx.compose.material.icons.outlined.Route
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 
 /*
  * Port of the iOS Messages stack: Messages.swift (two-row sidebar), ChannelList.swift and
@@ -629,6 +633,9 @@ private fun ThreadView(
     var statusFor by rememberSaveable { mutableStateOf<Long?>(null) }
     var detailsFor by rememberSaveable { mutableStateOf<Long?>(null) }
     var deleteFor by rememberSaveable { mutableStateOf<Long?>(null) }
+    // The message a free-choice tapback is being picked for. Held here for the same
+    // reason as the dialogs above: the keyboard coming up scrolls the thread.
+    var tapbackFor by rememberSaveable { mutableStateOf<Long?>(null) }
     // The draft lives here, not in the composer, so it survives the node-detail early
     // return below and a tab switch. A TextFieldValue, because the formatting toolbar
     // works on the selection.
@@ -790,6 +797,7 @@ private fun ThreadView(
                     } else null,
                     tapbacks = tapbacksByTarget[message.messageId].orEmpty(),
                     onTapback = { emoji -> onSend(emoji, message.messageId, true, false) },
+                    onPickTapback = { tapbackFor = message.messageId },
                     onReply = {
                         replyTo = ReplyContext(message.messageId, (message.payload ?: "").take(80))
                     },
@@ -803,6 +811,15 @@ private fun ThreadView(
                     distance = distanceTo(message.fromNum),
                 )
             }
+        }
+        tapbackFor?.let { id ->
+            TapbackDialog(
+                onPick = { emoji ->
+                    tapbackFor = null
+                    onSend(emoji, id, true, false)
+                },
+                onDismiss = { tapbackFor = null },
+            )
         }
         deleteFor?.let { id ->
             AlertDialog(
@@ -884,6 +901,7 @@ private fun MessageRow(
     repliedPreview: String?,
     tapbacks: List<MessageEntity>,
     onTapback: (String) -> Unit,
+    onPickTapback: () -> Unit,
     onReply: () -> Unit,
     onShowStatus: () -> Unit,
     onShowDetails: () -> Unit,
@@ -977,6 +995,7 @@ private fun MessageRow(
                     onRetry = if (status?.canRetry == true) onRetry else null,
                     onDelete = onDelete,
                     onDetails = onShowDetails,
+                    onPickTapback = onPickTapback,
                     names = names,
                     onOpenMention = onOpenMention,
                 )
@@ -1003,6 +1022,7 @@ private fun Bubble(
     onRetry: (() -> Unit)? = null,
     onDelete: () -> Unit,
     onDetails: () -> Unit,
+    onPickTapback: () -> Unit,
     names: Map<Long, String>,
     onOpenMention: (Long) -> Unit,
 ) {
@@ -1103,6 +1123,29 @@ private fun Bubble(
                             },
                     )
                 }
+            }
+            // MessageContextMenuItems "Tapback": any emoji, picked from the keyboard.
+            DropdownMenuItem(
+                text = { Text("Tapback") },
+                leadingIcon = { Icon(Icons.Outlined.AddReaction, contentDescription = null) },
+                onClick = {
+                    menuOpen = false
+                    onPickTapback()
+                },
+            )
+            // Not in the original. Apple users answer a message with the keycap digit of
+            // its hop count, read off Message Details and picked by hand; this sends it
+            // in one tap, from the count the message itself arrived with.
+            if (!mine && message.hops in 0..9) {
+                val keycap = "${message.hops}\uFE0F\u20E3"
+                DropdownMenuItem(
+                    text = { Text("Tapback hop count $keycap") },
+                    leadingIcon = { Icon(Icons.Outlined.Route, contentDescription = null) },
+                    onClick = {
+                        menuOpen = false
+                        onTapback(keycap)
+                    },
+                )
             }
             DropdownMenuItem(
                 text = { Text("Reply") },
@@ -1290,7 +1333,7 @@ private fun MessageDetailsDialog(
     vm: MessagesViewModel,
     onDismiss: () -> Unit,
 ) {
-    val relay by produceState<String?>(initialValue = null, message.messageId) {
+    val relay by produceState<String?>(initialValue = null, message.messageId, message.relayNode, message.relayNum) {
         value = vm.relayDisplay(message)
     }
     val node by produceState<NodeEntity?>(initialValue = null, message.fromNum) {
@@ -1311,32 +1354,127 @@ private fun MessageDetailsDialog(
                     IconLine(Icons.Filled.VerifiedUser, "Signed · verified")
                 }
                 Text("Channel: ${message.channel}")
-                relay?.let {
-                    // "Ack Relay:" once the recipient itself confirmed, plain "Relay:" while
-                    // only a relaying node has been heard from.
-                    Text((if (message.realAck) "Ack Relay: " else "Relay: ") + it)
+                if (message.xeddsaSigned) {
+                    Text("Verified with the sender's key.")
                 }
-                val hops = node?.hopsAway ?: -1
+                // One relay line, always in the same words. The iOS menu has two ("Relay:
+                // <name or hex>" and "Relayed by N nodes"), and the second counted routing
+                // replies rather than nodes, so the pair disagreed with each other.
+                val relayed = relay
+                when {
+                    relayed != null && message.realAck && message.relayNum != 0L &&
+                        message.relayNum == message.toNum ->
+                        Text("Confirmation received directly from the recipient")
+                    relayed != null && message.realAck ->
+                        Text("Confirmation relayed by $relayed")
+                    // A received message whose relay is its own sender was not relayed.
+                    relayed != null && !mine && message.relayNum == message.fromNum ->
+                        Text("Received directly from the sender")
+                    relayed != null -> Text("Relayed by $relayed")
+                    mine && message.receivedAck && !message.realAck ->
+                        Text("Relayed by a node the radio did not report")
+                }
+                // The hop count this message arrived with. Messages stored before that was
+                // recorded fall back to the sender's current figure, as iOS always does.
+                val hops = if (message.hops >= 0) message.hops else node?.hopsAway ?: -1
                 if (!mine && node?.viaMqtt != true) {
-                    if (hops == 0) {
-                        Text("SNR ${"%.2f".format(message.snr)} dB")
-                        Text("RSSI ${message.rssi} dBm")
-                    } else {
-                        Text("Hops Away ${hops.coerceAtLeast(0)}")
+                    when {
+                        hops == 0 -> {
+                            Text("SNR ${"%.2f".format(message.snr)} dB")
+                            Text("RSSI ${message.rssi} dBm")
+                        }
+                        hops > 0 -> Text("Hops Away $hops")
+                        else -> Text("Hops Away unknown")
                     }
-                }
-                if (message.relays != 0 && !message.realAck) {
-                    Text("Relayed by ${message.relays} ${if (message.relays == 1) "node" else "nodes"}")
                 }
                 status?.let {
                     Text(it.text)
                     Text(it.detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                // "Ack Time:" for our own sends once a routing reply has been stamped (iOS
+                // tests "within six months", which is its way of skipping the zero date).
+                if (mine && message.ackTimestamp > 0) {
+                    Text(
+                        "Ack Time: ${ackTime(message.ackTimestamp)}",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (message.ackSnr != 0f) {
+                    Text(
+                        "Ack SNR: ${"%.2f".format(message.ackSnr)} dB",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
     )
 }
+
+/**
+ * The free-choice tapback. iOS focuses an invisible emoji-keyboard field and sends the
+ * first character typed; Android has no emoji keyboard mode to ask for, so this is a small
+ * dialog with a visible field, and it waits for an actual emoji rather than taking
+ * whatever key was hit first.
+ */
+@Composable
+private fun TapbackDialog(onPick: (String) -> Unit, onDismiss: () -> Unit) {
+    var text by remember { mutableStateOf("") }
+    val focus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(Unit) {
+        // The dialog window needs a moment before its field can take focus.
+        delay(150)
+        runCatching { focus.requestFocus() }
+        keyboard?.show()
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Tapback") },
+        text = {
+            Column {
+                Text("Pick an emoji from the keyboard. The first one is sent as the reaction.")
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { typed ->
+                        val emoji = firstEmoji(typed)
+                        if (emoji != null) onPick(emoji) else text = typed
+                    },
+                    singleLine = true,
+                    modifier = Modifier.padding(top = 12.dp).fillMaxWidth().focusRequester(focus),
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** The first emoji in [text] as one whole grapheme (flags, skin tones, keycaps, ZWJ sets). */
+private fun firstEmoji(text: String): String? {
+    val breaks = android.icu.text.BreakIterator.getCharacterInstance()
+    breaks.setText(text)
+    var start = breaks.first()
+    var end = breaks.next()
+    while (end != android.icu.text.BreakIterator.DONE) {
+        val cluster = text.substring(start, end)
+        if (cluster.codePoints().anyMatch(::isEmojiCodePoint)) return cluster
+        start = end
+        end = breaks.next()
+    }
+    return null
+}
+
+/** The emoji blocks, plus the two marks that turn plain characters into emoji. */
+private fun isEmojiCodePoint(cp: Int): Boolean =
+    cp == 0x20E3 || cp == 0xFE0F || cp == 0x203C || cp == 0x2049 || cp == 0x2122 || cp == 0x2139 ||
+        cp in 0x2190..0x21FF || cp in 0x231A..0x23FF || cp == 0x24C2 || cp in 0x25AA..0x25FE ||
+        cp in 0x2600..0x27BF || cp in 0x2934..0x2935 || cp in 0x2B00..0x2BFF ||
+        cp == 0x3030 || cp == 0x303D || cp == 0x3297 || cp == 0x3299 || cp in 0x1F000..0x1FAFF
+
+/** "1:24:07 PM": ackDate.formatted(date: .omitted, time: .standard). */
+private fun ackTime(epochMillis: Long): String =
+    java.text.SimpleDateFormat("h:mm:ss a", java.util.Locale.getDefault()).format(epochMillis)
 
 /** "10/5/2026, 1:24:07 PM": messageDate.formatted(date: .numeric, time: .standard). */
 private fun detailTimestamp(epochMillis: Long): String =
@@ -1802,10 +1940,8 @@ private fun openMapLink(context: Context, url: String) {
 }
 
 /**
- * A coordinate shared in a message, drawn as a map framed to span the whole mesh.
- *
- * The pin on its own says nothing; against every node the mesh knows about it says where
- * this is relative to everyone, which is the question being asked. Mesh nodes are the small
+ * A coordinate shared in a message, drawn as a map ten miles across centred on it (see
+ * [MapThumbnail] for why the scale is fixed). Mesh nodes inside the frame are the small
  * dots, the shared point is the pin. Tapping opens the link in the maps app.
  */
 @OptIn(ExperimentalFoundationApi::class)

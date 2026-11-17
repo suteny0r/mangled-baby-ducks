@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TracerouteEntity::class,
         WaypointEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = false,
 )
 abstract class MeshDatabase : RoomDatabase() {
@@ -71,6 +71,18 @@ abstract class MeshDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * messages.relayNum (the relay identified when the ack arrived) and messages.hops
+         * (the hop count the message arrived with). Additive.
+         */
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN relayNum INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE messages ADD COLUMN hops INTEGER NOT NULL DEFAULT -1")
+                db.execSQL("ALTER TABLE nodes ADD COLUMN heardOnCurrentLora INTEGER")
+            }
+        }
+
         /** Every table, in dependency order; NodeBackupManager copies them in this order. */
         val TABLES = listOf(
             "nodes", "users", "my_info", "channels", "configs",
@@ -84,7 +96,7 @@ abstract class MeshDatabase : RoomDatabase() {
          */
         fun build(context: Context, name: String = "mesh.db"): MeshDatabase =
             Room.databaseBuilder(context, MeshDatabase::class.java, name)
-                .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+                .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_9_10)
                 .fallbackToDestructiveMigration()
                 .build()
     }

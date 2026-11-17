@@ -32,6 +32,10 @@ import androidx.compose.material.icons.outlined.QrCode2
 import androidx.compose.material.icons.outlined.SettingsInputAntenna
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Storage
+import androidx.compose.material.icons.outlined.DeleteForever
+import androidx.compose.material.icons.outlined.FormatListBulleted
+import androidx.compose.material3.Slider
+import kotlin.math.roundToInt
 import androidx.compose.material.icons.outlined.Smartphone
 import androidx.compose.material.icons.outlined.Tag
 import androidx.compose.material3.AlertDialog
@@ -83,6 +87,8 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
     var showExport by remember { mutableStateOf(false) }
     var showImport by remember { mutableStateOf(false) }
     var showLogWarning by remember { mutableStateOf(false) }
+    val purgeDays by vm.purgeStaleNodeDays.collectAsState()
+    var confirmClearData by remember { mutableStateOf(false) }
     var exportingLog by remember { mutableStateOf(false) }
     var logExportError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -274,6 +280,70 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                     enabled = connected,
                     chevron = false,
                 ) { vm.broadcastNodeInfo() }
+            }
+
+            // AppSettings.swift "App Data": the stale-node schedule and the full wipe.
+            SectionHeader("App Data")
+            GroupCard {
+                NavRow(
+                    "Clear Stale Nodes",
+                    Icons.Outlined.FormatListBulleted,
+                    chevron = false,
+                    trailing = {
+                        // iOS turns it on at 7 days.
+                        Switch(checked = purgeDays > 0, onCheckedChange = { vm.setPurgeStaleNodeDays(if (it) 7 else 0) })
+                    },
+                )
+                if (purgeDays > 0) {
+                    // The slider moves a local value and writes the setting on release.
+                    var sliderDays by remember(purgeDays) { mutableStateOf(purgeDays.toFloat()) }
+                    Column(Modifier.padding(horizontal = 16.dp)) {
+                        Text("After ${sliderDays.roundToInt()} Days", style = MaterialTheme.typography.bodyLarge)
+                        Slider(
+                            value = sliderDays,
+                            onValueChange = { sliderDays = it },
+                            onValueChangeFinished = { vm.setPurgeStaleNodeDays(sliderDays.roundToInt().coerceIn(1, 180)) },
+                            valueRange = 1f..180f,
+                        )
+                        Text(
+                            "Favorited and ignored nodes are always retained. Other nodes are " +
+                                "cleared from the app database on connect once they have not " +
+                                "been heard for this long. (Nodes with PKC keys are always " +
+                                "retained for at least 7 days.) Nothing is removed from the radio.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 12.dp),
+                        )
+                    }
+                }
+                RowDivider()
+                NavRow(
+                    "Clear App Data",
+                    Icons.Outlined.DeleteForever,
+                    subtitle = "Erase messages, nodes and backups from this phone",
+                    iconTint = MaterialTheme.colorScheme.error,
+                    chevron = false,
+                ) { confirmClearData = true }
+            }
+            if (confirmClearData) {
+                AlertDialog(
+                    onDismissRequest = { confirmClearData = false },
+                    title = { Text("Are you sure?") },
+                    text = {
+                        Text(
+                            "This disconnects the radio and erases every message, node, position " +
+                                "and backup stored by this app. The radio itself is not changed. " +
+                                "App settings and the saved radio list are kept."
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            confirmClearData = false
+                            vm.clearAppData()
+                        }) { Text("Erase all app data", color = MaterialTheme.colorScheme.error) }
+                    },
+                    dismissButton = { TextButton(onClick = { confirmClearData = false }) { Text("Cancel") } },
+                )
             }
 
             // Settings.swift developersSection: the per-radio database snapshots.

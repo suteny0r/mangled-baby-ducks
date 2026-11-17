@@ -32,10 +32,12 @@ import kotlin.coroutines.resume
  * same style as the Map tab, so a shared pin looks like the rest of the app rather than
  * like somebody else's map.
  *
- * Framed to **span the whole mesh**, not just the pin. A pin alone tells the reader nothing;
- * seen against every node the mesh knows about, it says where this is relative to everyone,
- * which is the question a mesh user is actually asking. Same bounds-of-all-nodes rule the
- * Map tab uses when it fits more than one node.
+ * Framed to a **fixed ten miles across, centred on the pin**. Pins are dropped while
+ * driving, to look back over later and see which places had coverage, and secondarily to
+ * show someone where you are; both want the place itself legible, at the same scale every
+ * time. The first version framed the pin together with every node in the node table, which
+ * read well for one local mesh and became a map of several states once the table held
+ * nodes from more than one city. Nodes that fall inside the frame are still drawn.
  *
  * ## One snapshotter for the life of the process, and it is never let go
  *
@@ -77,10 +79,8 @@ object MapThumbnail {
     /** Keeps a screenful of thumbnails; each is a few hundred KB at this size. */
     private val cache = object : LruCache<String, Rendered>(12) {}
 
-    /** Margin around the fitted bounds so pins never sit on the very edge. */
-    private const val INSET = 0.12
-    /** Used when the mesh has nothing to frame against: roughly a 10 km box, as the Map tab does. */
-    private const val LONE_PIN_SPAN_METRES = 10_000.0
+    /** The width of ground every thumbnail shows: ten miles, the user's chosen scale. */
+    private const val SPAN_METRES = 10 * 1609.344
     /** A style plus a screen of tiles over a slow link; past this the snapshotter is written off. */
     private const val RENDER_TIMEOUT_MS = 45_000L
 
@@ -125,11 +125,15 @@ object MapThumbnail {
         heightPx: Int,
     ): Rendered? {
         if (widthPx <= 0 || heightPx <= 0) return null
+        val target = LatLng(latitude, longitude)
+        val bounds = frame(target, widthPx, heightPx) ?: return null
+        // Only nodes inside the frame matter, for drawing and for the cache key alike: a
+        // node moving in another city must not throw away every thumbnail on screen.
+        @Suppress("NAME_SHADOWING")
+        val meshNodes = meshNodes.filter { bounds.contains(LatLng(it.latitude, it.longitude)) }
         val key = key(latitude, longitude, meshNodes, widthPx, heightPx)
         cache.get(key)?.let { return it }
 
-        val target = LatLng(latitude, longitude)
-        val bounds = frame(target, meshNodes) ?: return null
         val appContext = context.applicationContext
         return withContext(Dispatchers.Main) {
             cache.get(key)?.let { return@withContext it }
@@ -242,55 +246,44 @@ object MapThumbnail {
     }
 
     /**
-     * Everything the mesh knows about plus the shared pin, inset a little. With nothing to
-     * frame against, falls back to a box around the pin rather than rendering the planet.
+     * A box centred on the pin, [SPAN_METRES] wide and as tall as the thumbnail's shape
+     * makes it. Matching the box to the bitmap's aspect ratio is what keeps the width at
+     * the stated distance: the renderer fits a region inside the bitmap, so a box of any
+     * other shape would be shown with extra ground on two sides.
      */
-    private fun frame(target: LatLng, meshNodes: List<MapNode>): LatLngBounds? = runCatching {
-        val points = meshNodes.map { LatLng(it.latitude, it.longitude) } + target
-        if (points.size < 2) return@runCatching loneBox(target)
-        var north = points.maxOf { it.latitude }
-        var south = points.minOf { it.latitude }
-        var east = points.maxOf { it.longitude }
-        var west = points.minOf { it.longitude }
-        val padLat = ((north - south) * INSET).coerceAtLeast(0.002)
-        val padLng = ((east - west) * INSET).coerceAtLeast(0.002)
-        north = (north + padLat).coerceAtMost(85.0)
-        south = (south - padLat).coerceAtLeast(-85.0)
-        east = (east + padLng).coerceAtMost(180.0)
-        west = (west - padLng).coerceAtLeast(-180.0)
-        // Degenerate when every node sits on one spot; loneBox gives it something to show.
-        if (north - south < 1e-6 || east - west < 1e-6) loneBox(target)
-        else LatLngBounds.from(north, east, south, west)
+    private fun frame(target: LatLng, widthPx: Int, heightPx: Int): LatLngBounds? = runCatching {
+        val halfWidth = SPAN_METRES / 2
+        val halfHeight = halfWidth * heightPx / widthPx
+        val dLat = halfHeight / 111_320.0
+        val dLng = halfWidth /
+            (111_320.0 * Math.cos(Math.toRadians(target.latitude)).coerceAtLeast(0.01))
+        LatLngBounds.from(
+            (target.latitude + dLat).coerceAtMost(85.0),
+            (target.longitude + dLng).coerceAtMost(180.0),
+            (target.latitude - dLat).coerceAtLeast(-85.0),
+            (target.longitude - dLng).coerceAtLeast(-180.0),
+        )
     }.getOrNull()
 
-    private fun loneBox(target: LatLng): LatLngBounds {
-        val dLat = LONE_PIN_SPAN_METRES / 2 / 111_320.0
-        val dLng = LONE_PIN_SPAN_METRES / 2 /
-            (111_320.0 * Math.cos(Math.toRadians(target.latitude)).coerceAtLeast(0.01))
-        return LatLngBounds.from(
-            target.latitude + dLat, target.longitude + dLng,
-            target.latitude - dLat, target.longitude - dLng,
-        )
-    }
-
     /**
-     * The mesh moves, so the frame does. Keyed on the node count and a rounded extent
-     * rather than every position, or a single node drifting a few metres would throw away
-     * every thumbnail on screen.
+     * The frame is fixed by the pin, so the key is the pin, the size, and the nodes inside
+     * the frame. Positions are rounded to about a hundred metres, so a node drifting a few
+     * metres does not redraw the thumbnail.
      */
     private fun key(
         latitude: Double,
         longitude: Double,
-        meshNodes: List<MapNode>,
+        nodesInFrame: List<MapNode>,
         widthPx: Int,
         heightPx: Int,
     ): String {
-        val north = meshNodes.maxOfOrNull { it.latitude } ?: latitude
-        val south = meshNodes.minOfOrNull { it.latitude } ?: latitude
-        val east = meshNodes.maxOfOrNull { it.longitude } ?: longitude
-        val west = meshNodes.minOfOrNull { it.longitude } ?: longitude
-        return "%.5f,%.5f|%d|%.2f,%.2f,%.2f,%.2f|%dx%d".format(
-            latitude, longitude, meshNodes.size, north, south, east, west, widthPx, heightPx,
+        val nodes = nodesInFrame
+            .map { "%.3f,%.3f".format(it.latitude, it.longitude) }
+            .sorted()
+            .joinToString(";")
+            .hashCode()
+        return "%.5f,%.5f|%d:%d|%dx%d".format(
+            latitude, longitude, nodesInFrame.size, nodes, widthPx, heightPx,
         )
     }
 }

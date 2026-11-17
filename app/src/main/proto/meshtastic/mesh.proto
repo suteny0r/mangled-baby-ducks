@@ -2061,6 +2061,14 @@ message NodeInfo {
    * LSB 1 of the bitfield
    */
   bool has_xeddsa_signed = 14;
+
+  /*
+   * Whether the radio has heard this node on its current LoRa settings (firmware
+   * 2.8.1+, meshtastic/design#146). Field number taken from the generated Swift in
+   * Meshtastic-Apple (mesh.pb.swift, NodeInfo field 15); the .proto sources there
+   * had not caught up when this was added.
+   */
+  bool heard_on_current_lora = 15;
 }
 
 /*

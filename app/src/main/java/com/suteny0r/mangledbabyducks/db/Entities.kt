@@ -30,6 +30,13 @@ data class NodeEntity(
     /** Last NODE_STATUS_APP message text, if any. */
     val nodeStatus: String? = null,
     val firmwareVersion: String? = null,
+    /**
+     * NodeInfoEntity.heardOnCurrentLora: the radio's answer to "have you heard this node
+     * on the LoRa settings you are using now" (NodeInfo.heard_on_current_lora, firmware
+     * 2.8.1+). Null is unknown: older firmware, the radio's own row, or a node the radio
+     * no longer has.
+     */
+    val heardOnCurrentLora: Boolean? = null,
 )
 
 @Entity(tableName = "users")
@@ -91,6 +98,19 @@ data class MessageEntity(
     val relayNode: Long = 0,
     /** How many clean routing replies this send drew, which is how many nodes relayed it. */
     val relays: Int = 0,
+    /**
+     * The node [relayNode]'s byte was matched to when the routing reply arrived, or 0 when
+     * no single node fit. Decided then, against the neighbours the radio could hear at
+     * that moment, and never re-derived: the byte alone fits one node in every 256, and a
+     * later lookup against the whole node list named nodes from another city.
+     */
+    val relayNum: Long = 0,
+    /**
+     * How many hops this message had travelled when it reached our radio (hop_start minus
+     * hop_limit), or -1 when the packet did not say. The node row has a hop count too, but
+     * that one moves with every later packet; this is the figure for this message.
+     */
+    val hops: Int = -1,
 )
 
 @Entity(tableName = "channels")

@@ -73,6 +73,15 @@ object PrefKeys {
      * phone list and the Android Auto one, which has no toggle of its own.
      */
     val PIN_FAVORITES = booleanPreferencesKey("pin_favorites")
+
+    /**
+     * UserDefaults.purgeStaleNodeDays: nodes not heard in this many days are cleared from
+     * the app's store on connect. 0 is off, which is the default.
+     */
+    val PURGE_STALE_NODE_DAYS = androidx.datastore.preferences.core.intPreferencesKey("purge_stale_node_days")
+
+    /** UnheardOnCurrentLoraOffer.key(forNode:): "Keep" on the unheard-nodes banner, per radio. */
+    fun unheardDismissed(nodeNum: Long) = booleanPreferencesKey("unheardOnCurrentLoraDismissed.$nodeNum")
 }
 
 /** How many radios to keep before the least recently used one is dropped. */
@@ -220,6 +229,13 @@ class AppContainer(context: Context) {
                     if (live) {
                         runCatching { RadioService.start(context, radioManager.deviceName.value) }
                             .onFailure { Log.w("AppContainer", "Foreground service not started: ${it.message}") }
+                        // AccessoryManager+Connect step 8: prune stale nodes once the
+                        // dump is in, when its lastHeard values are current.
+                        val days = prefs.data.first()[PrefKeys.PURGE_STALE_NODE_DAYS] ?: 0
+                        if (days > 0) {
+                            runCatching { ingest.clearStaleNodes(days, radioManager.myNodeNum.value) }
+                                .onFailure { Log.w("AppContainer", "Stale node purge failed", it) }
+                        }
                     }
                 }
         }
@@ -541,6 +557,19 @@ class AppContainer(context: Context) {
      * tear the link down, drop the foreground service, and stop auto-connecting on the
      * next launch. The radio stays in the saved list.
      */
+    /**
+     * AppSettings.swift "Clear App Data": disconnect, delete every per-radio backup, empty
+     * the database and clear our notifications. App settings and the saved radio list
+     * stay, as on iOS, where "Reset App Settings" is a separate button.
+     */
+    suspend fun clearAppData(context: Context) = withContext(Dispatchers.IO) {
+        disconnectRadio(context)
+        backups.listBackups().forEach { backups.deleteBackup(it.key) }
+        database.clearAllTables()
+        ingest.resetNodeDbMirror()
+        androidx.core.app.NotificationManagerCompat.from(context).cancelAll()
+    }
+
     suspend fun disconnectRadio(context: Context) {
         radioManager.disconnect()
         RadioService.stop(context)

@@ -150,7 +150,11 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
      * marks the radio's own row (MeshPackets.nodeInfoPacket's connectedNodeNum), whose key
      * is accepted as ground truth rather than first-wins.
      */
-    suspend fun nodeInfo(info: MeshProtos.NodeInfo, connectedNodeNum: Long? = null) {
+    suspend fun nodeInfo(
+        info: MeshProtos.NodeInfo,
+        connectedNodeNum: Long? = null,
+        reportsHeardOnCurrentLora: Boolean = false,
+    ) {
         val num = info.num.uint()
         if (num == 0L) return
         val now = System.currentTimeMillis()
@@ -171,6 +175,12 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
                 isKeyManuallyVerified = info.isKeyManuallyVerified,
                 nodeStatus = existing?.nodeStatus,
                 firmwareVersion = existing?.firmwareVersion,
+                // MeshPackets.heardOnCurrentLora: null unless the radio is known to send
+                // the field (which also clears a value left by newer firmware after a
+                // downgrade), and null for the radio's own row, which it does not "hear".
+                heardOnCurrentLora = if (reportsHeardOnCurrentLora && num != connectedNodeNum) {
+                    info.heardOnCurrentLora
+                } else null,
             )
         )
         if (info.hasUser()) upsertUser(num, info.user, ownRadio = num == connectedNodeNum)
@@ -254,6 +264,47 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
     }
 
     /**
+     * MeshPackets.markAbsentFromRadio: after a full dump, a node the radio did not include
+     * is one it no longer has, so it has no answer for it. The stored answer goes back to
+     * unknown rather than surviving from an earlier dump.
+     */
+    suspend fun markAbsentFromRadio(presentNums: Set<Long>) {
+        db.nodeDao().numsWithLoraAnswer().filter { it !in presentNums }
+            .chunked(500).forEach { db.nodeDao().clearLoraAnswer(it) }
+    }
+
+    /**
+     * UpdateSwiftData.clearStaleNodes: drop nodes not heard in [nodeExpireDays] days from
+     * the app's store. Favorites and ignored nodes are always kept, and a node with a PKC
+     * key is kept at least seven days. Nothing is sent to the radio. User rows go with
+     * their nodes, or the orphan-user healer would bring the node rows back.
+     */
+    suspend fun clearStaleNodes(nodeExpireDays: Int, myNum: Long): Int {
+        if (nodeExpireDays <= 0) return 0
+        val now = System.currentTimeMillis()
+        val day = 86_400_000L
+        val stale = db.nodeDao().staleNums(
+            myNum = myNum,
+            cutoffMs = now - nodeExpireDays * day,
+            pkiCutoffMs = now - maxOf(nodeExpireDays, 7) * day,
+        )
+        stale.chunked(500).forEach { chunk ->
+            db.userDao().deleteIn(chunk)
+            db.nodeDao().deleteIn(chunk)
+        }
+        Log.i(TAG, "Cleared ${stale.size} nodes not heard in $nodeExpireDays days")
+        return stale.size
+    }
+
+    /** Every local record of one node; nothing is sent to the radio. */
+    suspend fun deleteNodeLocally(num: Long) {
+        db.nodeDao().delete(num)
+        db.userDao().delete(num)
+        db.positionDao().deleteFor(num)
+        db.telemetryDao().deleteFor(num)
+    }
+
+    /**
      * Firmware evicts its oldest non-favorite node the moment an insert passes the cap;
      * do the same between dumps so the store tracks the radio instead of only growing.
      *
@@ -297,7 +348,11 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
      * Mirror of MeshPackets.updateAnyPacketFrom / firmware NodeDB::updateFrom: every
      * inbound MeshPacket freshens the sender's link stats before port dispatch.
      */
-    suspend fun updateFromAnyPacket(packet: MeshProtos.MeshPacket, myNum: Long) {
+    suspend fun updateFromAnyPacket(
+        packet: MeshProtos.MeshPacket,
+        myNum: Long,
+        reportsHeardOnCurrentLora: Boolean = false,
+    ) {
         val from = packet.from.uint()
         if (from == 0L || from == myNum) return
         val isImplicitAck =
@@ -333,6 +388,13 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
                 lastHeard = lastHeard,
                 hopsAway = hopsAway,
                 hasXeddsaSigned = existing.hasXeddsaSigned || packet.xeddsaSigned,
+                // Heard over RF just now, so heard on the current settings; mirrors the
+                // firmware so the marker clears before the next dump. Packets replayed
+                // after a dump carry no RSSI, and those were heard earlier, maybe on other
+                // settings (UpdateSwiftData.updateAnyPacketFrom).
+                heardOnCurrentLora = if (reportsHeardOnCurrentLora && !isImplicitAck &&
+                    !packet.viaMqtt && packet.hasRxRssi()
+                ) true else existing.heardOnCurrentLora,
                 // The channel this node was actually decoded on. Until now the field was
                 // written only by a NodeInfo, so a node whose NodeInfo had never arrived
                 // read as channel 0, and anything RadioManager.channelFor sent it went to
@@ -424,6 +486,16 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
             // Firmware only signs broadcasts; gate on our own broadcast test as well so a
             // stray or spoofed flag can never put the verified shield on a DM.
             xeddsaSigned = packet.xeddsaSigned && isBroadcast,
+            // Same arithmetic as updateFromAnyPacket, kept on the message so it still
+            // describes this message after the sender's next packet takes another route.
+            hops = if (packet.hopStart != 0 && packet.hopLimit <= packet.hopStart) {
+                packet.hopStart - packet.hopLimit
+            } else -1,
+            // MeshPackets.swift stores relayNode on a new message too: on a received one
+            // it is the node our radio heard this copy from. Our own echoed sends are left
+            // empty; their relay comes later, with the ack.
+            relayNode = if (isFromSelf) 0L else packet.relayNode.uint(),
+            relayNum = if (isFromSelf) 0L else resolveRelay(packet, myNum),
         )
         // Dedupe on messageId: the radio echoes our own TX back and a second insert
         // would reset read/ack state and fire a phantom notification.
@@ -433,6 +505,28 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
             db.userDao().touchLastMessage(from, message.timestamp)
         }
         return if (isFromSelf) null else message
+    }
+
+    /**
+     * The node behind a packet's `relay_node` byte, or 0 when it cannot be pinned to one.
+     * The byte is the last byte of the node our radio received this copy from, which fits
+     * one node in every 256, so this only ever answers from what is certain or nearly so.
+     */
+    private suspend fun resolveRelay(packet: MeshProtos.MeshPacket, myNum: Long): Long {
+        val relayByte = packet.relayNode.uint() and 0xFF
+        val from = packet.from.uint()
+        return when {
+            relayByte == 0L -> 0L
+            // A packet that arrived with its hop budget untouched came straight from its
+            // sender, so the "relay" is that node and nothing needs guessing.
+            from != myNum && packet.hopStart != 0 && packet.hopStart == packet.hopLimit &&
+                (from and 0xFF) == relayByte -> from
+            // Otherwise the byte is all there is. Name a node only when exactly one
+            // current direct neighbour fits it; anything else stays an unnamed byte.
+            else -> db.nodeDao()
+                .relayCandidates(relayByte, myNum, System.currentTimeMillis() - RELAY_NEIGHBOUR_WINDOW_MS)
+                .singleOrNull() ?: 0L
+        }
     }
 
     /** An ack or nak correlated to one of our sends; errorReason 0 is a clean ack. */
@@ -454,6 +548,7 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
         // the receivedACK test in deliveryStatus decide whether it is shown.
         val realAck = packet.to.uint() != packet.from.uint() &&
             db.messageDao().destinationOf(requestId) != null
+        val relayNum = resolveRelay(packet, myNum)
         db.messageDao().applyAck(
             messageId = requestId,
             receivedAck = errorReason == 0,
@@ -462,6 +557,7 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
             ackSnr = packet.rxSnr,
             ackTimestamp = if (packet.rxTime != 0) packet.rxTime.uint() * 1000 else System.currentTimeMillis(),
             relayNode = packet.relayNode.uint(),
+            relayNum = relayNum,
         )
         // Every outcome of a send, named. Until now only a PKI nak on a DM was logged
         // (RadioManager.healPkiFailure), so a channel broadcast that came back "Failed to
@@ -755,6 +851,12 @@ class PacketIngest(private val db: MeshDatabase, private val backups: NodeBackup
 
     companion object {
         private const val TAG = "PacketIngest"
+        /**
+         * How recently the radio must have heard a direct neighbour for it to be named as
+         * a relay. Short enough that neighbours from somewhere the user has since left
+         * have aged out, long enough to span the gaps between a quiet router's own packets.
+         */
+        private const val RELAY_NEIGHBOUR_WINDOW_MS = 2 * 60 * 60 * 1000L
 
         /** Roles that cannot receive DMs (unmessagableFromUser fallback). */
         private val UNMESSAGABLE_ROLES = setOf(2, 4, 5, 6, 7, 10, 11)

@@ -9,6 +9,115 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## Message Details named relays that could not have been involved (0.2.46, 2026-11-17, builds, NOT verified)
+
+User report: details on sent messages were inaccurate and inconsistent ("relayed",
+a hex byte, or a node name), and while travelling 1500 miles from home the name was a
+home node.
+
+Cause, verified in code: `MeshPacket.relay_node` is only the last byte of the relayer's
+node number. The ported `relayDisplay()` resolved it at display time against every user
+ever stored, named a lone match outright and otherwise took the fewest-hops match. With
+a few hundred nodes most bytes fit somebody. This is how iOS does it too; this port now
+departs from it on purpose.
+
+- New column `messages.relayNum` (DB version 10, `MIGRATION_9_10`, additive). Set in
+  `PacketIngest.routing` when the routing reply arrives: the reply's sender when it came
+  with its hop budget untouched and its number ends in the byte; otherwise the single
+  node from `NodeDao.relayCandidates` (byte matches, `hopsAway = 0`, not MQTT, heard
+  within `RELAY_NEIGHBOUR_WINDOW_MS` = 2 h, not us); otherwise 0.
+- `applyAck` no longer lets a reply with `relayNode = 0` erase a recorded relay.
+- `MessagesViewModel.relayDisplay` reads only the stored result: "Name (…a7)" or
+  "unidentified node (…a7)". Messages acked before this change have `relayNum = 0` and
+  show as unidentified.
+- The dialog has one relay line: "Relayed by …", "Confirmation relayed by …",
+  "Confirmation received directly from the recipient", or "Relayed by a node the radio
+  did not report". The "Relayed by N nodes" line is gone: `relays` counts clean routing
+  replies, not nodes.
+- Open risk: a relaying neighbour that has sent nothing of its own in 2 h, or whose
+  `hopsAway` is unknown, shows as unidentified even though it is known. That is the
+  intended trade: a missing name over a wrong one.
+
+### Per-message hop count and two more tapbacks (0.2.46, NOT verified)
+
+- `messages.hops` (same `MIGRATION_9_10`): `hop_start - hop_limit` as the message arrived,
+  -1 when the packet did not say. Message Details now shows this instead of the sender's
+  current node-level `hopsAway`, falling back to the node figure for older rows, and says
+  "Hops Away unknown" rather than 0 when neither is known.
+- Context menu "Tapback": iOS's free-choice tapback. iOS focuses an invisible emoji-keyboard
+  field; Android cannot request an emoji keyboard, so this is `TapbackDialog`, a small
+  dialog whose field sends the first emoji typed (`firstEmoji`, ICU grapheme clusters).
+  Its state (`tapbackFor`) is hoisted to `ThreadView` like the other dialogs.
+- Context menu "Tapback hop count N": not in iOS. Apple users reply with the keycap digit
+  of a message's hop count by hand (checked: no code for it in Meshtastic-Apple `9a78e472`
+  or the firmware). This sends digit + U+FE0F U+20E3 in one tap, on received messages
+  with `hops` in 0..9. Messages stored before this build have no count and do not offer it.
+- The fixed eight-emoji strip is unchanged.
+
+### Message Details lines the port had dropped (0.2.46, NOT verified)
+
+Compared against `MessageContextMenuItems.swift` at Meshtastic-Apple `9a78e472`. Added:
+
+- Relay on received messages. `PacketIngest.textMessage` now stores `relayNode` and
+  `relayNum` (via the shared `resolveRelay`) for messages not from us, as
+  `MeshPackets.swift` does for `relayNode`. The dialog says "Received directly from the
+  sender" when the relay is the sender, else "Relayed by …".
+- "Verified with the sender's key." on signed messages.
+- "Ack Time: h:mm:ss a" on our sends once `ackTimestamp` is set.
+- "Ack SNR: n.nn dB" when non-zero.
+
+Left as deliberate departures from iOS, at the user's direction: neighbour-only relay
+naming, the single relay line, per-message hops, and "Hops Away unknown" instead of 0.
+
+### Node table cleaning, three ports from iOS (0.2.46, NOT verified)
+
+Sources at Meshtastic-Apple `9a78e472`. The app already had `reconcileNodeDb` and the node
+cap, which drop nodes the radio evicted; these three are additional.
+
+- **Clear Stale Nodes** (`AppSettings.swift`, `UpdateSwiftData.clearStaleNodes`). Settings >
+  App Data: a switch (on = 7 days) and a 1..180 day slider, stored in
+  `PrefKeys.PURGE_STALE_NODE_DAYS`, 0 = off (default). `PacketIngest.clearStaleNodes` runs
+  from the `AppContainer` collector when the state reaches `Subscribed` (after the dump, as
+  iOS step 8). Favorites and ignored are kept; a node whose user has a PKC key is kept at
+  least 7 days; the radio's own row is skipped. App store only. A node the radio still
+  holds comes back on the next dump with the radio's `last_heard`, so it is cleared again.
+- **Clear App Data** (`AppSettings.swift`). Settings > App Data, behind a confirmation:
+  `AppContainer.clearAppData` = `disconnectRadio`, delete every backup,
+  `database.clearAllTables()`, reset the node-count mirror, cancel notifications. DataStore
+  settings and the saved radio list are kept; iOS's separate "Reset App Settings" is not
+  ported.
+- **Unheard nodes banner** (`UnheardNodesBanner.swift`, `UnheardOnCurrentLora.swift`).
+  Needs `NodeInfo.heard_on_current_lora` (field 15, firmware 2.8.1+), added by hand to the
+  vendored `mesh.proto` because the `.proto` sources in the Apple clone predate it; the
+  number comes from the generated `mesh.pb.swift`. New nullable column
+  `nodes.heardOnCurrentLora` (same `MIGRATION_9_10`). Set from the dump
+  (`PacketIngest.nodeInfo`), set true on any RF packet with RSSI (`updateFromAnyPacket`),
+  reset to null for nodes missing from a dump (`markAbsentFromRadio`).
+  `RadioManager.reportsHeardOnCurrentLora`, `nodeDatabaseSavedAt` and
+  `awaitingNodeDbAfterLoRaChange` mirror the AccessoryManager properties.
+  `NodesViewModel.unheard` decides the offer (most of the reported list unheard, not
+  dismissed, not awaiting a post-LoRa-change dump); "Keep" is stored per radio in
+  `PrefKeys.unheardDismissed(num)` and cleared once most of the list is heard again.
+  Delete sends one `remove_by_nodenum` per node, re-checking each first; app-only nodes
+  are deleted locally.
+  One departure: a node with no answer that was heard after this session's dump is not
+  treated as app-only (it is new, not gone). iOS would offer it for removal.
+  Not ported: the per-row "Not heard on current LoRa" marker, the node-detail line and
+  the "hide unheard" filter.
+
+### Inline map of a shared pin is now a fixed ten miles across (0.2.46, NOT verified)
+
+User direction. Pin drops are a coverage survey tool first (drive around, drop a link at
+each spot, review later which ones got through) and a "here I am" second. The old frame
+(pin plus every node in the node table) turned into a multi-state map once the table held
+nodes from several cities. `MapThumbnail.frame` is now a box centred on the pin,
+`SPAN_METRES` = 10 miles wide, shaped to the bitmap so the width holds. Nodes inside the
+frame are still drawn as dots; the cache key uses only those. This supersedes any older
+note here that describes the thumbnail as spanning the whole mesh.
+
+Discussed and not built: colouring the pin by delivery result, and a per-conversation
+coverage map of all pin drops.
+
 ## Composer takes the bottom edge while typing (0.2.44, 2026-11-17, builds, NOT verified)
 
 User request, four parts, all in `MessagesScreen.kt` `Composer` / `ThreadView` plus one

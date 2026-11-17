@@ -141,6 +141,22 @@ class RadioManager(
             return major > 2 || (major == 2 && minor >= 8)
         }
 
+    /** AccessoryManager.reportsHeardOnCurrentLora, for the connected radio. */
+    val reportsHeardOnCurrentLora: Boolean
+        get() = reportsHeardOnCurrentLora(_deviceMetadata.value?.firmwareVersion)
+
+    /**
+     * AccessoryManager.nodeDatabaseSavedAt: when this session's node database dump was
+     * stored, null until then. The radio's heard-on-current-LoRa answers are only this
+     * session's once it is set.
+     */
+    private val _nodeDatabaseSavedAt = MutableStateFlow<Long?>(null)
+    val nodeDatabaseSavedAt: StateFlow<Long?> = _nodeDatabaseSavedAt.asStateFlow()
+
+    /** AccessoryManager.awaitingNodeDatabaseAfterLoRaChange. */
+    private val _awaitingNodeDbAfterLoRaChange = MutableStateFlow(false)
+    val awaitingNodeDbAfterLoRaChange: StateFlow<Boolean> = _awaitingNodeDbAfterLoRaChange.asStateFlow()
+
     /**
      * AccessoryManager.refreshNodeDatabaseAfterLoRaChange: on 2.8 a LoRa save does not
      * reboot, so nothing re-reads the config, and the radio's answers about which nodes
@@ -149,15 +165,20 @@ class RadioManager(
      */
     fun refreshAfterLoRaChange() {
         if (_state.value !is RadioState.Subscribed) return
+        // Until the new dump is in, the stored answers describe the old settings.
+        _awaitingNodeDbAfterLoRaChange.value = reportsHeardOnCurrentLora
         scope.launch {
             runCatching { send { it.setWantConfigId(MeshProtocol.NONCE_ONLY_CONFIG) } }
             kotlinx.coroutines.delay(2_000)
+            if (_state.value !is RadioState.Subscribed) _awaitingNodeDbAfterLoRaChange.value = false
             if (_state.value is RadioState.Subscribed) {
+                _nodeDatabaseSavedAt.value = null
                 // A full dump follows, so arm the same reconcile collector as step 5 of
                 // the handshake; the new modem settings change who the radio hears.
                 dumpStartedMs = System.currentTimeMillis()
                 dumpNodeNums = ConcurrentHashMap.newKeySet()
                 runCatching { send { it.setWantConfigId(MeshProtocol.NONCE_ONLY_DB) } }
+                    .onFailure { _awaitingNodeDbAfterLoRaChange.value = false }
             }
         }
     }
@@ -547,6 +568,8 @@ class RadioManager(
             // the store against them (see CONFIG_COMPLETE_ID in processFromRadio).
             nodeCount = 0
             lastNodeInfoAt = 0L
+            _nodeDatabaseSavedAt.value = null
+            _awaitingNodeDbAfterLoRaChange.value = false
             dumpStartedMs = System.currentTimeMillis()
             dumpNodeNums = ConcurrentHashMap.newKeySet()
             _state.value = RadioState.RetrievingDatabase(0)
@@ -625,6 +648,8 @@ class RadioManager(
         _identityReady.value = false
         _deviceName.value = null
         _linkRssi.value = null
+        _nodeDatabaseSavedAt.value = null
+        _awaitingNodeDbAfterLoRaChange.value = false
     }
 
     private suspend fun handleEvent(source: RadioConnection, event: ConnectionEvent) {
@@ -668,7 +693,11 @@ class RadioManager(
                 _identityReady.value = true
             }
             MeshProtos.FromRadio.PayloadVariantCase.NODE_INFO -> {
-                ingest.nodeInfo(fromRadio.nodeInfo, connectedNodeNum = _myNodeNum.value)
+                ingest.nodeInfo(
+                    fromRadio.nodeInfo,
+                    connectedNodeNum = _myNodeNum.value,
+                    reportsHeardOnCurrentLora = reportsHeardOnCurrentLora,
+                )
                 dumpNodeNums?.add(fromRadio.nodeInfo.num.uint())
                 nodeCount++
                 lastNodeInfoAt = System.currentTimeMillis()
@@ -715,9 +744,19 @@ class RadioManager(
                         // of its NodeDB by streaming it.
                         ingest.setRadioNodeCount(dump.size)
                         val started = dumpStartedMs
+                        val reports = reportsHeardOnCurrentLora
                         scope.launch {
                             runCatching { ingest.reconcileNodeDb(dump, _myNodeNum.value, started) }
                                 .onFailure { Log.w(TAG, "NodeDB reconcile failed", it) }
+                            if (reports && dump.isNotEmpty()) {
+                                runCatching { ingest.markAbsentFromRadio(dump) }
+                                    .onFailure { Log.w(TAG, "markAbsentFromRadio failed", it) }
+                            }
+                            // Only a session that is still up owns this dump.
+                            if (_state.value !is RadioState.Idle) {
+                                _nodeDatabaseSavedAt.value = System.currentTimeMillis()
+                            }
+                            _awaitingNodeDbAfterLoRaChange.value = false
                         }
                     }
                 }
@@ -753,6 +792,7 @@ class RadioManager(
                             ackSnr = 0f,
                             ackTimestamp = System.currentTimeMillis(),
                             relayNode = 0L,
+                            relayNum = 0L,
                         )
                     }
                 } else {
@@ -768,7 +808,7 @@ class RadioManager(
 
     private suspend fun processMeshPacket(packet: MeshProtos.MeshPacket) {
         val myNum = _myNodeNum.value
-        ingest.updateFromAnyPacket(packet, myNum)
+        ingest.updateFromAnyPacket(packet, myNum, reportsHeardOnCurrentLora)
         when (packet.decoded.portnum) {
             Portnums.PortNum.TEXT_MESSAGE_APP,
             Portnums.PortNum.ALERT_APP,
@@ -1803,6 +1843,20 @@ class RadioManager(
     }
 
     companion object {
+        /**
+         * AccessoryManager.reportsHeardOnCurrentLora(firmwareVersion:): firmware 2.8.1+.
+         * Strict on purpose: an unknown version is false, because older firmware never
+         * sends the field and reading it there would mark every node unheard.
+         */
+        fun reportsHeardOnCurrentLora(firmwareVersion: String?): Boolean {
+            val parts = firmwareVersion?.split('.')?.take(3)?.map { it.toIntOrNull() } ?: return false
+            if (parts.size != 3) return false
+            val major = parts[0] ?: return false
+            val minor = parts[1] ?: return false
+            val patch = parts[2] ?: return false
+            return major > 2 || (major == 2 && (minor > 8 || (minor == 8 && patch >= 1)))
+        }
+
         private const val TAG = "RadioManager"
         /** Per-peer floor between automatic user-info exchanges after a PKI nak. */
         private const val KEY_EXCHANGE_COOLDOWN_MS = 5 * 60_000L

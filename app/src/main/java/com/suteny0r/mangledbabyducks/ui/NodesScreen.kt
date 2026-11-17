@@ -48,6 +48,14 @@ import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material.icons.filled.SensorsOff
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -192,6 +200,28 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
                 modifier = Modifier.padding(vertical = 4.dp),
             )
         }
+        val unheard by vm.unheard.collectAsState()
+        val removingUnheard by vm.removingUnheard.collectAsState()
+        val unheardResult by vm.unheardRemovalResult.collectAsState()
+        LaunchedEffect(unheard.staleDismissal) {
+            if (unheard.staleDismissal) vm.clearUnheardDismissal()
+        }
+        if (unheard.show || removingUnheard) {
+            UnheardNodesBanner(
+                count = unheard.nums.size,
+                removing = removingUnheard,
+                onDelete = vm::removeUnheard,
+                onKeep = vm::keepUnheard,
+            )
+        }
+        unheardResult?.let { result ->
+            AlertDialog(
+                onDismissRequest = { vm.unheardRemovalResult.value = null },
+                title = { Text("Unheard Nodes") },
+                text = { Text(result) },
+                confirmButton = { TextButton(onClick = { vm.unheardRemovalResult.value = null }) { Text("OK") } },
+            )
+        }
         if (nodes.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
@@ -231,6 +261,83 @@ fun NodesScreen(vm: NodesViewModel = viewModel()) {
                 }
             }
         }
+    }
+}
+
+/**
+ * UnheardNodesBanner.swift: one aggregate offer when most of the radio's node list has not
+ * been heard on its current LoRa settings, which is what a settings change does all at
+ * once. The wording claims only what the radio knows; it cannot tell that nodes moved to
+ * another preset, since it cannot observe a channel it is not tuned to.
+ */
+@Composable
+private fun UnheardNodesBanner(count: Int, removing: Boolean, onDelete: () -> Unit, onKeep: () -> Unit) {
+    var confirming by remember { mutableStateOf(false) }
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+    ) {
+        Row(Modifier.padding(12.dp)) {
+            Icon(
+                Icons.Filled.SensorsOff,
+                contentDescription = null,
+                tint = Color(0xFFFF9500),
+                modifier = Modifier.padding(end = 12.dp),
+            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "$count nodes not heard on your current LoRa settings",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                )
+                Text(
+                    "Your radio has not heard them on the settings it is using now, or no longer " +
+                        "has them. Favorites and the connected node are kept.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
+                )
+                if (removing) {
+                    // One admin message per node, so a large cleanup takes a while.
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Text(
+                            "Removing…",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
+                    }
+                } else {
+                    Row {
+                        Button(
+                            onClick = { confirming = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        ) { Text("Delete") }
+                        OutlinedButton(onClick = onKeep, modifier = Modifier.padding(start = 12.dp)) { Text("Keep") }
+                    }
+                }
+            }
+        }
+    }
+    if (confirming) {
+        AlertDialog(
+            onDismissRequest = { confirming = false },
+            title = { Text("Remove $count nodes?") },
+            text = {
+                Text(
+                    "They are removed from this app, and from the radio if it still has them. " +
+                        "Any that are still out there come back when they are next heard."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirming = false
+                    onDelete()
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirming = false }) { Text("Cancel") } },
+        )
     }
 }
 

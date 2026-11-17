@@ -16,6 +16,17 @@ interface NodeDao {
     @Query("SELECT * FROM nodes WHERE num = :num")
     suspend fun get(num: Long): NodeEntity?
 
+    /**
+     * Nodes that could have been the relay behind a `relay_node` byte: the number ends in
+     * that byte, the radio hears them directly (zero hops, over RF) and has done so
+     * recently. A relay is by definition a node our radio received from first hand.
+     */
+    @Query(
+        "SELECT num FROM nodes WHERE (num & 255) = :suffix AND num != :myNum " +
+            "AND hopsAway = 0 AND viaMqtt = 0 AND COALESCE(lastHeard, 0) >= :heardSinceMs"
+    )
+    suspend fun relayCandidates(suffix: Long, myNum: Long, heardSinceMs: Long): List<Long>
+
     @Transaction
     @Query("SELECT * FROM nodes ORDER BY favorite DESC, lastHeard DESC, num DESC")
     fun nodesWithUsers(): Flow<List<NodeWithUser>>
@@ -84,6 +95,25 @@ interface NodeDao {
 
     @Query("DELETE FROM nodes WHERE num IN (:nums)")
     suspend fun deleteIn(nums: List<Long>)
+
+    @Query("SELECT num FROM nodes WHERE heardOnCurrentLora IS NOT NULL")
+    suspend fun numsWithLoraAnswer(): List<Long>
+
+    @Query("UPDATE nodes SET heardOnCurrentLora = NULL WHERE num IN (:nums)")
+    suspend fun clearLoraAnswer(nums: List<Long>)
+
+    /**
+     * UpdateSwiftData.clearStaleNodes' candidates: not favorite, not ignored, heard at
+     * some point, and not since the cutoff. A node whose user holds a PKC key gets the
+     * later [pkiCutoffMs], so it is kept at least seven days.
+     */
+    @Query(
+        "SELECT n.num FROM nodes n LEFT JOIN users u ON u.num = n.num " +
+            "WHERE n.favorite = 0 AND n.ignored = 0 AND n.num != :myNum " +
+            "AND n.lastHeard IS NOT NULL AND n.lastHeard < " +
+            "CASE WHEN COALESCE(u.pkiEncrypted, 0) = 1 THEN :pkiCutoffMs ELSE :cutoffMs END"
+    )
+    suspend fun staleNums(myNum: Long, cutoffMs: Long, pkiCutoffMs: Long): List<Long>
 
     @Query("UPDATE nodes SET favorite = :favorite WHERE num = :num")
     suspend fun setFavorite(num: Long, favorite: Boolean)
@@ -190,7 +220,9 @@ interface MessageDao {
             "receivedAck = CASE WHEN :receivedAck THEN 1 ELSE receivedAck END, " +
             "realAck = CASE WHEN :realAck THEN 1 ELSE realAck END, " +
             "ackError = :ackError, ackSnr = :ackSnr, ackTimestamp = :ackTimestamp, " +
-            "relayNode = :relayNode, " +
+            // A reply that names no relay does not erase the one already recorded.
+            "relayNum = CASE WHEN :relayNode != 0 THEN :relayNum ELSE relayNum END, " +
+            "relayNode = CASE WHEN :relayNode != 0 THEN :relayNode ELSE relayNode END, " +
             "relays = relays + CASE WHEN :receivedAck THEN 1 ELSE 0 END " +
             "WHERE messageId = :messageId"
     )
@@ -202,6 +234,7 @@ interface MessageDao {
         ackSnr: Float,
         ackTimestamp: Long,
         relayNode: Long,
+        relayNum: Long,
     )
 
     @Query("SELECT COUNT(*) FROM messages WHERE read = 0 AND isEmoji = 0")
