@@ -9,6 +9,22 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## Sent text stayed in the composer after a reply (0.2.47, 2026-11-17, builds, NOT verified)
+
+User report on 0.2.46: after sending a reply the keyboard closed but the text stayed in
+the field, so the send arrow repeated the message. Not reproduced here (no device build).
+Inferred cause: 0.2.44 made `Composer.send` clear the draft and then drop focus; dropping
+focus makes the keyboard commit its composing word, which arrives as an `onValueChange`
+carrying the old text after the draft was emptied. Two changes in `MessagesScreen.kt`:
+`send()` now drops focus first and sends after, and `ThreadView` refuses a draft change
+equal to the just-sent text for 1.5 s (`justSent`). If the report persists the cause is
+something else; why it showed on a reply in particular is not explained by this.
+
+Also in 0.2.47, both user reports on 0.2.46, both NOT verified: the Ack SNR line in Message
+Details was a size smaller than Ack Time beside it (copied from iOS caption2; now the same
+size), and the Tapback picker left the keyboard up after sending (the dialog now hides it
+on pick, cancel and dismiss, and `ThreadView` hides it once more after the dialog closes).
+
 ## Message Details named relays that could not have been involved (0.2.46, 2026-11-17, builds, NOT verified)
 
 User report: details on sent messages were inaccurate and inconsistent ("relayed",

@@ -640,6 +640,14 @@ private fun ThreadView(
     // return below and a tab switch. A TextFieldValue, because the formatting toolbar
     // works on the selection.
     var draft by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
+    // The text of the message that was just sent, held briefly; see onDraftChange below.
+    var justSent by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(justSent) {
+        if (justSent != null) {
+            delay(1_500)
+            justSent = null
+        }
+    }
     val positions by vm.positionByNode.collectAsState()
     val here by vm.myLocation.collectAsState()
     val names by vm.namesByNum.collectAsState()
@@ -812,6 +820,19 @@ private fun ThreadView(
                 )
             }
         }
+        val threadKeyboard = LocalSoftwareKeyboardController.current
+        var pickerWasOpen by remember { mutableStateOf(false) }
+        LaunchedEffect(tapbackFor) {
+            // Once the picker has closed, hide the keyboard from this window too, in case
+            // the picker's own request was dropped as its window went away.
+            if (tapbackFor != null) {
+                pickerWasOpen = true
+            } else if (pickerWasOpen) {
+                pickerWasOpen = false
+                delay(100)
+                threadKeyboard?.hide()
+            }
+        }
         tapbackFor?.let { id ->
             TapbackDialog(
                 onPick = { emoji ->
@@ -869,7 +890,13 @@ private fun ThreadView(
         }
         Composer(
             draft = draft,
-            onDraftChange = { draft = it },
+            onDraftChange = { next ->
+                // A keyboard that was mid-word when Send was pressed can hand the old text
+                // back after the draft was cleared, which left the sent message sitting in
+                // the field ready to be sent again. For a moment after a send, that one
+                // echo is refused.
+                if (justSent == null || next.text.trim() != justSent) draft = next
+            },
             replyTo = replyTo,
             onCancelReply = { replyTo = null },
             isDirect = target is ThreadTarget.Direct,
@@ -880,6 +907,7 @@ private fun ThreadView(
             onSend = { text, sharePosition ->
                 onSend(text, replyTo?.messageId ?: 0, false, sharePosition)
                 replyTo = null
+                justSent = text.trim()
                 draft = TextFieldValue("")
             },
         )
@@ -1402,7 +1430,8 @@ private fun MessageDetailsDialog(
                 if (message.ackSnr != 0f) {
                     Text(
                         "Ack SNR: ${"%.2f".format(message.ackSnr)} dB",
-                        style = MaterialTheme.typography.labelSmall,
+                        // iOS sets this one line in caption2, a size below "Ack Time"
+                        // beside it. Not copied: the two read as a pair.
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -1423,14 +1452,24 @@ private fun TapbackDialog(onPick: (String) -> Unit, onDismiss: () -> Unit) {
     var text by remember { mutableStateOf("") }
     val focus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
     LaunchedEffect(Unit) {
         // The dialog window needs a moment before its field can take focus.
         delay(150)
         runCatching { focus.requestFocus() }
         keyboard?.show()
     }
+    // Closing the dialog does not close the keyboard it raised: the keyboard outlives the
+    // window and stays up over the thread. Put it away while this window still owns it.
+    fun closeKeyboard() {
+        focusManager.clearFocus()
+        keyboard?.hide()
+    }
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            closeKeyboard()
+            onDismiss()
+        },
         title = { Text("Tapback") },
         text = {
             Column {
@@ -1439,14 +1478,22 @@ private fun TapbackDialog(onPick: (String) -> Unit, onDismiss: () -> Unit) {
                     value = text,
                     onValueChange = { typed ->
                         val emoji = firstEmoji(typed)
-                        if (emoji != null) onPick(emoji) else text = typed
+                        if (emoji != null) {
+                            closeKeyboard()
+                            onPick(emoji)
+                        } else text = typed
                     },
                     singleLine = true,
                     modifier = Modifier.padding(top = 12.dp).fillMaxWidth().focusRequester(focus),
                 )
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = {
+            TextButton(onClick = {
+                closeKeyboard()
+                onDismiss()
+            }) { Text("Cancel") }
+        },
     )
 }
 
@@ -1588,11 +1635,14 @@ private fun Composer(
         onDraftChange(TextFieldValue(result.text, result.selection))
     }
     fun send() {
-        onSend(text.trim(), sharePosition)
+        val outgoing = text.trim()
+        // TextMessageField.send: isFocused = false. Focus goes first: giving it up makes
+        // the keyboard commit whatever word it was still composing, and that commit has
+        // to land before the draft is emptied, not after.
+        stopComposing()
+        onSend(outgoing, sharePosition)
         sharePosition = false
         confirmLong = false
-        // TextMessageField.send: isFocused = false.
-        stopComposing()
     }
     fun append(suffix: String) {
         val joined = text + suffix
