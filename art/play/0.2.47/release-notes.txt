@@ -1,0 +1,3 @@
+<en-US>
+Fixes from 0.2.46 testing: sent text no longer stays in the message field after sending, the keyboard closes after a tapback is sent, and the Ack Time and Ack SNR lines in Message Details are the same size.
+</en-US>
