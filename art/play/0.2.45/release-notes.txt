@@ -1,0 +1,3 @@
+<en-US>
+Conversations open at the newest message. A channel or direct message thread now starts at the very end and stays there while pictures and maps load, when the keyboard opens, and when a new message arrives. Scroll back to read history and the thread stays where you left it.
+</en-US>
