@@ -1,0 +1,3 @@
+<en-US>
+Reconnects on its own after a long time away from the radio. Before, if you were out of range for more than about half an hour, the app could stop noticing the radio and you had to reconnect by hand. It now keeps a standing connection request with the phone's Bluetooth, so walking back into range reconnects without a tap. If the radio is not there when the app starts, the app now keeps watching for it while it is open instead of giving up.
+</en-US>
