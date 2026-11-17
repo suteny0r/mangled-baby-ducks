@@ -9,7 +9,44 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
-## Background GPS drained the phone (0.2.42, 2026-11-15, builds, NOT yet verified on the phone)
+## A long absence still needed a manual reconnect (0.2.43, 2026-11-17, builds, NOT verified)
+
+Reported by a user: away from the radio for an extended period, back beside it, and the app
+had to be reconnected by hand. `watchForReturn` (0.2.22) was meant to cover this and relied
+entirely on one MAC-filtered scan, which has two holes:
+
+- Android downgrades any scan that has run 30 minutes to opportunistic, filtered scans
+  included (`AppScanStats.SCAN_TIMEOUT_MS`). It then only hears what another app's scan turns
+  up. Short absences reconnected; long ones reconnected by luck. A tester log shows both: a
+  watch that fired after 2 h 17 min, and one started 11-05 15:22 that never fired.
+- A bonded radio can be connectable while invisible to every scan (the 0.2.24 note below).
+  That fix covered user-tapped connects only; the watch never tried what it could not see.
+
+Fix, in `BleScanner.awaitReturn`: two listeners, first wins. The scan, now restarted every
+20 minutes, and a background connect (`connectGatt(autoConnect = true)`), where the
+controller waits on its accept list with no time limit. The background connect is a
+presence signal only: its GATT client is disconnected and closed before `awaitReturn`
+returns, fired or cancelled, so the attempt loop still registers the only client.
+`beginRequest` joins a watch that is still waiting for the same reason. The watch's attempt
+loop now runs with `attemptWhenAbsent = true`.
+
+Policy change, by the user: a failed `autoConnect` (radio absent at launch) now starts the
+same watch instead of leaving the session dead. No foreground service is held for it
+(the user judged that undesirable), so that watch lasts as long as the process does. A
+collector in `AppContainer` starts `RadioService` when a session goes live, for the link
+the watch brings back; Android refuses that start from the background, which is caught.
+The one-attempt CAS on `autoConnect` stays.
+
+The phone's radio is now named "suteny0r" (was "SOBE GAT562 30s"); same node, same COM14 rule.
+
+To verify: the phone runs the Play-signed build, so a local APK will not install over it
+(`INSTALL_FAILED_UPDATE_INCOMPATIBLE`). Ship through internal testing, connect, power the
+radio off for over 30 minutes with the phone screen off, power it on, and look for
+`BleScanner: <mac> is back (background connect|advertisement)` followed by `Connected`.
+Also check `Presence probe armed` / `Presence probe closed` pair up, and that
+`live clients` still reads 1 for the session.
+
+## Background GPS drained the phone (0.2.42, 2026-11-15, VERIFIED on the phone 2026-11-17)
 
 Reported: the app accounted for 25% of the phone's battery over 24 hours, with "Share phone
 location" off the whole time.
@@ -38,6 +75,15 @@ an exception path.
 To verify: `adb shell dumpsys batterystats --reset`, run a day connected, then
 `adb shell dumpsys batterystats com.suteny0r.mangledbabyducks` and read the GPS line.
 `dumpsys location` should list no request from the package while the screen is off.
+
+Measured 2026-11-17 on the Play build of 0.2.42, 4 h 7 min on battery, 836 mAh drained:
+the app is charged 20.3 mAh (about 2.6% of the battery per day at that rate, against 25%
+before), no gnss line for the uid, and `dumpsys location` shows only the passive request,
+registered while on screen. What is left is all CPU: 21 min 37 s as the foreground service,
+and on the live process the four `arch_disk_io` threads (Room queries) hold about 24.5 min
+against 26 s for the main thread. Separately the phone was awake 4 h 4 min of the 4 h 7 min
+with 57 min of screen: kernel wake locks `bluesleep` 1 h 55 min (2241 times) and the
+Bluetooth UART 1 h 41 min. Not attributed to any uid; the 5 s RSSI poll is a suspect, unproven.
 
 Not addressed, and the next suspects if the drain is still high: no screen uses
 `collectAsStateWithLifecycle`, so every Room flow for the composed screen re-queries on

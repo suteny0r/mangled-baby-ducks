@@ -32,6 +32,7 @@ import com.suteny0r.mangledbabyducks.radio.PresenceProbe
 import com.suteny0r.mangledbabyducks.radio.RadioConnection
 import com.suteny0r.mangledbabyducks.radio.RadioManager
 import com.suteny0r.mangledbabyducks.radio.RadioService
+import com.suteny0r.mangledbabyducks.radio.RadioState
 import com.suteny0r.mangledbabyducks.radio.TcpConnection
 import com.suteny0r.mangledbabyducks.ui.Router
 import kotlinx.coroutines.CoroutineScope
@@ -40,6 +41,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
@@ -205,6 +207,22 @@ class AppContainer(context: Context) {
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     init {
+        // A link the presence watch brought back on its own has no caller to start the
+        // foreground service for it: after a failed auto-connect the service is stopped
+        // while the watch waits. Starting one that is already running only re-posts the
+        // notification. Android refuses the start while the app is in the background,
+        // which is caught; the session then lasts as long as the process does.
+        appScope.launch {
+            radioManager.state
+                .map { it is RadioState.Subscribed }
+                .distinctUntilChanged()
+                .collect { live ->
+                    if (live) {
+                        runCatching { RadioService.start(context, radioManager.deviceName.value) }
+                            .onFailure { Log.w("AppContainer", "Foreground service not started: ${it.message}") }
+                    }
+                }
+        }
         // Fetch a shared picture the moment its message lands, not when someone finally
         // opens the thread. meshpic.org deletes an image after about a day, so a message
         // that arrives overnight would otherwise lose its picture before it was ever seen,

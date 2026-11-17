@@ -13,6 +13,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -286,6 +287,13 @@ class RadioManager(
         if (isConnected || isAttempting) return false
         if (!autoConnectSpent.compareAndSet(false, true)) return false
         connect(name, presence, address, factory)
+        // The radio was not there. Keep the same watch a dropped session gets, so walking
+        // back into range reconnects without a tap. This is not the retry the CAS above
+        // exists to prevent: the watch attempts nothing until the radio shows itself.
+        // No foreground service is held for it (the caller stops that), so it lasts as
+        // long as the process does, and a fresh launch spends a fresh attempt.
+        val gen = requestGeneration
+        if (!isConnected && _state.value is RadioState.Failed) watchForReturn(gen)
         return true
     }
 
@@ -377,7 +385,12 @@ class RadioManager(
     private suspend fun beginRequest(): Int {
         val gen = ++requestGeneration
         reconnectJob?.cancel()
-        presenceWatchJob?.cancel()
+        // A watch that is still waiting holds a background-connect GATT client for the
+        // radio (BleScanner.awaitReturn). Wait for it to be released, so the connect that
+        // follows this request registers the only client. A watch that has already moved
+        // on to its attempt loop holds attemptLock instead, and the lock is what
+        // serializes that case, as it does for the reconnect job.
+        presenceWatchJob?.let { if (attemptLock.isLocked) it.cancel() else it.cancelAndJoin() }
         heartbeatJob?.cancel()
         eventJob?.cancel()
         sessionWentLive = false
@@ -1750,6 +1763,9 @@ class RadioManager(
                         // It was advertising a moment ago, so go straight at it on the first try.
                         presenceFor = { attempt -> if (attempt == 0) null else lastPresence },
                         absentIsTerminal = false,
+                        // The watch can fire on a background connect to a radio no scan
+                        // ever sees, so a scan miss on a later try must not skip the try.
+                        attemptWhenAbsent = true,
                         exhaustedReason = "Connection lost",
                     )
                 }

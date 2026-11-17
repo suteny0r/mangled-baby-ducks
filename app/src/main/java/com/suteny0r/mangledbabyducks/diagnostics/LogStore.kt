@@ -115,6 +115,7 @@ class LogStore(private val context: Context) {
         private val TAGS = listOf(
             "AppContainer",
             "BleConnection",
+            "BleScanner",
             "HardwareCatalog",
             "LanScanner",
             "LocationSharer",
