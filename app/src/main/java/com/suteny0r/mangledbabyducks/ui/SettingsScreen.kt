@@ -132,6 +132,20 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
         return
     }
 
+    // The radio configuration import: a parsed file waiting in the ViewModel is the screen.
+    val profileVm: DeviceProfileViewModel = viewModel()
+    val importPlan by profileVm.plan.collectAsState()
+    val importPhase by profileVm.phase.collectAsState()
+    val importCanDismiss by profileVm.canForceDismiss.collectAsState()
+    importPlan?.let { plan ->
+        // Back cannot leave a run in flight until the grace period has passed.
+        BackHandler {
+            if (importPhase !is DeviceProfileViewModel.Phase.Applying || importCanDismiss) profileVm.closeImport()
+        }
+        ImportDeviceProfileScreen(plan, profileVm, onClose = profileVm::closeImport)
+        return
+    }
+
     section?.let { open ->
         BackHandler { section = null }
         Column(
@@ -281,6 +295,9 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                     chevron = false,
                 ) { vm.broadcastNodeInfo() }
             }
+
+            // Settings.swift backupRestoreSection: the radio's own configuration as a file.
+            BackupRestoreSection(profileVm)
 
             // AppSettings.swift "App Data": the stale-node schedule and the full wipe.
             SectionHeader("App Data")

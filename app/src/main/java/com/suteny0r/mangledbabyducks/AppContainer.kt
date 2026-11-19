@@ -216,7 +216,7 @@ class AppContainer(context: Context) {
     val logStore = LogStore(context).also { it.start() }
 
     /** Process-lifetime scope for the shared hot flows below and the launch-time prune. */
-    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     init {
         // A link the presence watch brought back on its own has no caller to start the

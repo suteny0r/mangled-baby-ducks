@@ -212,6 +212,16 @@ class RadioManager(
     private val configCompleteIds = MutableSharedFlow<Long>(extraBufferCapacity = 16)
 
     /**
+     * AccessoryManager.lastConfigRefresh: when the radio last finished sending its config.
+     * The device profile import reads this to know a readback is newer than its sends.
+     */
+    private val _lastConfigRefresh = MutableStateFlow<Long?>(null)
+    val lastConfigRefresh: StateFlow<Long?> = _lastConfigRefresh.asStateFlow()
+
+    /** Admin replies from our own radio, for the few requests that wait on one. */
+    private val ownAdminResponses = MutableSharedFlow<AdminProtos.AdminMessage>(extraBufferCapacity = 16)
+
+    /**
      * Routing outcomes, for callers that want to wait on one (see [awaitAck]). Replayed,
      * because a subscriber that asks after the ack has already landed would otherwise wait
      * out the whole timeout for news that has been and gone; packet ids are random 32-bit,
@@ -729,6 +739,9 @@ class RadioManager(
             }
             MeshProtos.FromRadio.PayloadVariantCase.CONFIG_COMPLETE_ID -> {
                 val id = fromRadio.configCompleteId.uint()
+                if (id == MeshProtocol.NONCE_ONLY_CONFIG.toLong()) {
+                    _lastConfigRefresh.value = System.currentTimeMillis()
+                }
                 if (id == MeshProtocol.NONCE_ONLY_DB.toLong()) {
                     if (lastNodeInfoAt != 0L) {
                         Log.d(TAG, "Node DB complete: $nodeCount nodes, ${System.currentTimeMillis() - lastNodeInfoAt} ms after the last NodeInfo")
@@ -819,7 +832,16 @@ class RadioManager(
             Portnums.PortNum.NODE_STATUS_APP -> ingest.nodeStatusPacket(packet)
             Portnums.PortNum.POSITION_APP -> ingest.positionPacket(packet, myNum)
             Portnums.PortNum.TELEMETRY_APP -> ingest.telemetryPacket(packet, myNum)
-            Portnums.PortNum.ADMIN_APP -> ingest.adminResponse(packet)
+            Portnums.PortNum.ADMIN_APP -> {
+                // Our own radio's replies (ringtone, canned messages) are for a waiter
+                // here; the ingest only takes replies from other nodes.
+                val from = packet.from.uint()
+                if (from == myNum || from == 0L) {
+                    runCatching { AdminProtos.AdminMessage.parseFrom(packet.decoded.payload) }
+                        .onSuccess { ownAdminResponses.tryEmit(it) }
+                }
+                ingest.adminResponse(packet)
+            }
             Portnums.PortNum.ROUTING_APP -> ingest.routing(packet, myNum)?.let {
                 // tryEmit, never emit: this is the radio's event loop, and it must not be
                 // parked behind a waiter. A dropped outcome costs a waiter its timeout.
@@ -1092,13 +1114,17 @@ class RadioManager(
         }.fold(onSuccess = { messageId }, onFailure = { null })
     }
 
-    private suspend fun sendAdmin(build: (AdminProtos.AdminMessage.Builder) -> AdminProtos.AdminMessage.Builder): Boolean {
+    private suspend fun sendAdmin(
+        wantResponse: Boolean = false,
+        build: (AdminProtos.AdminMessage.Builder) -> AdminProtos.AdminMessage.Builder,
+    ): Boolean {
         val myNum = _myNodeNum.value
         if (myNum == 0L) return false
         val admin = build(AdminProtos.AdminMessage.newBuilder()).build()
         val data = MeshProtos.Data.newBuilder()
             .setPortnum(Portnums.PortNum.ADMIN_APP)
             .setPayload(admin.toByteString())
+            .setWantResponse(wantResponse)
             .build()
         val packet = MeshProtos.MeshPacket.newBuilder()
             .setId(Random.nextLong(255L, 0xFFFFFFFFL).toInt())
@@ -1117,6 +1143,107 @@ class RadioManager(
         if (!sendAdmin { it.setBeginEditSettings(true) }) return false
         if (!sendAdmin { it.setSetConfig(config) }) return false
         return sendAdmin { it.setCommitEditSettings(true) }
+    }
+
+    // ------------------------------------------------------------ Device profile import
+    //
+    // The pieces DeviceProfileImporter strings together inside one edit transaction. None
+    // of these opens or commits a transaction of its own: the importer owns the bracket.
+
+    /** begin_edit_settings: the firmware defers every save and reboot until the commit. */
+    suspend fun beginEditSettings(): Boolean = sendAdmin { it.setBeginEditSettings(true) }
+
+    /** commit_edit_settings: one save and one reboot for everything since the begin. */
+    suspend fun commitEditSettings(): Boolean = sendAdmin { it.setCommitEditSettings(true) }
+
+    /** One config section as a bare set_config, for a caller that holds the transaction. */
+    suspend fun setConfigUntransacted(config: ConfigProtos.Config): Boolean = sendAdmin { it.setSetConfig(config) }
+
+    /** AccessoryManager.saveRtttlConfig: the external notification ringtone (RTTTL text). */
+    suspend fun setRingtone(ringtone: String): Boolean = sendAdmin { it.setSetRingtoneMessage(ringtone) }
+
+    /** AccessoryManager.saveCannedMessageModuleMessages: the "|" separated canned message list. */
+    suspend fun setCannedMessages(messages: String): Boolean =
+        sendAdmin { it.setSetCannedMessageModuleMessages(messages) }
+
+    /** AccessoryManager.setFixedPosition(_:fromUser:toUser:): a stored position, sent as it is. */
+    suspend fun setFixedPosition(position: MeshProtos.Position): Boolean =
+        sendAdmin { it.setSetFixedPosition(position) }
+
+    /**
+     * AccessoryManager.saveChannelSet in replace mode, with no transaction of its own: all
+     * eight channel slots, then the LoRa config. A replace has to say something about every
+     * slot, because the radio keeps a fixed array with a role per slot: writing only the
+     * ones the set fills would leave the old tail enabled. As iOS does, the radio's current
+     * transmit power and its "OK to MQTT" flag are kept over the set's.
+     *
+     * Throws with the reason when the set cannot be a replace, or when a send fails.
+     */
+    suspend fun replaceChannelSet(set: AppOnlyProtos.ChannelSet) {
+        require(set.settingsCount > 0) { "No channels found in the configuration" }
+        require(set.settingsCount <= MAX_CHANNEL_SLOTS) { "A Meshtastic radio supports up to 8 channels" }
+        require(set.hasLoraConfig()) { "Replace requires LoRa configuration" }
+        val names = set.settingsList.map { it.name }
+        require(names.toSet().size == names.size) { "Channel names must be unique" }
+
+        val current = db.configDao().get("config.lora")
+            ?.let { runCatching { ConfigProtos.Config.parseFrom(it.bytes).lora }.getOrNull() }
+        val lora = set.loraConfig.toBuilder().apply {
+            if (current != null) {
+                configOkToMqtt = current.configOkToMqtt
+                txPower = current.txPower
+            }
+        }.build()
+
+        for (index in 0 until MAX_CHANNEL_SLOTS) {
+            val channel = ChannelProtos.Channel.newBuilder().setIndex(index)
+            if (index < set.settingsCount) {
+                channel.setSettings(set.getSettings(index))
+                channel.setRole(
+                    if (index == 0) ChannelProtos.Channel.Role.PRIMARY
+                    else ChannelProtos.Channel.Role.SECONDARY
+                )
+            } else {
+                channel.setRole(ChannelProtos.Channel.Role.DISABLED)
+            }
+            if (!sendAdmin { it.setSetChannel(channel.build()) }) {
+                throw java.io.IOException("Channel $index could not be sent to the radio.")
+            }
+        }
+        val config = ConfigProtos.Config.newBuilder().setLora(lora).build()
+        if (!sendAdmin { it.setSetConfig(config) }) {
+            throw java.io.IOException("The LoRa configuration could not be sent to the radio.")
+        }
+    }
+
+    /**
+     * The two texts the radio keeps outside its config, asked for on demand
+     * (AccessoryManager.getRingtone and getCannedMessageModuleMessages; iOS asks when the
+     * module config arrives and stores the replies). Either is null when the radio did not
+     * answer in time, which is also what a radio without that module does.
+     */
+    suspend fun fetchRingtoneAndCannedMessages(timeoutMs: Long = 3_000): Pair<String?, String?> = coroutineScope {
+        var ringtone: String? = null
+        var canned: String? = null
+        // Undispatched, so the collector is subscribed before either request goes out.
+        val collector = launch(start = CoroutineStart.UNDISPATCHED) {
+            ownAdminResponses.collect { admin ->
+                when (admin.payloadVariantCase) {
+                    AdminProtos.AdminMessage.PayloadVariantCase.GET_RINGTONE_RESPONSE ->
+                        ringtone = admin.getRingtoneResponse
+                    AdminProtos.AdminMessage.PayloadVariantCase.GET_CANNED_MESSAGE_MODULE_MESSAGES_RESPONSE ->
+                        canned = admin.getCannedMessageModuleMessagesResponse
+                    else -> Unit
+                }
+                if (ringtone != null && canned != null) throw CancellationException("both replies in")
+            }
+        }
+        sendAdmin(wantResponse = true) { it.setGetRingtoneRequest(true) }
+        delay(150)
+        sendAdmin(wantResponse = true) { it.setGetCannedMessageModuleMessagesRequest(true) }
+        withTimeoutOrNull(timeoutMs) { collector.join() }
+        collector.cancel()
+        ringtone to canned
     }
 
     /**
@@ -1843,6 +1970,9 @@ class RadioManager(
     }
 
     companion object {
+        /** The radio's channel table is a fixed array of this many slots. */
+        const val MAX_CHANNEL_SLOTS = 8
+
         /**
          * AccessoryManager.reportsHeardOnCurrentLora(firmwareVersion:): firmware 2.8.1+.
          * Strict on purpose: an unknown version is false, because older firmware never

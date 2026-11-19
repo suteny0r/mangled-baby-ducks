@@ -408,6 +408,13 @@ interface ConfigDao {
     @Query("SELECT * FROM configs WHERE type = :type")
     fun config(type: String): Flow<ConfigEntity?>
 
+    @Query("SELECT * FROM configs WHERE type = :type")
+    suspend fun get(type: String): ConfigEntity?
+
+    /** Every stored section, for the device profile export and its readback check. */
+    @Query("SELECT * FROM configs")
+    suspend fun all(): List<ConfigEntity>
+
     @Query("DELETE FROM configs")
     suspend fun clear()
 }

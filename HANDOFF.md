@@ -9,6 +9,47 @@ Meshtastic-Apple (cloned at `F:\Meshtastic-Apple`, protobufs vendored into
 `CLAUDE.md` (repo root, committed) carries the architecture, build commands, and the
 invariants worth not breaking. Read it first; this file is the session log on top of it.
 
+## Radio configuration export and import (0.2.49, 2026-11-18, builds, NOT verified)
+
+Port of the iOS device profile feature (Apple clone at `9a78e472`): `DeviceProfileExport.swift`,
+`DeviceProfileDocument.swift`, `DeviceProfileImport.swift`, `DeviceProfileImporter.swift`,
+`DeviceProfileVerifier.swift`, `DeviceProfileImportProgress.swift`, `BackupRestoreSection.swift`,
+`ImportDeviceProfileView.swift`. The file is the `.cfg` `DeviceProfile` protobuf the official
+Android app and the CLI use. Nothing here has touched a radio yet.
+
+- `radio/DeviceProfile.kt` (new): export builder, import plan, import engine, gateway,
+  readback verifier, progress model.
+- `ui/DeviceProfileScreens.kt` (new): `DeviceProfileViewModel`, the Settings "Backup & Restore"
+  section, the import review and result screen.
+- `RadioManager`: `beginEditSettings`, `commitEditSettings`, `setConfigUntransacted`,
+  `setRingtone`, `setCannedMessages`, `setFixedPosition(Position)`, `replaceChannelSet`
+  (all 8 slots plus LoRa, no transaction of its own), `fetchRingtoneAndCannedMessages`,
+  `lastConfigRefresh`. `sendAdmin` gained `wantResponse`. Own-node admin replies now reach a
+  waiter (`ownAdminResponses`); the ingest still ignores them.
+- `ConfigDao.get` / `all`; `AppContainer.appScope` is now public.
+
+How the import runs: `begin_edit_settings` (sent twice), items 150 ms apart,
+`commit_edit_settings` always, then MQTT and Serial outside the transaction. It runs on
+`appScope` and cancels by a flag between items, never by coroutine cancellation, because an
+uncommitted transaction leaves the radio discarding config until it reboots. After the
+reboot and reconnect the stored config is compared with what was sent.
+
+Departures from iOS:
+- Sections are exported as the raw protobuf the radio sent, not rebuilt field by field.
+- The ringtone and canned message text are fetched at export time (3 s wait), since this
+  app does not store them. A radio that does not answer leaves them out.
+- The channel URL also carries uplink and downlink flags; it does not carry
+  `ChannelSettings.id`, which this app does not store.
+- Readback differences are named by protobuf field number (`#3`), not field name: the lite
+  runtime has no JSON or descriptors.
+- The file picker cannot be narrowed to `.cfg` (no MIME type), so it shows all files.
+
+First test, in this order: export (read-only); then import that same file with one section
+on, which is a no-op by content; then the rest. Unknowns to watch in the log
+(`DeviceProfile` tag): whether the radio answers the ringtone and canned message requests,
+and whether the BLE reconnect after the commit produces a `lastConfigRefresh` so the check
+runs on its own.
+
 ## Node Filters sheet, as on iOS (0.2.48, 2026-11-17, builds, NOT verified)
 
 Port of `NodeFilterParameters.swift` and `NodeListFilter.swift` (Apple clone at `9a78e472`).
