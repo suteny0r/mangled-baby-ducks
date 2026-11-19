@@ -1,0 +1,3 @@
+<en-US>
+Radio configuration backup and restore: Settings has a new Backup & Restore section. Export Configuration saves the connected radio's settings, channels and keys as a .cfg file. Import Configuration applies a .cfg file section by section, reboots the radio once, then checks what applied. Test export first.
+</en-US>
